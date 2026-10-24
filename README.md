@@ -1,1 +1,1 @@
-# schematics-manager
+# mine-utils-manager
