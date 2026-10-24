@@ -76,14 +76,10 @@ impl Config {
         self.game_dirs.len() != before
     }
 
-    pub fn set_active_game_dir(&mut self, path: &Path) -> Result<(), AppError> {
-        if !self.contains(path) {
-            return Err(AppError::UnknownGameDir {
-                path: path.to_path_buf(),
-            });
-        }
+    /// Mark a dir active. The caller validates that the path is known, since
+    /// detection spans more than the dirs stored here.
+    pub fn set_active_game_dir(&mut self, path: &Path) {
         self.active_game_dir = Some(path.to_path_buf());
-        Ok(())
     }
 
     fn contains(&self, path: &Path) -> bool {
@@ -222,20 +218,11 @@ mod tests {
         assert!(config.add_game_dir(dir.clone()));
         assert!(!config.add_game_dir(dir.clone()));
 
-        config.set_active_game_dir(&dir.path).unwrap();
+        config.set_active_game_dir(&dir.path);
         assert_eq!(config.active_game_dir.as_deref(), Some(dir.path.as_path()));
 
         assert!(config.remove_game_dir(&dir.path));
         assert!(!config.remove_game_dir(&dir.path));
         assert_eq!(config.active_game_dir, None);
-    }
-
-    #[test]
-    fn active_dir_must_be_known() {
-        let mut config = Config::default();
-        let err = config
-            .set_active_game_dir(Path::new("/nowhere"))
-            .unwrap_err();
-        assert_eq!(err.code(), "unknown_game_dir");
     }
 }

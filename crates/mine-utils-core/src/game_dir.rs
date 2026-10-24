@@ -114,6 +114,12 @@ pub fn entry_for(dir: &GameDir) -> GameDirEntry {
     }
 }
 
+/// Whether a path appears in a listing. Activating a dir requires this, since
+/// the listing is where detection and stored dirs meet.
+pub fn contains_entry(entries: &[GameDirEntry], path: &Path) -> bool {
+    entries.iter().any(|entry| entry.path == path)
+}
+
 fn add_candidate(
     found: &mut Vec<GameDir>,
     seen: &mut std::collections::HashSet<PathBuf>,
@@ -266,5 +272,16 @@ mod tests {
 
         std::fs::remove_dir_all(&path).unwrap();
         assert!(!entry_for(&dir).present);
+    }
+
+    #[test]
+    fn contains_entry_matches_listed_paths_only() {
+        let root = tempfile::tempdir().unwrap();
+        let path = make_game_dir(root.path(), "game", "saves");
+        let dir = validate_game_dir(&path).unwrap();
+        let entries = vec![entry_for(&dir)];
+
+        assert!(contains_entry(&entries, &dir.path));
+        assert!(!contains_entry(&entries, Path::new("/nowhere")));
     }
 }

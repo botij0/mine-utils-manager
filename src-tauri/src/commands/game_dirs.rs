@@ -2,8 +2,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, Once};
 
 use mine_utils_core::{
-    discover_game_dirs, entry_for, home_dir, merge_game_dirs, save_config as persist_config,
-    validate_game_dir, AppError, AppPaths, Config, GameDirEntry, CONFIG_SCHEMA,
+    contains_entry, discover_game_dirs, entry_for, home_dir, merge_game_dirs,
+    save_config as persist_config, validate_game_dir, AppError, AppPaths, Config, GameDirEntry,
+    CONFIG_SCHEMA,
 };
 use tauri::State;
 
@@ -84,10 +85,10 @@ pub fn set_active_game_dir(state: State<'_, AppState>, path: String) -> Result<C
     let target = canonical(Path::new(&path))?;
     let mut config = state.lock();
     let known = listing(&config)?;
-    if !known.iter().any(|entry| entry.path == target) {
+    if !contains_entry(&known, &target) {
         return Err(AppError::UnknownGameDir { path: target });
     }
-    config.set_active_game_dir(&target)?;
+    config.set_active_game_dir(&target);
     persist_config(&state.paths.config_file(), &config)?;
     Ok(config.clone())
 }
