@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/mine-utils-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+mine-utils-core = { path = "crates/mine-utils-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+directories = "6"
