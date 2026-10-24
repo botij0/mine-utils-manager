@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mine-utils-core"]
+members = ["src-tauri", "crates/mine-utils-core"]
 
 [workspace.package]
 version = "0.1.0"
