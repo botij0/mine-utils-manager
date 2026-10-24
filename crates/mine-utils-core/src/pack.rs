@@ -198,13 +198,17 @@ impl PackError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ImportOutcome {
-    Imported { pack: Pack },
+    Imported {
+        pack: Box<Pack>,
+    },
     Duplicate {
         name: String,
         sha256: String,
         existing: String,
     },
-    Collision { name: String },
+    Collision {
+        name: String,
+    },
     Skipped,
 }
 

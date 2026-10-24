@@ -13,11 +13,12 @@ pub struct IconCache {
 }
 
 impl IconCache {
-    /// `cache_root` is the app cache dir. Icons live under
-    /// `mine-utils/icons/<sha256>.png`.
-    pub fn new(cache_root: &Path) -> Self {
+    /// `app_cache_dir` is already the app cache dir (`.../mine-utils`). Icons
+    /// live under `icons/<sha256>.png`, so the full path is
+    /// `$XDG_CACHE_HOME/mine-utils/icons/<sha256>.png`.
+    pub fn new(app_cache_dir: &Path) -> Self {
         IconCache {
-            dir: cache_root.join("mine-utils").join("icons"),
+            dir: app_cache_dir.join("icons"),
         }
     }
 
@@ -33,7 +34,9 @@ impl IconCache {
         }
         std::fs::create_dir_all(&self.dir)?;
 
-        let tmp = self.dir.join(format!(".{sha256}.{}.tmp", std::process::id()));
+        let tmp = self
+            .dir
+            .join(format!(".{sha256}.{}.tmp", std::process::id()));
         let write_result = (|| -> std::io::Result<()> {
             let mut file = std::fs::File::create(&tmp)?;
             file.write_all(bytes)?;
@@ -63,7 +66,7 @@ mod tests {
         assert_eq!(
             icon.path,
             root.path()
-                .join("mine-utils/icons")
+                .join("icons")
                 .join(format!("{}.png", icon.sha256))
         );
 

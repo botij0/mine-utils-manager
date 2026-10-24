@@ -40,12 +40,15 @@ pub fn scan_packs(resourcepacks: &Path, icons: &IconCache) -> Result<PackListing
     let mut bytes_read = 0u64;
 
     let entries = match std::fs::read_dir(resourcepacks) {
-        Ok(entries) => entries.filter_map(|entry| entry.ok()).map(|entry| entry.path()).collect(),
+        Ok(entries) => entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .collect(),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(err) => return Err(err.into()),
     };
     let mut children: Vec<PathBuf> = entries;
-    children.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
+    children.sort_by_key(|path| sort_key(path));
 
     for path in children {
         let is_dir = path.is_dir();
@@ -125,7 +128,15 @@ fn inspect_zip(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<P
     let icon = read_zip_entry_optional(&mut archive, "pack.png", MAX_ICON_BYTES, bytes_read)
         .and_then(|bytes| icons.store(&bytes).ok());
 
-    Ok(finish_pack(path, PackLocation::Zip, kind, meta, icon, None, *bytes_read))
+    Ok(finish_pack(
+        path,
+        PackLocation::Zip,
+        kind,
+        meta,
+        icon,
+        None,
+        *bytes_read,
+    ))
 }
 
 fn inspect_dir(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<Pack, PackError> {
@@ -146,11 +157,10 @@ fn inspect_dir(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<P
         .map(|entry| entry.file_name().to_string_lossy().to_string())
         .collect();
     let kind = kind_from_names(children.iter().map(String::as_str));
-    let meta = parse_pack_meta(&meta_bytes)
-        .map_err(|err| match err {
-            PackError::BrokenArchive { reason, .. } => PackError::BrokenArchive { name, reason },
-            other => other,
-        })?;
+    let meta = parse_pack_meta(&meta_bytes).map_err(|err| match err {
+        PackError::BrokenArchive { reason, .. } => PackError::BrokenArchive { name, reason },
+        other => other,
+    })?;
 
     let icon = read_dir_icon(path, icons, bytes_read);
     Ok(finish_pack(
@@ -164,7 +174,11 @@ fn inspect_dir(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<P
     ))
 }
 
-fn read_dir_icon(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Option<crate::pack::PackIcon> {
+fn read_dir_icon(
+    path: &Path,
+    icons: &IconCache,
+    bytes_read: &mut u64,
+) -> Option<crate::pack::PackIcon> {
     let icon_path = path.join("pack.png");
     let metadata = std::fs::metadata(&icon_path).ok()?;
     if !metadata.is_file() || metadata.len() > MAX_ICON_BYTES {
@@ -236,7 +250,14 @@ fn finish_pack(
 ) -> Pack {
     let table = FormatTable::embedded();
     let range = meta.effective_range();
-    let game_label = range.and_then(|range| table.game_label(kind, range.min, range.max));
+    let game_label = range
+        .and_then(|range| table.game_label(kind, range.min, range.max))
+        .or_else(|| {
+            // Declared min/max can include legacy numbers the table does not
+            // map. Fall back to pack_format so the pack still shows a version.
+            let single = meta.pack_format?;
+            table.game_label(kind, single, single)
+        });
     Pack {
         id: path.to_string_lossy().to_string(),
         name: display_name(path),
@@ -285,7 +306,11 @@ fn kind_from_names<'a>(names: impl Iterator<Item = &'a str>) -> PackKind {
     let mut assets = false;
     let mut data = false;
     for name in names {
-        let root = name.trim_start_matches("./").split('/').next().unwrap_or("");
+        let root = name
+            .trim_start_matches("./")
+            .split('/')
+            .next()
+            .unwrap_or("");
         match root {
             "assets" => assets = true,
             "data" => data = true,
@@ -393,12 +418,14 @@ pub fn import_pack(
     sync_dir(resourcepacks);
 
     let mut bytes_read = 0;
-    let pack = inspect_entry(&destination, location, icons, &mut bytes_read)
-        .map_err(|err| match err {
+    let pack =
+        inspect_entry(&destination, location, icons, &mut bytes_read).map_err(|err| match err {
             PackError::BrokenArchive { .. } => err,
             other => other,
         })?;
-    Ok(ImportOutcome::Imported { pack })
+    Ok(ImportOutcome::Imported {
+        pack: Box::new(pack),
+    })
 }
 
 /// Move a pack to the system trash. Only direct children of resourcepacks are
@@ -431,11 +458,9 @@ fn detect_kind(path: &Path, location: PackLocation) -> Result<PackKind, AppError
         }
         PackLocation::Zip => {
             let file = File::open(path)?;
-            let archive = zip::ZipArchive::new(file).map_err(|err| {
-                PackError::BrokenArchive {
-                    name: display_name(path),
-                    reason: err.to_string(),
-                }
+            let archive = zip::ZipArchive::new(file).map_err(|err| PackError::BrokenArchive {
+                name: display_name(path),
+                reason: err.to_string(),
             })?;
             Ok(kind_from_names(archive.file_names()))
         }
@@ -447,10 +472,7 @@ fn reject_symlinks(root: &Path) -> Result<(), AppError> {
         let entry = entry?;
         let file_type = entry.file_type()?;
         if file_type.is_symlink() {
-            return Err(PackError::Symlink {
-                path: entry.path(),
-            }
-            .into());
+            return Err(PackError::Symlink { path: entry.path() }.into());
         }
         if file_type.is_dir() {
             reject_symlinks(&entry.path())?;
@@ -508,10 +530,7 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), 
         let entry = entry?;
         let file_type = entry.file_type()?;
         if file_type.is_symlink() {
-            return Err(PackError::Symlink {
-                path: entry.path(),
-            }
-            .into());
+            return Err(PackError::Symlink { path: entry.path() }.into());
         }
         if file_type.is_dir() {
             collect_files(root, &entry.path(), out)?;
@@ -619,8 +638,8 @@ mod tests {
         }
         let file = File::create(path).unwrap();
         let mut writer = zip::ZipWriter::new(file);
-        let options =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         for (name, bytes) in entries {
             writer.start_file(*name, options).unwrap();
             writer.write_all(bytes).unwrap();
@@ -711,9 +730,17 @@ mod tests {
 
         let listing = scan_packs(root.path(), &icons).unwrap();
         assert_eq!(listing.count, 2);
-        let broken = listing.packs.iter().find(|pack| pack.name == "Broken").unwrap();
+        let broken = listing
+            .packs
+            .iter()
+            .find(|pack| pack.name == "Broken")
+            .unwrap();
         assert_eq!(broken.error.as_ref().unwrap().code, "pack_broken_archive");
-        let good = listing.packs.iter().find(|pack| pack.name == "Good").unwrap();
+        let good = listing
+            .packs
+            .iter()
+            .find(|pack| pack.name == "Good")
+            .unwrap();
         assert!(good.error.is_none());
         assert!(listing.packs.iter().any(|pack| pack.name == "Good"));
     }
@@ -743,11 +770,7 @@ mod tests {
         let dir = root.path().join("DirPack");
         std::fs::create_dir_all(dir.join("assets")).unwrap();
         std::fs::create_dir_all(dir.join("data")).unwrap();
-        std::fs::write(
-            dir.join("pack.mcmeta"),
-            mcmeta(15, Some(22), "Two kinds"),
-        )
-        .unwrap();
+        std::fs::write(dir.join("pack.mcmeta"), mcmeta(15, Some(22), "Two kinds")).unwrap();
         std::fs::write(dir.join("pack.png"), b"icon").unwrap();
 
         let listing = scan_packs(root.path(), &icons).unwrap();
@@ -782,7 +805,11 @@ mod tests {
 
         let listing = scan_packs(root.path(), &icons).unwrap();
         assert_eq!(listing.count, 101);
-        let names: Vec<&str> = listing.packs.iter().map(|pack| pack.name.as_str()).collect();
+        let names: Vec<&str> = listing
+            .packs
+            .iter()
+            .map(|pack| pack.name.as_str())
+            .collect();
         let mut sorted = names.clone();
         sorted.sort_by_key(|name| name.to_lowercase());
         assert_eq!(names, sorted, "listing order is stable");
@@ -807,7 +834,8 @@ mod tests {
 
         let zip_source = root.path().join("incoming/ZipPack.zip");
         simple_zip(&zip_source, 34, Some(b"icon"));
-        let outcome = import_pack(&zip_source, &resourcepacks, &icons, ImportChoice::Default).unwrap();
+        let outcome =
+            import_pack(&zip_source, &resourcepacks, &icons, ImportChoice::Default).unwrap();
         let pack = match outcome {
             ImportOutcome::Imported { pack } => pack,
             other => panic!("expected import, got {other:?}"),
@@ -818,7 +846,8 @@ mod tests {
         let dir_source = root.path().join("incoming/DirPack");
         std::fs::create_dir_all(dir_source.join("assets")).unwrap();
         std::fs::write(dir_source.join("pack.mcmeta"), mcmeta(7, None, "Dir")).unwrap();
-        let outcome = import_pack(&dir_source, &resourcepacks, &icons, ImportChoice::Default).unwrap();
+        let outcome =
+            import_pack(&dir_source, &resourcepacks, &icons, ImportChoice::Default).unwrap();
         assert!(matches!(outcome, ImportOutcome::Imported { .. }));
         assert!(resourcepacks.join("DirPack/pack.mcmeta").is_file());
     }
@@ -835,14 +864,16 @@ mod tests {
         import_pack(&source, &resourcepacks, &icons, ImportChoice::Default).unwrap();
         let duplicate =
             import_pack(&source, &resourcepacks, &icons, ImportChoice::Default).unwrap();
-        assert!(matches!(duplicate, ImportOutcome::Duplicate { .. }), "{duplicate:?}");
+        assert!(
+            matches!(duplicate, ImportOutcome::Duplicate { .. }),
+            "{duplicate:?}"
+        );
 
         let skipped = import_pack(&source, &resourcepacks, &icons, ImportChoice::Skip).unwrap();
         assert_eq!(skipped, ImportOutcome::Skipped);
         assert_eq!(pack_names(&resourcepacks).unwrap().len(), 1);
 
-        let replaced =
-            import_pack(&source, &resourcepacks, &icons, ImportChoice::Replace).unwrap();
+        let replaced = import_pack(&source, &resourcepacks, &icons, ImportChoice::Replace).unwrap();
         assert!(matches!(replaced, ImportOutcome::Imported { .. }));
         assert_eq!(pack_names(&resourcepacks).unwrap().len(), 1);
     }
@@ -867,7 +898,10 @@ mod tests {
         );
         let collision =
             import_pack(&second, &resourcepacks, &icons, ImportChoice::Default).unwrap();
-        assert!(matches!(collision, ImportOutcome::Collision { .. }), "{collision:?}");
+        assert!(
+            matches!(collision, ImportOutcome::Collision { .. }),
+            "{collision:?}"
+        );
         assert_eq!(pack_names(&resourcepacks).unwrap().len(), 1);
 
         let replaced = import_pack(&second, &resourcepacks, &icons, ImportChoice::Replace).unwrap();
@@ -894,6 +928,18 @@ mod tests {
         std::os::unix::fs::symlink("/etc/hostname", source.join("assets/escape.txt")).unwrap();
         let err = import_pack(&source, &resourcepacks, &icons, ImportChoice::Default).unwrap_err();
         assert_eq!(err.code(), "pack_symlink");
+    }
+
+    #[test]
+    fn delete_moves_a_direct_child_to_trash() {
+        let root = tempfile::tempdir().unwrap();
+        let resourcepacks = root.path().join("resourcepacks");
+        let pack = resourcepacks.join("TrashMe");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(pack.join("pack.mcmeta"), mcmeta(34, None, "trash")).unwrap();
+
+        delete_pack(&pack, &resourcepacks).unwrap();
+        assert!(!pack.exists());
     }
 
     #[test]

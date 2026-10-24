@@ -7,10 +7,20 @@ pub const MAX_DESCRIPTION_CHARS: usize = 300;
 /// Parse the bytes of pack.mcmeta into the normalized meta. Unknown extra keys
 /// are ignored so a newer pack never fails the scan.
 pub fn parse_pack_meta(bytes: &[u8]) -> Result<PackMeta, PackError> {
-    let root: Value = serde_json::from_slice(bytes).map_err(|err| PackError::BrokenArchive {
-        name: "pack.mcmeta".to_string(),
-        reason: format!("invalid JSON: {err}"),
-    })?;
+    // Some published packs append a license line after the JSON object.
+    // Minecraft reads the first value, so do the same and ignore trailing text.
+    let mut stream = serde_json::Deserializer::from_slice(bytes).into_iter::<Value>();
+    let root = stream
+        .next()
+        .transpose()
+        .map_err(|err| PackError::BrokenArchive {
+            name: "pack.mcmeta".to_string(),
+            reason: format!("invalid JSON: {err}"),
+        })?
+        .ok_or_else(|| PackError::BrokenArchive {
+            name: "pack.mcmeta".to_string(),
+            reason: "empty pack.mcmeta".to_string(),
+        })?;
     let pack = root.get("pack").ok_or_else(|| PackError::BrokenArchive {
         name: "pack.mcmeta".to_string(),
         reason: "missing pack object".to_string(),
@@ -63,10 +73,7 @@ fn parse_format(value: &Value) -> Option<FormatVersion> {
 fn parse_format_string(text: &str) -> Option<FormatVersion> {
     let text = text.trim();
     let (major, minor) = text.split_once('.')?;
-    Some(FormatVersion::new(
-        major.parse().ok()?,
-        minor.parse().ok()?,
-    ))
+    Some(FormatVersion::new(major.parse().ok()?, minor.parse().ok()?))
 }
 
 fn parse_supported(value: &Value) -> Option<FormatRange> {
@@ -159,9 +166,8 @@ mod tests {
         );
         assert_eq!(meta.description, "Both kinds here");
 
-        let meta = parse(
-            r#"{"pack":{"pack_format":15,"description":["one ","two ",{"text":"three"}]}}"#,
-        );
+        let meta =
+            parse(r#"{"pack":{"pack_format":15,"description":["one ","two ",{"text":"three"}]}}"#);
         assert_eq!(meta.description, "one two three");
     }
 
@@ -202,6 +208,17 @@ mod tests {
         let range = meta.supported_formats.unwrap();
         assert_eq!(range.min, FormatVersion::from_major(34));
         assert_eq!(range.max, FormatVersion::from_major(69));
+    }
+
+    #[test]
+    fn trailing_text_after_json_is_ignored() {
+        let meta = parse_pack_meta(
+            br#"{"pack":{"pack_format":55,"description":"Covers"}}
+Re-covered (c) 2025 by carl_classic"#,
+        )
+        .unwrap();
+        assert_eq!(meta.description, "Covers");
+        assert_eq!(meta.pack_format, Some(FormatVersion::from_major(55)));
     }
 
     #[test]

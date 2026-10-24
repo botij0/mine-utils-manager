@@ -117,7 +117,7 @@ export default function App({ client = ipc }: AppProps) {
               {error.message}
             </p>
           ) : null}
-          {page === 'packs' ? <PacksPage /> : null}
+          {page === 'packs' ? <PacksPage client={client} /> : null}
           {page === 'worlds' ? <WorldsPage /> : null}
           {page === 'discover' ? <DiscoverPage /> : null}
           {page === 'settings' ? (

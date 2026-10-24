@@ -4,6 +4,7 @@ use mine_utils_core::{load_config, AppPaths, Config, ConfigStore};
 use tauri::Manager;
 
 use commands::game_dirs::AppState;
+use commands::packs::PackState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -57,6 +58,7 @@ pub fn run() {
                 ConfigStore::new(config_path, config),
                 startup_warning,
             ));
+            app.manage(PackState::new(&paths.cache_dir));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -67,6 +69,9 @@ pub fn run() {
             commands::game_dirs::get_config,
             commands::game_dirs::set_theme,
             commands::game_dirs::get_startup_warning,
+            commands::packs::list_resource_packs,
+            commands::packs::import_resource_pack,
+            commands::packs::delete_resource_pack,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
