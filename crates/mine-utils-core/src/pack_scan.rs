@@ -1,15 +1,17 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{Instant, SystemTime};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 use crate::format_table::FormatTable;
-use crate::icon_cache::IconCache;
+use crate::icon_cache::{icon_within_pixel_cap, IconCache};
 use crate::pack::{
     ImportChoice, ImportOutcome, Pack, PackError, PackIssue, PackKind, PackLocation,
 };
@@ -19,6 +21,8 @@ use crate::pack_meta::parse_pack_meta;
 pub const MAX_ICON_BYTES: u64 = 2 * 1024 * 1024;
 /// pack.mcmeta larger than this is treated as broken.
 pub const MAX_META_BYTES: u64 = 1024 * 1024;
+/// A central directory with more entries than this is treated as hostile.
+pub const MAX_ZIP_ENTRIES: usize = 65_536;
 /// Rough size of one zip central directory record plus its 22 byte end record.
 const CENTRAL_DIR_ENTRY_BYTES: u64 = 46;
 const CENTRAL_DIR_END_BYTES: u64 = 22;
@@ -27,6 +31,7 @@ const CENTRAL_DIR_END_BYTES: u64 = 22;
 pub struct PackListing {
     pub packs: Vec<Pack>,
     pub count: usize,
+    /// Total bytes read across the listing. Each pack carries its own delta.
     pub bytes_read: u64,
     pub elapsed_ms: f64,
 }
@@ -39,39 +44,68 @@ pub fn scan_packs(resourcepacks: &Path, icons: &IconCache) -> Result<PackListing
     let mut packs = Vec::new();
     let mut bytes_read = 0u64;
 
-    let entries = match std::fs::read_dir(resourcepacks) {
+    let mut children: Vec<(PathBuf, std::fs::FileType)> = match std::fs::read_dir(resourcepacks) {
         Ok(entries) => entries
             .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
+            .map(|entry| {
+                let file_type = entry.file_type().ok();
+                (entry.path(), file_type)
+            })
+            .filter_map(|(path, file_type)| file_type.map(|file_type| (path, file_type)))
             .collect(),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(err) => return Err(err.into()),
     };
-    let mut children: Vec<PathBuf> = entries;
-    children.sort_by_key(|path| sort_key(path));
+    children.sort_by_key(|(path, _)| sort_key(path));
 
-    for path in children {
-        let is_dir = path.is_dir();
+    for (path, file_type) in children {
+        if is_temp_name(&path) {
+            continue;
+        }
         let is_zip = path
             .extension()
             .map(|ext| ext.eq_ignore_ascii_case("zip"))
             .unwrap_or(false);
+        let is_dir = path.is_dir();
         if !is_dir && !is_zip {
             continue;
         }
-        if is_dir && !path.join("pack.mcmeta").is_file() {
+        let location = if is_zip {
+            PackLocation::Zip
+        } else {
+            PackLocation::Directory
+        };
+        if file_type.is_symlink() {
+            // A symlinked pack is an error card. The link is never followed
+            // into the root, so scanning cannot read or later delete a pack
+            // that only a link points at.
+            packs.push(error_pack(
+                &path,
+                location,
+                PackError::Symlink { path: path.clone() },
+                0,
+            ));
             continue;
         }
-        let location = if is_dir {
-            PackLocation::Directory
-        } else {
-            PackLocation::Zip
-        };
+        if is_dir && !path.join("pack.mcmeta").is_file() {
+            // A directory without pack.mcmeta is an error card naming the
+            // pack, not a silent skip.
+            packs.push(error_pack(
+                &path,
+                location,
+                PackError::MissingMeta {
+                    name: display_name(&path),
+                },
+                0,
+            ));
+            continue;
+        }
         let read_before = bytes_read;
         let result = inspect_entry(&path, location, icons, &mut bytes_read);
+        let read_delta = bytes_read - read_before;
         let pack = match result {
             Ok(pack) => pack,
-            Err(err) => error_pack(&path, location, err, bytes_read - read_before),
+            Err(err) => error_pack(&path, location, err, read_delta),
         };
         packs.push(pack);
     }
@@ -90,6 +124,16 @@ fn sort_key(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// Stale temp copies from an interrupted import are never listed.
+fn is_temp_name(path: &Path) -> bool {
+    path.file_name()
+        .map(|name| {
+            let name = name.to_string_lossy();
+            name.starts_with('.') && name.ends_with(".tmp")
+        })
+        .unwrap_or(false)
+}
+
 fn inspect_entry(
     path: &Path,
     location: PackLocation,
@@ -103,11 +147,14 @@ fn inspect_entry(
 }
 
 fn inspect_zip(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<Pack, PackError> {
+    let read_before = *bytes_read;
     let name = display_name(path);
-    let file = File::open(path).map_err(|err| broken(&name, err))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|err| broken(&name, err))?;
+    let mut archive = open_zip(path, &name)?;
 
-    let names: Vec<String> = archive.file_names().map(str::to_string).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|entry| normalize_entry_name(entry).to_string())
+        .collect();
     *bytes_read += names
         .iter()
         .map(|entry| CENTRAL_DIR_ENTRY_BYTES + entry.len() as u64)
@@ -115,17 +162,13 @@ fn inspect_zip(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<P
         + CENTRAL_DIR_END_BYTES;
 
     let kind = kind_from_names(names.iter().map(String::as_str));
-    let meta_bytes = read_zip_entry(&mut archive, "pack.mcmeta", MAX_META_BYTES, bytes_read)
-        .map_err(|err| match err {
-            PackError::MissingMeta { .. } => err,
-            other => other,
-        })?;
-    let meta = parse_pack_meta(&meta_bytes).map_err(|err| match err {
-        PackError::BrokenArchive { reason, .. } => PackError::BrokenArchive { name, reason },
-        other => other,
-    })?;
+    let meta = meta_from_zip(&mut archive, &name, bytes_read)?;
 
-    let icon = read_zip_entry_optional(&mut archive, "pack.png", MAX_ICON_BYTES, bytes_read)
+    let icon = find_entry(&mut archive, "pack.png")
+        .and_then(|entry| {
+            read_zip_entry(&mut archive, &entry, &name, MAX_ICON_BYTES, bytes_read).ok()
+        })
+        .filter(|bytes| icon_within_pixel_cap(bytes))
         .and_then(|bytes| icons.store(&bytes).ok());
 
     Ok(finish_pack(
@@ -135,21 +178,14 @@ fn inspect_zip(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<P
         meta,
         icon,
         None,
-        *bytes_read,
+        *bytes_read - read_before,
     ))
 }
 
 fn inspect_dir(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<Pack, PackError> {
+    let read_before = *bytes_read;
     let name = display_name(path);
-    let meta_path = path.join("pack.mcmeta");
-    let size = std::fs::metadata(&meta_path)
-        .map_err(|_| PackError::MissingMeta { name: name.clone() })?
-        .len();
-    if size > MAX_META_BYTES {
-        return Err(broken(&name, "pack.mcmeta is larger than 1 MB"));
-    }
-    let meta_bytes = std::fs::read(&meta_path).map_err(|err| broken(&name, err))?;
-    *bytes_read += meta_bytes.len() as u64;
+    let meta = meta_from_dir(path, &name, bytes_read)?;
 
     let children: Vec<String> = std::fs::read_dir(path)
         .map_err(|err| broken(&name, err))?
@@ -157,10 +193,6 @@ fn inspect_dir(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<P
         .map(|entry| entry.file_name().to_string_lossy().to_string())
         .collect();
     let kind = kind_from_names(children.iter().map(String::as_str));
-    let meta = parse_pack_meta(&meta_bytes).map_err(|err| match err {
-        PackError::BrokenArchive { reason, .. } => PackError::BrokenArchive { name, reason },
-        other => other,
-    })?;
 
     let icon = read_dir_icon(path, icons, bytes_read);
     Ok(finish_pack(
@@ -170,7 +202,7 @@ fn inspect_dir(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<P
         meta,
         icon,
         None,
-        *bytes_read,
+        *bytes_read - read_before,
     ))
 }
 
@@ -186,57 +218,112 @@ fn read_dir_icon(
     }
     let bytes = std::fs::read(&icon_path).ok()?;
     *bytes_read += bytes.len() as u64;
+    if !icon_within_pixel_cap(&bytes) {
+        return None;
+    }
     icons.store(&bytes).ok()
 }
 
-fn read_zip_entry<R: Read + std::io::Seek>(
-    archive: &mut zip::ZipArchive<R>,
+type Archive = zip::ZipArchive<File>;
+
+fn open_zip(path: &Path, name: &str) -> Result<Archive, PackError> {
+    open_zip_capped(path, name, MAX_ZIP_ENTRIES)
+}
+
+fn open_zip_capped(path: &Path, name: &str, max_entries: usize) -> Result<Archive, PackError> {
+    let file = File::open(path).map_err(|err| broken(name, err))?;
+    let archive = zip::ZipArchive::new(file).map_err(|err| broken(name, err))?;
+    // The entry count is capped before any name is collected.
+    if archive.len() > max_entries {
+        return Err(broken(
+            name,
+            format!("archive has more than {max_entries} entries"),
+        ));
+    }
+    Ok(archive)
+}
+
+/// Zip entries may be written as "./pack.mcmeta". Every reader normalizes the
+/// same way, so lookup and kind detection never disagree.
+fn normalize_entry_name(name: &str) -> &str {
+    name.trim_start_matches("./")
+}
+
+/// The first entry whose normalized name matches, under its real name.
+fn find_entry(archive: &mut Archive, target: &str) -> Option<String> {
+    archive
+        .file_names()
+        .map(str::to_string)
+        .find(|name| normalize_entry_name(name) == target)
+}
+
+fn read_zip_entry(
+    archive: &mut Archive,
     entry: &str,
+    pack_name: &str,
     cap: u64,
     bytes_read: &mut u64,
 ) -> Result<Vec<u8>, PackError> {
-    let mut file = match archive.by_name(entry) {
-        Ok(file) => file,
-        Err(zip::result::ZipError::FileNotFound) => {
-            return Err(PackError::MissingMeta {
-                name: entry.to_string(),
-            })
-        }
-        Err(err) => {
-            return Err(PackError::BrokenArchive {
-                name: entry.to_string(),
-                reason: err.to_string(),
-            })
-        }
-    };
-    if file.size() > cap {
-        return Err(PackError::BrokenArchive {
-            name: entry.to_string(),
-            reason: format!("entry is larger than {} bytes", cap),
-        });
+    let file = archive
+        .by_name(entry)
+        .map_err(|err| broken(pack_name, err))?;
+    // The declared size is never trusted: capacity is capped and the read
+    // stops one byte past the cap so an oversized entry cannot fill memory.
+    let mut bytes = Vec::with_capacity(file.size().min(cap) as usize);
+    let mut limited = file.take(cap + 1);
+    let read = limited
+        .read_to_end(&mut bytes)
+        .map_err(|err| broken(pack_name, err))?;
+    if read as u64 > cap {
+        return Err(broken(
+            pack_name,
+            format!("{entry} is larger than {cap} bytes"),
+        ));
     }
-    let mut bytes = Vec::with_capacity(file.size() as usize);
-    file.read_to_end(&mut bytes)
-        .map_err(|err| PackError::BrokenArchive {
-            name: entry.to_string(),
-            reason: err.to_string(),
-        })?;
-    *bytes_read += bytes.len() as u64;
+    *bytes_read += read as u64;
     Ok(bytes)
 }
 
-fn read_zip_entry_optional<R: Read + std::io::Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    entry: &str,
-    cap: u64,
+fn meta_from_zip(
+    archive: &mut Archive,
+    pack_name: &str,
     bytes_read: &mut u64,
-) -> Option<Vec<u8>> {
-    let file = archive.by_name(entry).ok()?;
-    if file.size() > cap {
-        return None;
+) -> Result<crate::pack::PackMeta, PackError> {
+    // The error names the pack, not the metadata file.
+    let entry = find_entry(archive, "pack.mcmeta").ok_or_else(|| PackError::MissingMeta {
+        name: pack_name.to_string(),
+    })?;
+    let bytes = read_zip_entry(archive, &entry, pack_name, MAX_META_BYTES, bytes_read)?;
+    parse_pack_meta(&bytes).map_err(|err| named_meta_error(err, pack_name))
+}
+
+fn meta_from_dir(
+    path: &Path,
+    pack_name: &str,
+    bytes_read: &mut u64,
+) -> Result<crate::pack::PackMeta, PackError> {
+    let meta_path = path.join("pack.mcmeta");
+    let size = std::fs::metadata(&meta_path)
+        .map_err(|_| PackError::MissingMeta {
+            name: pack_name.to_string(),
+        })?
+        .len();
+    if size > MAX_META_BYTES {
+        return Err(broken(pack_name, "pack.mcmeta is larger than 1 MB"));
     }
-    drop(file);
-    read_zip_entry(archive, entry, cap, bytes_read).ok()
+    let bytes = std::fs::read(&meta_path).map_err(|err| broken(pack_name, err))?;
+    *bytes_read += bytes.len() as u64;
+    parse_pack_meta(&bytes).map_err(|err| named_meta_error(err, pack_name))
+}
+
+fn named_meta_error(err: PackError, name: &str) -> PackError {
+    match err {
+        PackError::BrokenArchive { reason, .. } => PackError::BrokenArchive {
+            name: name.to_string(),
+            reason,
+        },
+        other => other,
+    }
 }
 
 fn finish_pack(
@@ -250,14 +337,12 @@ fn finish_pack(
 ) -> Pack {
     let table = FormatTable::embedded();
     let range = meta.effective_range();
+    // A range that does not fully map shows no game label at all. Falling back
+    // to a narrower pack_format number would claim compatibility the range
+    // does not have.
     let game_label = range
-        .and_then(|range| table.game_label(kind, range.min, range.max))
-        .or_else(|| {
-            // Declared min/max can include legacy numbers the table does not
-            // map. Fall back to pack_format so the pack still shows a version.
-            let single = meta.pack_format?;
-            table.game_label(kind, single, single)
-        });
+        .as_ref()
+        .and_then(|range| table.game_label(kind, range));
     Pack {
         id: path.to_string_lossy().to_string(),
         name: display_name(path),
@@ -265,7 +350,7 @@ fn finish_pack(
         location,
         kind,
         description: meta.description.clone(),
-        format: range.map(|range| range.min),
+        format: range.and_then(|range| range.min.or(range.max)),
         format_range: range,
         game_label,
         icon,
@@ -306,11 +391,7 @@ fn kind_from_names<'a>(names: impl Iterator<Item = &'a str>) -> PackKind {
     let mut assets = false;
     let mut data = false;
     for name in names {
-        let root = name
-            .trim_start_matches("./")
-            .split('/')
-            .next()
-            .unwrap_or("");
+        let root = normalize_entry_name(name).split('/').next().unwrap_or("");
         match root {
             "assets" => assets = true,
             "data" => data = true,
@@ -332,15 +413,106 @@ fn broken(name: &str, reason: impl std::fmt::Display) -> PackError {
     }
 }
 
+/// The one destructive step in an import or a delete. The app uses the system
+/// trash; tests inject a recorder so the call itself can be asserted.
+pub trait TrashService {
+    fn move_to_trash(&self, path: &Path) -> Result<(), PackError>;
+}
+
+/// Moves packs to the freedesktop trash. Nothing is ever permanently deleted.
+pub struct SystemTrash;
+
+impl TrashService for SystemTrash {
+    fn move_to_trash(&self, path: &Path) -> Result<(), PackError> {
+        trash::delete(path).map_err(|err| PackError::Trash {
+            path: path.to_path_buf(),
+            reason: err.to_string(),
+        })
+    }
+}
+
+/// Memoizes pack hashes by path, size, and mtime, so a second import into a
+/// full resourcepacks folder does not re-read every pack on disk.
+#[derive(Default)]
+pub struct HashCache {
+    entries: Mutex<HashMap<PathBuf, HashEntry>>,
+}
+
+struct HashEntry {
+    len: u64,
+    modified: Option<SystemTime>,
+    sha256: String,
+}
+
+impl HashCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn hash(&self, path: &Path, location: PackLocation) -> Result<String, AppError> {
+        let metadata = std::fs::metadata(path)?;
+        let len = metadata.len();
+        let modified = metadata.modified().ok();
+        let cached = {
+            let entries = self.entries.lock().unwrap_or_else(|err| err.into_inner());
+            entries.get(path).and_then(|entry| {
+                (entry.len == len && entry.modified == modified).then(|| entry.sha256.clone())
+            })
+        };
+        if let Some(sha256) = cached {
+            return Ok(sha256);
+        }
+        let sha256 = hash_source(path, location)?;
+        self.entries
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(
+                path.to_path_buf(),
+                HashEntry {
+                    len,
+                    modified,
+                    sha256: sha256.clone(),
+                },
+            );
+        Ok(sha256)
+    }
+}
+
 /// Import a zip or directory pack. The caller resolves `default`, `skip`, and
 /// `replace` choices from the UI prompt. Nothing is copied until the kind and
-/// the duplicate check pass.
+/// the duplicate check pass, and nothing old is removed until the new copy is
+/// validated in a temp path.
 pub fn import_pack(
     source: &Path,
     resourcepacks: &Path,
     icons: &IconCache,
     choice: ImportChoice,
+    hashes: &HashCache,
 ) -> Result<ImportOutcome, AppError> {
+    import_pack_with(source, resourcepacks, icons, choice, hashes, &SystemTrash)
+}
+
+/// `import_pack` with an injectable trash, so tests can prove that Replace
+/// moves exactly one pack to the trash and rolls back before it touches any.
+pub fn import_pack_with(
+    source: &Path,
+    resourcepacks: &Path,
+    icons: &IconCache,
+    choice: ImportChoice,
+    hashes: &HashCache,
+    trash: &dyn TrashService,
+) -> Result<ImportOutcome, AppError> {
+    // A symlinked source is rejected instead of followed, so no later step can
+    // remove a pack that only a link points at.
+    let source_meta = std::fs::symlink_metadata(source).map_err(|_| PackError::NotFound {
+        path: source.to_path_buf(),
+    })?;
+    if source_meta.file_type().is_symlink() {
+        return Err(PackError::Symlink {
+            path: source.to_path_buf(),
+        }
+        .into());
+    }
     let source = std::fs::canonicalize(source).map_err(|_| PackError::NotFound {
         path: source.to_path_buf(),
     })?;
@@ -370,9 +542,35 @@ pub fn import_pack(
     if kind == PackKind::Unknown {
         return Err(PackError::UnknownKind { name }.into());
     }
+    // Kind and pack.mcmeta are validated before anything is copied or removed,
+    // so a broken pack can never replace a working one.
+    validate_meta(&source, location, &name)?;
 
-    let sha256 = hash_source(&source, location)?;
-    let existing = find_duplicate(resourcepacks, &sha256)?;
+    std::fs::create_dir_all(resourcepacks)?;
+    let root = std::fs::canonicalize(resourcepacks)?;
+    let sha256 = hashes.hash(&source, location)?;
+    let existing = find_duplicate(&root, &sha256, hashes)?;
+
+    // Re-importing a pack that already lives in resourcepacks is a no-op. The
+    // source is never deleted, whatever the caller chose.
+    if source.parent() == Some(root.as_path()) || existing.as_deref() == Some(source.as_path()) {
+        let mut bytes_read = 0;
+        let pack = inspect_entry(&source, location, icons, &mut bytes_read)?;
+        return Ok(ImportOutcome::Imported {
+            pack: Box::new(pack),
+        });
+    }
+
+    let file_name = source
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .ok_or_else(|| PackError::BrokenArchive {
+            name: name.clone(),
+            reason: "source has no file name".to_string(),
+        })?;
+    let destination = root.join(&file_name);
+    let destination_taken = std::fs::symlink_metadata(&destination).is_ok();
+
     if let Some(existing_path) = &existing {
         match choice {
             ImportChoice::Skip => return Ok(ImportOutcome::Skipped),
@@ -383,28 +581,15 @@ pub fn import_pack(
                     existing: existing_path.to_string_lossy().to_string(),
                 })
             }
-            ImportChoice::Replace => remove_any(existing_path)?,
+            ImportChoice::Replace => {}
         }
+    } else if destination_taken && choice != ImportChoice::Replace {
+        return Ok(ImportOutcome::Collision { name });
     }
 
-    let file_name = source
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .ok_or_else(|| PackError::BrokenArchive {
-            name: name.clone(),
-            reason: "source has no file name".to_string(),
-        })?;
-    std::fs::create_dir_all(resourcepacks)?;
-    let destination = resourcepacks.join(&file_name);
-    if destination.exists() {
-        match choice {
-            ImportChoice::Replace => remove_any(&destination)?,
-            _ => return Ok(ImportOutcome::Collision { name }),
-        }
-    }
-
-    let tmp = resourcepacks.join(format!(".{file_name}.{}.tmp", std::process::id()));
-    let _ = remove_any(&tmp);
+    // Copy and validate first. Until the temp copy is good, nothing old has
+    // been touched, so every error below is a rollback.
+    let tmp = unique_temp_path(&root, &file_name);
     let copy_result = if is_dir {
         copy_dir(&source, &tmp)
     } else {
@@ -414,36 +599,92 @@ pub fn import_pack(
         let _ = remove_any(&tmp);
         return Err(err.into());
     }
-    std::fs::rename(&tmp, &destination)?;
-    sync_dir(resourcepacks);
+    if let Err(err) = validate_meta(&tmp, location, &name) {
+        let _ = remove_any(&tmp);
+        return Err(err.into());
+    }
+
+    // One Replace removes at most one pack. When the exact duplicate lives
+    // under a different name than a colliding destination, only the duplicate
+    // goes to the trash and the destination is reported as a collision without
+    // being deleted.
+    if let Some(existing_path) = &existing {
+        if existing_path != &destination && destination_taken {
+            let result = trash.move_to_trash(existing_path).map_err(AppError::from);
+            let _ = remove_any(&tmp);
+            result?;
+            return Ok(ImportOutcome::Collision { name });
+        }
+    }
+
+    let removal = existing
+        .clone()
+        .or_else(|| destination_taken.then(|| destination.clone()));
+    if let Some(target) = &removal {
+        if let Err(err) = trash.move_to_trash(target) {
+            let _ = remove_any(&tmp);
+            return Err(err.into());
+        }
+    }
+
+    if let Err(err) = std::fs::rename(&tmp, &destination) {
+        let _ = remove_any(&tmp);
+        return Err(err.into());
+    }
+    sync_dir(&root);
 
     let mut bytes_read = 0;
-    let pack =
-        inspect_entry(&destination, location, icons, &mut bytes_read).map_err(|err| match err {
-            PackError::BrokenArchive { .. } => err,
-            other => other,
-        })?;
+    let pack = inspect_entry(&destination, location, icons, &mut bytes_read)?;
     Ok(ImportOutcome::Imported {
         pack: Box::new(pack),
     })
 }
 
+/// Validate kind and pack.mcmeta for an import source or its temp copy.
+fn validate_meta(path: &Path, location: PackLocation, name: &str) -> Result<(), PackError> {
+    match location {
+        PackLocation::Zip => {
+            let mut archive = open_zip(path, name)?;
+            let mut bytes_read = 0;
+            meta_from_zip(&mut archive, name, &mut bytes_read).map(|_| ())
+        }
+        PackLocation::Directory => {
+            let mut bytes_read = 0;
+            meta_from_dir(path, name, &mut bytes_read).map(|_| ())
+        }
+    }
+}
+
 /// Move a pack to the system trash. Only direct children of resourcepacks are
-/// eligible, so a stale path cannot delete something outside the game dir.
+/// eligible, so a stale path cannot delete something outside the game dir. The
+/// entry itself is never canonicalized, so a symlinked pack trashes the link
+/// and never the target it points at.
 pub fn delete_pack(path: &Path, resourcepacks: &Path) -> Result<(), AppError> {
+    delete_pack_with(path, resourcepacks, &SystemTrash)
+}
+
+pub fn delete_pack_with(
+    path: &Path,
+    resourcepacks: &Path,
+    trash: &dyn TrashService,
+) -> Result<(), AppError> {
     let root = std::fs::canonicalize(resourcepacks)?;
-    let target = std::fs::canonicalize(path).map_err(|_| PackError::NotFound {
+    let parent = path.parent().ok_or_else(|| PackError::OutsideRoot {
         path: path.to_path_buf(),
     })?;
-    if target.parent() != Some(root.as_path()) {
-        return Err(PackError::OutsideRoot { path: target }.into());
+    let parent = std::fs::canonicalize(parent).map_err(|_| PackError::NotFound {
+        path: path.to_path_buf(),
+    })?;
+    if parent != root {
+        return Err(PackError::OutsideRoot {
+            path: path.to_path_buf(),
+        }
+        .into());
     }
-    if target != root {
-        trash::delete(&target).map_err(|err| PackError::Trash {
-            path: target.clone(),
-            reason: err.to_string(),
-        })?;
-    }
+    std::fs::symlink_metadata(path).map_err(|_| PackError::NotFound {
+        path: path.to_path_buf(),
+    })?;
+    trash.move_to_trash(path)?;
     Ok(())
 }
 
@@ -457,11 +698,8 @@ fn detect_kind(path: &Path, location: PackLocation) -> Result<PackKind, AppError
             Ok(kind_from_names(children.iter().map(String::as_str)))
         }
         PackLocation::Zip => {
-            let file = File::open(path)?;
-            let archive = zip::ZipArchive::new(file).map_err(|err| PackError::BrokenArchive {
-                name: display_name(path),
-                reason: err.to_string(),
-            })?;
+            let name = display_name(path);
+            let archive = open_zip(path, &name)?;
             Ok(kind_from_names(archive.file_names()))
         }
     }
@@ -546,7 +784,13 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), 
     Ok(())
 }
 
-fn find_duplicate(resourcepacks: &Path, sha256: &str) -> Result<Option<PathBuf>, AppError> {
+/// The installed pack with the same content, if any. I/O errors propagate:
+/// silently skipping an unreadable pack would hide a real duplicate.
+fn find_duplicate(
+    resourcepacks: &Path,
+    sha256: &str,
+    hashes: &HashCache,
+) -> Result<Option<PathBuf>, AppError> {
     let entries = match std::fs::read_dir(resourcepacks) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -554,7 +798,16 @@ fn find_duplicate(resourcepacks: &Path, sha256: &str) -> Result<Option<PathBuf>,
     };
     for entry in entries.filter_map(|entry| entry.ok()) {
         let path = entry.path();
-        let location = if path.is_dir() {
+        if is_temp_name(&path) {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let location = if file_type.is_dir() {
             PackLocation::Directory
         } else if path
             .extension()
@@ -565,7 +818,7 @@ fn find_duplicate(resourcepacks: &Path, sha256: &str) -> Result<Option<PathBuf>,
         } else {
             continue;
         };
-        if hash_source(&path, location).ok().as_deref() == Some(sha256) {
+        if hashes.hash(&path, location)? == sha256 {
             return Ok(Some(path));
         }
     }
@@ -600,6 +853,8 @@ fn copy_dir(source: &Path, destination: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Permanent removal, used only for temp paths this module created itself.
+/// Packs always go through `TrashService`.
 fn remove_any(path: &Path) -> std::io::Result<()> {
     if path.is_dir() {
         std::fs::remove_dir_all(path)
@@ -608,6 +863,19 @@ fn remove_any(path: &Path) -> std::io::Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn unique_temp_path(root: &Path, file_name: &str) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let stamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    root.join(format!(
+        ".{file_name}.{}-{stamp}-{counter}.tmp",
+        std::process::id()
+    ))
 }
 
 fn sync_dir(path: &Path) {
@@ -631,6 +899,7 @@ mod tests {
     use super::*;
     use crate::pack::{FormatVersion, PackKind};
     use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
 
     fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
         if let Some(parent) = path.parent() {
@@ -677,6 +946,59 @@ mod tests {
         (root, cache)
     }
 
+    /// Records trash calls and keeps the trashed path, like the real trash.
+    struct RecordingTrash {
+        dir: PathBuf,
+        calls: Mutex<Vec<PathBuf>>,
+        counter: AtomicU64,
+    }
+
+    impl RecordingTrash {
+        fn new(dir: &Path) -> Self {
+            std::fs::create_dir_all(dir).unwrap();
+            RecordingTrash {
+                dir: dir.to_path_buf(),
+                calls: Mutex::new(Vec::new()),
+                counter: AtomicU64::new(0),
+            }
+        }
+
+        fn calls(&self) -> Vec<PathBuf> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl TrashService for RecordingTrash {
+        fn move_to_trash(&self, path: &Path) -> Result<(), PackError> {
+            self.calls.lock().unwrap().push(path.to_path_buf());
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "item".to_string());
+            let index = self.counter.fetch_add(1, Ordering::Relaxed);
+            let target = self.dir.join(format!("{index}-{name}"));
+            std::fs::rename(path, &target).map_err(|err| PackError::Trash {
+                path: path.to_path_buf(),
+                reason: err.to_string(),
+            })
+        }
+    }
+
+    fn setup() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        IconCache,
+        HashCache,
+        RecordingTrash,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        let icons = IconCache::new(cache_root.path());
+        let trash = RecordingTrash::new(&root.path().join("trash-box"));
+        let hashes = HashCache::new();
+        (root, cache_root, icons, hashes, trash)
+    }
+
     #[test]
     fn reads_real_shape_metadata_and_icon() {
         let root = tempfile::tempdir().unwrap();
@@ -703,6 +1025,10 @@ mod tests {
         assert!(pack.icon.as_ref().unwrap().path.is_file());
         assert!(pack.error.is_none());
         assert!(listing.bytes_read < MAX_ICON_BYTES);
+        assert_eq!(
+            pack.bytes_read, listing.bytes_read,
+            "one pack reports its own delta"
+        );
     }
 
     #[test]
@@ -764,6 +1090,25 @@ mod tests {
     }
 
     #[test]
+    fn an_icon_claiming_huge_pixels_is_skipped() {
+        let mut header = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        header.extend_from_slice(&13u32.to_be_bytes());
+        header.extend_from_slice(b"IHDR");
+        header.extend_from_slice(&65_535u32.to_be_bytes());
+        header.extend_from_slice(&65_535u32.to_be_bytes());
+        header.extend_from_slice(&[0; 5]);
+
+        let root = tempfile::tempdir().unwrap();
+        let (_cache_root, icons) = cache();
+        simple_zip(&root.path().join("Lying.zip"), 34, Some(&header));
+
+        let listing = scan_packs(root.path(), &icons).unwrap();
+        let pack = &listing.packs[0];
+        assert!(pack.icon.is_none(), "a hostile IHDR is never cached");
+        assert!(pack.error.is_none());
+    }
+
+    #[test]
     fn directory_pack_and_both_kinds() {
         let root = tempfile::tempdir().unwrap();
         let (_cache_root, icons) = cache();
@@ -779,17 +1124,146 @@ mod tests {
         assert_eq!(pack.kind, PackKind::Both);
         assert!(pack.icon.is_some());
         assert_eq!(pack.description, "Two kinds");
+        assert_eq!(
+            pack.game_label.as_deref(),
+            Some("Resource 1.20 to 1.20.4, data unknown"),
+            "each half is labelled from its own table"
+        );
     }
 
     #[test]
-    fn only_direct_children_are_scanned() {
+    fn a_directory_without_meta_is_an_error_card_naming_the_pack() {
         let root = tempfile::tempdir().unwrap();
         let (_cache_root, icons) = cache();
         let nested = root.path().join("nested");
+        std::fs::create_dir_all(nested.join("assets")).unwrap();
         simple_zip(&nested.join("Inside.zip"), 34, None);
 
         let listing = scan_packs(root.path(), &icons).unwrap();
-        assert_eq!(listing.count, 0, "must not recurse into nested dirs");
+        assert_eq!(listing.count, 1, "no recursion into nested dirs");
+        let card = &listing.packs[0];
+        assert_eq!(card.name, "nested");
+        assert_eq!(card.error.as_ref().unwrap().code, "pack_missing_meta");
+        assert!(
+            card.error.as_ref().unwrap().message.contains("nested"),
+            "the error names the pack: {}",
+            card.error.as_ref().unwrap().message
+        );
+    }
+
+    #[test]
+    fn missing_meta_errors_name_the_pack() {
+        let root = tempfile::tempdir().unwrap();
+        let (_cache_root, icons) = cache();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+
+        write_zip(
+            &root.path().join("incoming/NoMeta.zip"),
+            &[("assets/minecraft/x", b"x")],
+        );
+        let err = import_pack(
+            &root.path().join("incoming/NoMeta.zip"),
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &HashCache::new(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "pack_missing_meta");
+        assert!(
+            err.to_string().contains("NoMeta"),
+            "the error names the pack: {err}"
+        );
+
+        std::fs::create_dir_all(root.path().join("incoming/NoMetaDir/assets")).unwrap();
+        let err = import_pack(
+            &root.path().join("incoming/NoMetaDir"),
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &HashCache::new(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "pack_missing_meta");
+        assert!(
+            err.to_string().contains("NoMetaDir"),
+            "the error names the pack: {err}"
+        );
+    }
+
+    #[test]
+    fn dot_prefixed_zip_entries_are_normalized() {
+        let root = tempfile::tempdir().unwrap();
+        let (_cache_root, icons) = cache();
+        let meta = mcmeta(34, None, "Dotted");
+        write_zip(
+            &root.path().join("Dotted.zip"),
+            &[
+                ("./pack.mcmeta", meta.as_slice()),
+                ("./pack.png", b"icon"),
+                ("./assets/minecraft/x", b"x"),
+            ],
+        );
+
+        let listing = scan_packs(root.path(), &icons).unwrap();
+        let pack = &listing.packs[0];
+        assert!(pack.error.is_none(), "{:?}", pack.error);
+        assert_eq!(pack.kind, PackKind::Resource);
+        assert_eq!(pack.description, "Dotted");
+        assert!(pack.icon.is_some());
+
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let outcome = import_pack(
+            &root.path().join("Dotted.zip"),
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &HashCache::new(),
+        )
+        .unwrap();
+        assert!(
+            matches!(outcome, ImportOutcome::Imported { .. }),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn stale_temp_entries_are_skipped() {
+        let root = tempfile::tempdir().unwrap();
+        let (_cache_root, icons) = cache();
+        simple_zip(&root.path().join("Good.zip"), 34, None);
+        std::fs::create_dir_all(root.path().join(".DirPack.123-1.tmp")).unwrap();
+        std::fs::write(root.path().join(".Pack.zip.123-2.tmp"), b"leftover").unwrap();
+
+        let listing = scan_packs(root.path(), &icons).unwrap();
+        assert_eq!(listing.count, 1);
+        assert_eq!(listing.packs[0].name, "Good");
+    }
+
+    #[test]
+    fn symlinked_packs_are_error_cards() {
+        let root = tempfile::tempdir().unwrap();
+        let (_cache_root, icons) = cache();
+        let target = root.path().join("Real");
+        std::fs::create_dir_all(target.join("assets")).unwrap();
+        std::fs::write(target.join("pack.mcmeta"), mcmeta(34, None, "real")).unwrap();
+        std::os::unix::fs::symlink(&target, root.path().join("Linked")).unwrap();
+
+        let listing = scan_packs(root.path(), &icons).unwrap();
+        let linked = listing
+            .packs
+            .iter()
+            .find(|pack| pack.name == "Linked")
+            .unwrap();
+        assert_eq!(linked.error.as_ref().unwrap().code, "pack_symlink");
+        let real = listing
+            .packs
+            .iter()
+            .find(|pack| pack.name == "Real")
+            .unwrap();
+        assert!(real.error.is_none());
     }
 
     #[test]
@@ -821,21 +1295,83 @@ mod tests {
                 .count(),
             1
         );
-        assert!(listing.bytes_read / listing.count as u64 <= 1024 * 1024);
+        let max_per_pack = listing
+            .packs
+            .iter()
+            .map(|pack| pack.bytes_read)
+            .max()
+            .unwrap();
+        assert!(
+            max_per_pack <= 1024 * 1024,
+            "per-pack cap, not the mean: {max_per_pack}"
+        );
+        assert!(
+            max_per_pack * 50 < listing.bytes_read,
+            "each pack reports its own delta, not a running total: max {max_per_pack} of {}",
+            listing.bytes_read
+        );
         assert!(listing.elapsed_ms < 1500.0);
     }
 
     #[test]
-    fn imports_zip_and_directory() {
+    fn a_zip_entry_over_the_cap_is_an_error() {
         let root = tempfile::tempdir().unwrap();
         let (_cache_root, icons) = cache();
+        let big = vec![0u8; 2 * 1024 * 1024];
+        let meta = mcmeta(34, None, "Huge meta");
+        let mut entries: Vec<(&str, &[u8])> = vec![("pack.mcmeta", big.as_slice())];
+        entries.push(("assets/x", meta.as_slice()));
+        write_zip(&root.path().join("HugeMeta.zip"), &entries);
+
+        let listing = scan_packs(root.path(), &icons).unwrap();
+        let card = &listing.packs[0];
+        assert_eq!(card.error.as_ref().unwrap().code, "pack_broken_archive");
+        assert!(
+            card.error.as_ref().unwrap().message.contains("larger than"),
+            "{:?}",
+            card.error
+        );
+    }
+
+    #[test]
+    fn the_zip_entry_count_is_capped() {
+        let root = tempfile::tempdir().unwrap();
+        let mut names: Vec<(String, &[u8])> = Vec::new();
+        let meta = mcmeta(34, None, "Many");
+        names.push(("pack.mcmeta".to_string(), meta.as_slice()));
+        for index in 0..5 {
+            names.push((format!("assets/{index}"), b"x"));
+        }
+        let owned: Vec<(&str, &[u8])> = names
+            .iter()
+            .map(|(name, bytes)| (name.as_str(), *bytes))
+            .collect();
+        write_zip(&root.path().join("Many.zip"), &owned);
+
+        let name = display_name(&root.path().join("Many.zip"));
+        let err = open_zip_capped(&root.path().join("Many.zip"), &name, 3).unwrap_err();
+        assert_eq!(err.code(), "pack_broken_archive");
+        assert!(err.to_string().contains("more than 3 entries"), "{err}");
+        assert!(open_zip_capped(&root.path().join("Many.zip"), &name, 6).is_ok());
+    }
+
+    #[test]
+    fn imports_zip_and_directory() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
         let resourcepacks = root.path().join("game/resourcepacks");
         std::fs::create_dir_all(&resourcepacks).unwrap();
 
         let zip_source = root.path().join("incoming/ZipPack.zip");
         simple_zip(&zip_source, 34, Some(b"icon"));
-        let outcome =
-            import_pack(&zip_source, &resourcepacks, &icons, ImportChoice::Default).unwrap();
+        let outcome = import_pack_with(
+            &zip_source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
         let pack = match outcome {
             ImportOutcome::Imported { pack } => pack,
             other => panic!("expected import, got {other:?}"),
@@ -846,47 +1382,98 @@ mod tests {
         let dir_source = root.path().join("incoming/DirPack");
         std::fs::create_dir_all(dir_source.join("assets")).unwrap();
         std::fs::write(dir_source.join("pack.mcmeta"), mcmeta(7, None, "Dir")).unwrap();
-        let outcome =
-            import_pack(&dir_source, &resourcepacks, &icons, ImportChoice::Default).unwrap();
+        let outcome = import_pack_with(
+            &dir_source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
         assert!(matches!(outcome, ImportOutcome::Imported { .. }));
         assert!(resourcepacks.join("DirPack/pack.mcmeta").is_file());
+        assert!(trash.calls().is_empty());
     }
 
     #[test]
     fn duplicate_offers_skip_and_replace() {
-        let root = tempfile::tempdir().unwrap();
-        let (_cache_root, icons) = cache();
+        let (root, _cache_root, icons, hashes, trash) = setup();
         let resourcepacks = root.path().join("resourcepacks");
         std::fs::create_dir_all(&resourcepacks).unwrap();
         let source = root.path().join("incoming/Pack.zip");
         simple_zip(&source, 34, None);
 
-        import_pack(&source, &resourcepacks, &icons, ImportChoice::Default).unwrap();
-        let duplicate =
-            import_pack(&source, &resourcepacks, &icons, ImportChoice::Default).unwrap();
+        import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+        let duplicate = import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
         assert!(
             matches!(duplicate, ImportOutcome::Duplicate { .. }),
             "{duplicate:?}"
         );
 
-        let skipped = import_pack(&source, &resourcepacks, &icons, ImportChoice::Skip).unwrap();
+        let skipped = import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Skip,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
         assert_eq!(skipped, ImportOutcome::Skipped);
         assert_eq!(pack_names(&resourcepacks).unwrap().len(), 1);
+        assert!(trash.calls().is_empty());
 
-        let replaced = import_pack(&source, &resourcepacks, &icons, ImportChoice::Replace).unwrap();
+        let replaced = import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Replace,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
         assert!(matches!(replaced, ImportOutcome::Imported { .. }));
         assert_eq!(pack_names(&resourcepacks).unwrap().len(), 1);
+        assert_eq!(
+            trash.calls().len(),
+            1,
+            "one Replace moves exactly one pack to the trash"
+        );
     }
 
     #[test]
     fn name_collision_needs_replace() {
-        let root = tempfile::tempdir().unwrap();
-        let (_cache_root, icons) = cache();
+        let (root, _cache_root, icons, hashes, trash) = setup();
         let resourcepacks = root.path().join("resourcepacks");
         std::fs::create_dir_all(&resourcepacks).unwrap();
         let first = root.path().join("one/Pack.zip");
         simple_zip(&first, 34, None);
-        import_pack(&first, &resourcepacks, &icons, ImportChoice::Default).unwrap();
+        import_pack_with(
+            &first,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
 
         let second = root.path().join("two/Pack.zip");
         write_zip(
@@ -896,50 +1483,326 @@ mod tests {
                 ("assets/minecraft/x", b"x"),
             ],
         );
-        let collision =
-            import_pack(&second, &resourcepacks, &icons, ImportChoice::Default).unwrap();
+        let collision = import_pack_with(
+            &second,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
         assert!(
             matches!(collision, ImportOutcome::Collision { .. }),
             "{collision:?}"
         );
         assert_eq!(pack_names(&resourcepacks).unwrap().len(), 1);
+        assert!(trash.calls().is_empty(), "a collision removes nothing");
 
-        let replaced = import_pack(&second, &resourcepacks, &icons, ImportChoice::Replace).unwrap();
+        let replaced = import_pack_with(
+            &second,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Replace,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
         assert!(matches!(replaced, ImportOutcome::Imported { .. }));
+        assert_eq!(trash.calls().len(), 1);
         let listing = scan_packs(&resourcepacks, &icons).unwrap();
         assert_eq!(listing.packs[0].description, "Different");
     }
 
     #[test]
+    fn duplicate_plus_collision_removes_at_most_one_pack() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+
+        let alpha = root.path().join("alpha/Alpha.zip");
+        simple_zip(&alpha, 34, None);
+        import_pack_with(
+            &alpha,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+        let other = root.path().join("other/Pack.zip");
+        write_zip(
+            &other,
+            &[
+                ("pack.mcmeta", mcmeta(55, None, "Colliding").as_slice()),
+                ("assets/minecraft/x", b"x"),
+            ],
+        );
+        import_pack_with(
+            &other,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+
+        // The source has Alpha's content but Pack.zip's name.
+        let source = root.path().join("incoming/Pack.zip");
+        simple_zip(&source, 34, None);
+        let first = import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Replace,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+        assert!(
+            matches!(first, ImportOutcome::Collision { .. }),
+            "{first:?}"
+        );
+        assert_eq!(
+            pack_names(&resourcepacks).unwrap().len(),
+            1,
+            "one Replace removes at most one pack"
+        );
+        assert_eq!(trash.calls().len(), 1);
+        assert_eq!(
+            trash.calls()[0],
+            resourcepacks.join("Alpha.zip"),
+            "only the exact duplicate goes; the colliding destination stays"
+        );
+        assert!(resourcepacks.join("Pack.zip").is_file());
+        assert!(source.is_file(), "the source is never deleted");
+
+        let second = import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Replace,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+        assert!(
+            matches!(second, ImportOutcome::Imported { .. }),
+            "{second:?}"
+        );
+        assert_eq!(trash.calls().len(), 2);
+        let listing = scan_packs(&resourcepacks, &icons).unwrap();
+        assert_eq!(listing.count, 1);
+        assert_eq!(listing.packs[0].description, "Demo pack");
+    }
+
+    #[test]
+    fn reimporting_a_pack_inside_resourcepacks_keeps_it() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let source = root.path().join("incoming/Pack.zip");
+        simple_zip(&source, 34, None);
+        import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+
+        let installed = resourcepacks.join("Pack.zip");
+        for choice in [
+            ImportChoice::Default,
+            ImportChoice::Replace,
+            ImportChoice::Skip,
+        ] {
+            let outcome =
+                import_pack_with(&installed, &resourcepacks, &icons, choice, &hashes, &trash)
+                    .unwrap();
+            assert!(
+                matches!(outcome, ImportOutcome::Imported { .. }),
+                "re-importing from the destination is a no-op success: {outcome:?}"
+            );
+            assert!(installed.is_file(), "{choice:?} must not delete the source");
+            assert!(source.is_file());
+            assert!(
+                trash.calls().is_empty(),
+                "{choice:?} must not trash anything"
+            );
+            assert_eq!(pack_names(&resourcepacks).unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn replace_rolls_back_before_touching_the_old_pack() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let source = root.path().join("incoming/Pack.zip");
+        simple_zip(&source, 34, None);
+        import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+
+        // Make the copy fail: the destination dir refuses new files.
+        let mut perms = std::fs::metadata(&resourcepacks).unwrap().permissions();
+        perms.set_mode(0o555);
+        std::fs::set_permissions(&resourcepacks, perms.clone()).unwrap();
+        let err = import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Replace,
+            &hashes,
+            &trash,
+        )
+        .unwrap_err();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&resourcepacks, perms).unwrap();
+
+        assert_eq!(err.code(), "io");
+        assert!(
+            trash.calls().is_empty(),
+            "nothing is trashed before the new copy is safe"
+        );
+        assert!(resourcepacks.join("Pack.zip").is_file());
+        assert!(source.is_file());
+    }
+
+    #[test]
+    fn an_unreadable_installed_pack_fails_instead_of_hiding_a_duplicate() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let locked = resourcepacks.join("Locked.zip");
+        simple_zip(&locked, 34, None);
+        let mut perms = std::fs::metadata(&locked).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&locked, perms.clone()).unwrap();
+
+        let source = root.path().join("incoming/Pack.zip");
+        simple_zip(&source, 34, None);
+        let err = import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap_err();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(&locked, perms).unwrap();
+
+        assert_eq!(err.code(), "io", "I/O errors propagate: {err}");
+        assert!(trash.calls().is_empty());
+    }
+
+    #[test]
     fn rejects_unknown_kind_and_symlinks() {
-        let root = tempfile::tempdir().unwrap();
-        let (_cache_root, icons) = cache();
+        let (root, _cache_root, icons, hashes, trash) = setup();
         let resourcepacks = root.path().join("resourcepacks");
         std::fs::create_dir_all(&resourcepacks).unwrap();
 
         let empty = root.path().join("empty.zip");
         write_zip(&empty, &[("readme.txt", b"nope")]);
-        let err = import_pack(&empty, &resourcepacks, &icons, ImportChoice::Default).unwrap_err();
+        let err = import_pack_with(
+            &empty,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap_err();
         assert_eq!(err.code(), "pack_unknown_kind");
 
         let source = root.path().join("linked");
         std::fs::create_dir_all(source.join("assets")).unwrap();
         std::fs::write(source.join("pack.mcmeta"), mcmeta(34, None, "linked")).unwrap();
         std::os::unix::fs::symlink("/etc/hostname", source.join("assets/escape.txt")).unwrap();
-        let err = import_pack(&source, &resourcepacks, &icons, ImportChoice::Default).unwrap_err();
+        let err = import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap_err();
         assert_eq!(err.code(), "pack_symlink");
+
+        let zip_source = root.path().join("incoming/Real.zip");
+        simple_zip(&zip_source, 34, None);
+        let link = root.path().join("incoming/Link.zip");
+        std::os::unix::fs::symlink(&zip_source, &link).unwrap();
+        let err = import_pack_with(
+            &link,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.code(),
+            "pack_symlink",
+            "a symlinked source is not followed"
+        );
     }
 
     #[test]
-    fn delete_moves_a_direct_child_to_trash() {
+    fn delete_moves_a_direct_child_to_the_freedesktop_trash() {
         let root = tempfile::tempdir().unwrap();
         let resourcepacks = root.path().join("resourcepacks");
         let pack = resourcepacks.join("TrashMe");
         std::fs::create_dir_all(&pack).unwrap();
         std::fs::write(pack.join("pack.mcmeta"), mcmeta(34, None, "trash")).unwrap();
 
+        // The freedesktop trash lives under $XDG_DATA_HOME/Trash. Point it at a
+        // temp home so the test proves the trash call, not just the absence.
+        let data_home = root.path().join("xdg-data");
+        std::fs::create_dir_all(data_home.join("Trash/files")).unwrap();
+        std::env::set_var("XDG_DATA_HOME", &data_home);
         delete_pack(&pack, &resourcepacks).unwrap();
+        std::env::remove_var("XDG_DATA_HOME");
+
         assert!(!pack.exists());
+        assert!(
+            data_home.join("Trash/files/TrashMe").exists(),
+            "the pack must land in the freedesktop trash, not be unlinked"
+        );
+    }
+
+    #[test]
+    fn delete_trashes_a_symlink_itself_not_its_target() {
+        let (root, _cache_root, _icons, _hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        let target = resourcepacks.join("Target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("pack.mcmeta"), mcmeta(34, None, "target")).unwrap();
+        let link = resourcepacks.join("Link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        delete_pack_with(&link, &resourcepacks, &trash).unwrap();
+        assert_eq!(trash.calls(), vec![link.clone()], "the call names the link");
+        assert!(!link.exists(), "the link is gone");
+        assert!(
+            target.join("pack.mcmeta").is_file(),
+            "a link into the root never trashes its target"
+        );
     }
 
     #[test]

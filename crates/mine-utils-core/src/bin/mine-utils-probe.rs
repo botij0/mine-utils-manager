@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use mine_utils_core::{
     discover_game_dirs, entry_for, home_dir, import_pack, scan_packs, AppPaths, GameDirEntry,
-    IconCache, ImportChoice, ImportOutcome, PackListing,
+    HashCache, IconCache, ImportChoice, ImportOutcome, PackListing,
 };
 
 fn main() {
@@ -48,6 +48,7 @@ fn run() -> Result<String, String> {
                 &game_dir.join("resourcepacks"),
                 &icons,
                 choice,
+                &HashCache::new(),
             )
             .map_err(|err| err.to_string())?;
             match &outcome {

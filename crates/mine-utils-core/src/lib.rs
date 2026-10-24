@@ -17,10 +17,14 @@ pub use game_dir::{
     contains_entry, discover_game_dirs, entry_for, is_game_dir, merge_game_dirs, validate_game_dir,
     DiscoverySource, GameDir, GameDirEntry,
 };
-pub use icon_cache::IconCache;
+pub use icon_cache::{icon_within_pixel_cap, png_dimensions, IconCache, MAX_ICON_DIMENSION};
 pub use pack::{
     FormatRange, FormatVersion, ImportChoice, ImportOutcome, Pack, PackError, PackIcon, PackIssue,
     PackKind, PackLocation, PackMeta,
 };
-pub use pack_scan::{delete_pack, import_pack, scan_packs, PackListing};
+pub use pack_scan::{
+    delete_pack, delete_pack_with, import_pack, import_pack_with, pack_names, scan_packs,
+    HashCache, PackListing, SystemTrash, TrashService, MAX_ICON_BYTES, MAX_META_BYTES,
+    MAX_ZIP_ENTRIES,
+};
 pub use paths::{home_dir, AppPaths};
