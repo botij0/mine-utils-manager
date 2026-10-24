@@ -37,26 +37,39 @@ impl fmt::Display for FormatVersion {
     }
 }
 
-/// An inclusive range of pack formats.
+/// An inclusive range of pack formats. Either end may be open: a lone
+/// `min_format` leaves `max` empty and a lone `max_format` leaves `min` empty,
+/// so an open declaration is shown as open instead of being dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FormatRange {
-    pub min: FormatVersion,
-    pub max: FormatVersion,
+    pub min: Option<FormatVersion>,
+    pub max: Option<FormatVersion>,
 }
 
 impl FormatRange {
     pub fn single(version: FormatVersion) -> Self {
         FormatRange {
-            min: version,
-            max: version,
+            min: Some(version),
+            max: Some(version),
         }
     }
 
+    /// A closed range, or `None` when the bounds are reversed and the range
+    /// therefore declares nothing.
+    pub fn closed(min: FormatVersion, max: FormatVersion) -> Option<Self> {
+        (min <= max).then_some(FormatRange {
+            min: Some(min),
+            max: Some(max),
+        })
+    }
+
     pub fn label(&self) -> String {
-        if self.min == self.max {
-            self.min.label()
-        } else {
-            format!("{} to {}", self.min.label(), self.max.label())
+        match (self.min, self.max) {
+            (None, None) => "unknown".to_string(),
+            (Some(min), None) => format!("{} and up", min.label()),
+            (None, Some(max)) => format!("up to {}", max.label()),
+            (Some(min), Some(max)) if min == max => min.label(),
+            (Some(min), Some(max)) => format!("{} to {}", min.label(), max.label()),
         }
     }
 }
@@ -102,14 +115,41 @@ pub struct PackMeta {
 }
 
 impl PackMeta {
-    /// Precedence is min/max, then supported_formats, then pack_format.
+    /// Precedence is min/max, then supported_formats, then pack_format. A lone
+    /// min or max stays open instead of being dropped. A reversed range is
+    /// unknown instead of falling back to a narrower pack_format number.
     pub fn effective_range(&self) -> Option<FormatRange> {
         match (self.min_format, self.max_format) {
-            (Some(min), Some(max)) => Some(FormatRange { min, max }),
-            _ => self
-                .supported_formats
-                .or_else(|| self.pack_format.map(FormatRange::single)),
+            (Some(min), Some(max)) => return FormatRange::closed(min, max),
+            (Some(min), None) => {
+                return Some(FormatRange {
+                    min: Some(min),
+                    max: None,
+                })
+            }
+            (None, Some(max)) => {
+                return Some(FormatRange {
+                    min: None,
+                    max: Some(max),
+                })
+            }
+            (None, None) => {}
         }
+        if let Some(range) = self.supported_formats {
+            return match (range.min, range.max) {
+                (Some(min), Some(max)) => FormatRange::closed(min, max),
+                (Some(min), None) => Some(FormatRange {
+                    min: Some(min),
+                    max: None,
+                }),
+                (None, Some(max)) => Some(FormatRange {
+                    min: None,
+                    max: Some(max),
+                }),
+                (None, None) => None,
+            };
+        }
+        self.pack_format.map(FormatRange::single)
     }
 }
 
@@ -225,18 +265,51 @@ pub enum ImportChoice {
 mod tests {
     use super::*;
 
+    fn closed(min: u32, max: u32) -> FormatRange {
+        FormatRange::closed(
+            FormatVersion::from_major(min),
+            FormatVersion::from_major(max),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn format_version_labels() {
         assert_eq!(FormatVersion::from_major(34).label(), "34");
         assert_eq!(FormatVersion::new(69, 0).label(), "69");
         assert_eq!(FormatVersion::new(94, 1).label(), "94.1");
+        assert_eq!(closed(34, 42).label(), "34 to 42");
+        assert_eq!(
+            FormatRange::single(FormatVersion::from_major(34)).label(),
+            "34"
+        );
+    }
+
+    #[test]
+    fn open_ranges_label_the_open_end() {
         assert_eq!(
             FormatRange {
-                min: FormatVersion::from_major(34),
-                max: FormatVersion::from_major(42),
+                min: Some(FormatVersion::from_major(48)),
+                max: None,
             }
             .label(),
-            "34 to 42"
+            "48 and up"
+        );
+        assert_eq!(
+            FormatRange {
+                min: None,
+                max: Some(FormatVersion::from_major(42)),
+            }
+            .label(),
+            "up to 42"
+        );
+        assert_eq!(
+            FormatRange {
+                min: None,
+                max: None,
+            }
+            .label(),
+            "unknown"
         );
     }
 
@@ -246,10 +319,7 @@ mod tests {
             pack_format: Some(FormatVersion::from_major(34)),
             min_format: Some(FormatVersion::from_major(48)),
             max_format: Some(FormatVersion::from_major(70)),
-            supported_formats: Some(FormatRange {
-                min: FormatVersion::from_major(20),
-                max: FormatVersion::from_major(30),
-            }),
+            supported_formats: Some(closed(20, 30)),
             description: String::new(),
         };
         assert_eq!(meta.effective_range().unwrap().label(), "48 to 70");
@@ -266,6 +336,61 @@ mod tests {
             ..meta
         };
         assert_eq!(meta.effective_range().unwrap().label(), "34");
+    }
+
+    #[test]
+    fn a_lone_min_or_max_is_not_dropped() {
+        let meta = PackMeta {
+            pack_format: Some(FormatVersion::from_major(34)),
+            min_format: Some(FormatVersion::from_major(48)),
+            max_format: None,
+            supported_formats: None,
+            description: String::new(),
+        };
+        assert_eq!(meta.effective_range().unwrap().label(), "48 and up");
+
+        let meta = PackMeta {
+            min_format: None,
+            max_format: Some(FormatVersion::from_major(42)),
+            ..meta
+        };
+        assert_eq!(meta.effective_range().unwrap().label(), "up to 42");
+    }
+
+    #[test]
+    fn a_reversed_range_is_unknown() {
+        let meta = PackMeta {
+            pack_format: Some(FormatVersion::from_major(34)),
+            min_format: Some(FormatVersion::from_major(50)),
+            max_format: Some(FormatVersion::from_major(10)),
+            supported_formats: Some(closed(20, 30)),
+            description: String::new(),
+        };
+        assert_eq!(meta.effective_range(), None, "reversed min/max is unknown");
+
+        let meta = PackMeta {
+            min_format: None,
+            max_format: None,
+            supported_formats: Some(FormatRange {
+                min: Some(FormatVersion::from_major(50)),
+                max: Some(FormatVersion::from_major(10)),
+            }),
+            ..meta
+        };
+        assert_eq!(
+            meta.effective_range(),
+            None,
+            "a reversed supported_formats stays unknown, no pack_format fallback"
+        );
+
+        assert_eq!(
+            FormatRange::closed(FormatVersion::from_major(10), FormatVersion::from_major(50)),
+            Some(closed(10, 50))
+        );
+        assert_eq!(
+            FormatRange::closed(FormatVersion::from_major(50), FormatVersion::from_major(10)),
+            None
+        );
     }
 
     #[test]

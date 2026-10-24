@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
-use crate::pack::{FormatVersion, PackKind};
+use crate::pack::{FormatRange, FormatVersion, PackKind};
 
 const PACK_FORMATS_JSON: &str = include_str!("../data/pack_formats.json");
 
@@ -54,30 +54,76 @@ impl FormatTable {
             PackKind::Data => &self.data,
             _ => &self.resource,
         };
-        entries
-            .iter()
-            .find(|entry| entry.format == version)
-            .map(|entry| entry.label.as_str())
+        lookup(entries, version)
     }
 
-    pub fn game_label(
-        &self,
-        kind: PackKind,
-        min: FormatVersion,
-        max: FormatVersion,
-    ) -> Option<String> {
-        let start = self.label_for(kind, min)?;
-        if min == max {
-            return Some(start.to_string());
+    /// Game versions for the declared range. A range must map at both ends and
+    /// must not be reversed; an open end is named as open instead of guessed,
+    /// and a `Both` pack is labelled for each half from its own table.
+    pub fn game_label(&self, kind: PackKind, range: &FormatRange) -> Option<String> {
+        match kind {
+            PackKind::Resource => half_label(&self.resource, range),
+            PackKind::Data => half_label(&self.data, range),
+            PackKind::Both => {
+                let resource = half_label(&self.resource, range);
+                let data = half_label(&self.data, range);
+                match (resource, data) {
+                    (Some(resource), Some(data)) if resource == data => Some(resource),
+                    (resource, data) => {
+                        if resource.is_none() && data.is_none() {
+                            return None;
+                        }
+                        Some(format!(
+                            "Resource {}, data {}",
+                            resource.unwrap_or_else(|| "unknown".to_string()),
+                            data.unwrap_or_else(|| "unknown".to_string()),
+                        ))
+                    }
+                }
+            }
+            PackKind::Unknown => None,
         }
-        let end = self.label_for(kind, max)?;
-        let start = start.split(" to ").next().unwrap_or(start);
-        let end = end.rsplit(" to ").next().unwrap_or(end);
-        if start == end {
-            Some(start.to_string())
-        } else {
-            Some(format!("{start} to {end}"))
+    }
+}
+
+fn lookup(entries: &[FormatRangeEntry], version: FormatVersion) -> Option<&str> {
+    entries
+        .iter()
+        .find(|entry| entry.format == version)
+        .map(|entry| entry.label.as_str())
+}
+
+fn start_of(label: &str) -> &str {
+    label.split(" to ").next().unwrap_or(label)
+}
+
+fn end_of(label: &str) -> &str {
+    label.rsplit(" to ").next().unwrap_or(label)
+}
+
+fn half_label(entries: &[FormatRangeEntry], range: &FormatRange) -> Option<String> {
+    match (range.min, range.max) {
+        (Some(min), Some(max)) => {
+            if min > max {
+                return None;
+            }
+            let start = lookup(entries, min)?;
+            if min == max {
+                return Some(start.to_string());
+            }
+            let end = end_of(lookup(entries, max)?);
+            let start = start_of(start);
+            if start == end {
+                Some(start.to_string())
+            } else {
+                Some(format!("{start} to {end}"))
+            }
         }
+        (Some(min), None) => {
+            lookup(entries, min).map(|label| format!("{} and newer", start_of(label)))
+        }
+        (None, Some(max)) => lookup(entries, max).map(|label| format!("up to {}", end_of(label))),
+        (None, None) => None,
     }
 }
 
@@ -139,17 +185,121 @@ mod tests {
         let table = FormatTable::embedded();
         let label = table.game_label(
             PackKind::Resource,
-            FormatVersion::from_major(34),
-            FormatVersion::from_major(69),
+            &FormatRange {
+                min: Some(FormatVersion::from_major(34)),
+                max: Some(FormatVersion::from_major(69)),
+            },
         );
         assert_eq!(label.as_deref(), Some("1.21 to 1.21.10"));
         assert_eq!(
             table.game_label(
                 PackKind::Data,
-                FormatVersion::from_major(94),
-                FormatVersion::from_major(1),
+                &FormatRange {
+                    min: Some(FormatVersion::from_major(94)),
+                    max: Some(FormatVersion::from_major(1)),
+                },
             ),
             None
         );
+    }
+
+    #[test]
+    fn pre_1_21_data_rows_are_corrected() {
+        let table = FormatTable::embedded();
+        let label = |major| {
+            table
+                .label_for(PackKind::Data, FormatVersion::from_major(major))
+                .map(str::to_string)
+        };
+        assert_eq!(label(4).as_deref(), Some("1.13 to 1.14.4"));
+        assert_eq!(label(5).as_deref(), Some("1.15 to 1.16.1"));
+        assert_eq!(label(6).as_deref(), Some("1.16.2 to 1.16.5"));
+        assert_eq!(label(7).as_deref(), Some("1.17 to 1.17.1"));
+        assert_eq!(label(8).as_deref(), Some("1.18 to 1.18.1"));
+        assert_eq!(label(9).as_deref(), Some("1.18.2"));
+        assert_eq!(label(10).as_deref(), Some("1.19 to 1.19.3"));
+        assert_eq!(label(12).as_deref(), Some("1.19.4"));
+        assert_eq!(label(1), None, "format 1 is not a data pack format");
+    }
+
+    #[test]
+    fn a_range_with_an_unknown_end_shows_no_narrower_label() {
+        let table = FormatTable::embedded();
+        assert_eq!(
+            table.game_label(
+                PackKind::Resource,
+                &FormatRange {
+                    min: Some(FormatVersion::from_major(34)),
+                    max: Some(FormatVersion::from_major(99)),
+                },
+            ),
+            None,
+            "an unknown end must not fall back to the 34 label"
+        );
+        assert_eq!(
+            table.game_label(
+                PackKind::Resource,
+                &FormatRange {
+                    min: Some(FormatVersion::from_major(50)),
+                    max: Some(FormatVersion::from_major(10)),
+                },
+            ),
+            None,
+            "a reversed range is unknown"
+        );
+    }
+
+    #[test]
+    fn open_ranges_name_the_open_end() {
+        let table = FormatTable::embedded();
+        assert_eq!(
+            table
+                .game_label(
+                    PackKind::Resource,
+                    &FormatRange {
+                        min: Some(FormatVersion::from_major(34)),
+                        max: None,
+                    },
+                )
+                .as_deref(),
+            Some("1.21 and newer")
+        );
+        assert_eq!(
+            table
+                .game_label(
+                    PackKind::Data,
+                    &FormatRange {
+                        min: None,
+                        max: Some(FormatVersion::from_major(48)),
+                    },
+                )
+                .as_deref(),
+            Some("up to 1.21.1")
+        );
+    }
+
+    #[test]
+    fn a_both_pack_is_labelled_for_each_half() {
+        let table = FormatTable::embedded();
+        let range = |min, max| FormatRange {
+            min: Some(FormatVersion::from_major(min)),
+            max: Some(FormatVersion::from_major(max)),
+        };
+        assert_eq!(
+            table.game_label(PackKind::Both, &range(48, 57)).as_deref(),
+            Some("Resource unknown, data 1.21 to 1.21.3"),
+            "the data half must use the data table"
+        );
+        assert_eq!(
+            table.game_label(PackKind::Both, &range(34, 42)).as_deref(),
+            Some("Resource 1.21 to 1.21.3, data unknown"),
+            "the resource half must not be reused for the data half"
+        );
+        assert_eq!(
+            table.game_label(PackKind::Both, &range(15, 15)).as_deref(),
+            Some("1.20 to 1.20.1"),
+            "both halves agreeing shows one label"
+        );
+        assert_eq!(table.game_label(PackKind::Both, &range(99, 99)), None);
     }
 }

@@ -72,19 +72,21 @@ fn parse_format(value: &Value) -> Option<FormatVersion> {
 
 fn parse_format_string(text: &str) -> Option<FormatVersion> {
     let text = text.trim();
-    let (major, minor) = text.split_once('.')?;
-    Some(FormatVersion::new(major.parse().ok()?, minor.parse().ok()?))
+    match text.split_once('.') {
+        Some((major, minor)) => Some(FormatVersion::new(major.parse().ok()?, minor.parse().ok()?)),
+        None => Some(FormatVersion::from_major(text.parse().ok()?)),
+    }
 }
 
 fn parse_supported(value: &Value) -> Option<FormatRange> {
     match value {
         Value::Array(items) if items.len() == 2 => Some(FormatRange {
-            min: parse_format(&items[0])?,
-            max: parse_format(&items[1])?,
+            min: Some(parse_format(&items[0])?),
+            max: Some(parse_format(&items[1])?),
         }),
         Value::Object(map) => Some(FormatRange {
-            min: map.get("min_inclusive").and_then(parse_format)?,
-            max: map.get("max_inclusive").and_then(parse_format)?,
+            min: Some(map.get("min_inclusive").and_then(parse_format)?),
+            max: Some(map.get("max_inclusive").and_then(parse_format)?),
         }),
         _ => None,
     }
@@ -201,13 +203,24 @@ mod tests {
     }
 
     #[test]
+    fn plain_string_formats_parse_as_a_major_number() {
+        let meta = parse(r#"{"pack":{"pack_format":"34","description":"S"}}"#);
+        assert_eq!(meta.pack_format, Some(FormatVersion::from_major(34)));
+        assert_eq!(meta.effective_range().unwrap().label(), "34");
+
+        let meta = parse(r#"{"pack":{"min_format":"48","description":"S"}}"#);
+        assert_eq!(meta.min_format, Some(FormatVersion::from_major(48)));
+        assert_eq!(meta.effective_range().unwrap().label(), "48 and up");
+    }
+
+    #[test]
     fn supported_formats_object_is_inclusive() {
         let meta = parse(
             r#"{"pack":{"pack_format":34,"supported_formats":{"min_inclusive":34,"max_inclusive":69}}}"#,
         );
         let range = meta.supported_formats.unwrap();
-        assert_eq!(range.min, FormatVersion::from_major(34));
-        assert_eq!(range.max, FormatVersion::from_major(69));
+        assert_eq!(range.min, Some(FormatVersion::from_major(34)));
+        assert_eq!(range.max, Some(FormatVersion::from_major(69)));
     }
 
     #[test]
