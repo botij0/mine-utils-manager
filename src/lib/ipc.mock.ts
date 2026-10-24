@@ -67,7 +67,7 @@ function makePack(
   const location = name.endsWith('.zip') ? 'zip' : 'directory';
   return {
     id: `/home/demo/.minecraft/resourcepacks/${name}`,
-    name,
+    name: stripZip(name),
     path: `/home/demo/.minecraft/resourcepacks/${name}`,
     location,
     kind,
@@ -287,6 +287,17 @@ export const mockClient: IpcClient = {
       );
     }
     const name = stripZip(base);
+    if (lower.includes('duplicate')) {
+      if (choice === 'skip') return { status: 'skipped' };
+      if (choice !== 'replace') {
+        return {
+          status: 'duplicate',
+          name: base,
+          sha256: 'mock-duplicate',
+          existing: mockPacks[0]?.path ?? path,
+        };
+      }
+    }
     const existing = mockPacks.find((pack) => stripZip(pack.name) === name && !pack.error);
     if (existing) {
       if (choice === 'skip') return { status: 'skipped' };
@@ -304,14 +315,18 @@ export const mockClient: IpcClient = {
       if (choice !== 'replace') return { status: 'collision', name: base };
     }
     const formatRange = range(34, 42);
-    const pack = makePack(
-      base,
-      'resource',
-      formatRange,
-      '1.21 to 1.21.3',
-      'Imported pack from the browser mock.',
-      iconDataUrl(name.slice(0, 2).toUpperCase() || 'PK', '#4a5f8a'),
-    );
+    const pack: Pack = {
+      ...makePack(
+        name,
+        'resource',
+        formatRange,
+        '1.21 to 1.21.3',
+        'Imported pack from the browser mock.',
+        iconDataUrl(name.slice(0, 2).toUpperCase() || 'PK', '#4a5f8a'),
+      ),
+      path: `/home/demo/.minecraft/resourcepacks/${base}`,
+      location: 'zip',
+    };
     mockPacks = [...mockPacks, pack];
     return { status: 'imported', pack };
   },
