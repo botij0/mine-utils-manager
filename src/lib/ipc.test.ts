@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { ipc, isTauriRuntime, toAppError } from './ipc';
+
+beforeEach(() => {
+  window.localStorage.clear();
+});
 
 describe('transport switch', () => {
   it('serves the mock dirs when the tauri runtime is absent', async () => {
@@ -11,6 +15,7 @@ describe('transport switch', () => {
       '/home/demo/.local/share/PrismLauncher/instances/1.21/.minecraft',
     ]);
     expect(dirs[0].source).toBe('std');
+    expect(dirs[0].stored).toBe(false);
   });
 
   it('detects the tauri runtime from window internals', () => {
@@ -18,6 +23,30 @@ describe('transport switch', () => {
     const withoutTauri = {} as Window;
     expect(isTauriRuntime(withTauri)).toBe(true);
     expect(isTauriRuntime(withoutTauri)).toBe(false);
+  });
+});
+
+describe('mock client behavior', () => {
+  it('rejects an absolute path without a game-dir marker', async () => {
+    await expect(ipc.addGameDir('/tmp/not-a-game-dir')).rejects.toMatchObject({
+      code: 'invalid_game_dir',
+    });
+  });
+
+  it('keeps added dirs when the theme changes', async () => {
+    const added = await ipc.addGameDir('/tmp/saves/one');
+    expect(added.config.game_dirs.map((dir) => dir.path)).toContain(
+      '/tmp/saves/one',
+    );
+
+    const config = await ipc.setTheme('dark');
+
+    expect(config.theme).toBe('dark');
+    expect(config.game_dirs.map((dir) => dir.path)).toContain('/tmp/saves/one');
+  });
+
+  it('returns a null startup warning', async () => {
+    expect(await ipc.getStartupWarning()).toBeNull();
   });
 });
 

@@ -28,6 +28,7 @@ pub struct GameDirEntry {
     pub path: PathBuf,
     pub source: DiscoverySource,
     pub present: bool,
+    pub stored: bool,
 }
 
 const MARKERS: [&str; 3] = ["versions", "saves", "resourcepacks"];
@@ -111,6 +112,7 @@ pub fn entry_for(dir: &GameDir) -> GameDirEntry {
         path: dir.path.clone(),
         source: dir.source,
         present: is_game_dir(&dir.path),
+        stored: false,
     }
 }
 

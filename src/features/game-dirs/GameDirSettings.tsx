@@ -32,7 +32,9 @@ export default function GameDirSettings({
     const path = draft.trim();
     if (!path) return;
     try {
-      setEntries(await client.addGameDir(path));
+      const state = await client.addGameDir(path);
+      setEntries(state.entries);
+      onConfigChanged(state.config);
       setDraft('');
       setError(null);
     } catch (err) {
@@ -42,7 +44,9 @@ export default function GameDirSettings({
 
   async function handleRemove(path: string) {
     try {
-      setEntries(await client.removeGameDir(path));
+      const state = await client.removeGameDir(path);
+      setEntries(state.entries);
+      onConfigChanged(state.config);
       setError(null);
     } catch (err) {
       setError(toAppError(err));
@@ -51,7 +55,9 @@ export default function GameDirSettings({
 
   async function handleSelect(path: string) {
     try {
-      onConfigChanged(await client.setActiveGameDir(path));
+      const state = await client.setActiveGameDir(path);
+      setEntries(state.entries);
+      onConfigChanged(state.config);
       setError(null);
     } catch (err) {
       setError(toAppError(err));

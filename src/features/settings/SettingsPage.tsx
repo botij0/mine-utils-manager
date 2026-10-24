@@ -26,7 +26,7 @@ export default function SettingsPage({
 
   async function handleTheme(theme: Theme) {
     try {
-      onConfigChanged(await client.saveConfig({ ...config, theme }));
+      onConfigChanged(await client.setTheme(theme));
       setError(null);
     } catch (err) {
       setError(toAppError(err));

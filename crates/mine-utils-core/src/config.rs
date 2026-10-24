@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
-use crate::game_dir::GameDir;
+use crate::game_dir::{GameDir, GameDirEntry};
 
 pub const CONFIG_SCHEMA: u32 = 1;
 
@@ -17,6 +17,7 @@ pub enum Theme {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BackupsConfig {
     pub enabled: bool,
     pub keep: u32,
@@ -33,6 +34,7 @@ impl Default for BackupsConfig {
 
 /// The whole persisted state. This is the config file, one to one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub schema: u32,
     pub game_dirs: Vec<GameDir>,
@@ -73,6 +75,11 @@ impl Config {
         if self.active_game_dir.as_deref() == Some(path) {
             self.active_game_dir = None;
         }
+        if let Some(last_world) = self.last_world.as_ref() {
+            if last_world.as_path() == path || last_world.starts_with(path) {
+                self.last_world = None;
+            }
+        }
         self.game_dirs.len() != before
     }
 
@@ -84,6 +91,77 @@ impl Config {
 
     fn contains(&self, path: &Path) -> bool {
         self.game_dirs.iter().any(|dir| dir.path == path)
+    }
+}
+
+/// Owns the config file and the live config. Every mutation writes the new
+/// config to disk before it becomes the in-memory value, so a failed write
+/// cannot leave memory ahead of disk.
+pub struct ConfigStore {
+    path: PathBuf,
+    config: Config,
+}
+
+impl ConfigStore {
+    pub fn new(path: PathBuf, config: Config) -> Self {
+        ConfigStore { path, config }
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    pub fn add_game_dir(&mut self, dir: GameDir) -> Result<bool, AppError> {
+        let mut next = self.config.clone();
+        if !next.add_game_dir(dir) {
+            return Ok(false);
+        }
+        self.commit(next)?;
+        Ok(true)
+    }
+
+    pub fn remove_game_dir(&mut self, path: &Path) -> Result<(), AppError> {
+        let mut next = self.config.clone();
+        if !next.remove_game_dir(path) {
+            return Err(AppError::UnknownGameDir {
+                path: path.to_path_buf(),
+            });
+        }
+        self.commit(next)
+    }
+
+    pub fn set_active_game_dir(
+        &mut self,
+        path: &Path,
+        entries: &[GameDirEntry],
+    ) -> Result<(), AppError> {
+        let entry = entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .ok_or_else(|| AppError::UnknownGameDir {
+                path: path.to_path_buf(),
+            })?;
+        if !entry.present {
+            return Err(AppError::InvalidGameDir {
+                path: path.to_path_buf(),
+                reason: "expected one of versions, saves, or resourcepacks".to_string(),
+            });
+        }
+        let mut next = self.config.clone();
+        next.set_active_game_dir(path);
+        self.commit(next)
+    }
+
+    pub fn set_theme(&mut self, theme: Theme) -> Result<(), AppError> {
+        let mut next = self.config.clone();
+        next.theme = theme;
+        self.commit(next)
+    }
+
+    fn commit(&mut self, next: Config) -> Result<(), AppError> {
+        save_config(&self.path, &next)?;
+        self.config = next;
+        Ok(())
     }
 }
 
@@ -224,5 +302,106 @@ mod tests {
         assert!(config.remove_game_dir(&dir.path));
         assert!(!config.remove_game_dir(&dir.path));
         assert_eq!(config.active_game_dir, None);
+    }
+
+    #[test]
+    fn set_theme_keeps_game_dirs() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        let game = root.path().join("game");
+        let mut config = Config::default();
+        config.add_game_dir(GameDir {
+            path: game.clone(),
+            source: DiscoverySource::Manual,
+        });
+        let mut store = ConfigStore::new(path.clone(), config);
+
+        store.set_theme(Theme::Dark).unwrap();
+
+        let loaded = load_config(&path).unwrap();
+        assert_eq!(loaded.theme, Theme::Dark);
+        assert_eq!(loaded.game_dirs.len(), 1);
+        assert_eq!(loaded.game_dirs[0].path, game);
+    }
+
+    #[test]
+    fn failed_persist_keeps_memory() {
+        let root = tempfile::tempdir().unwrap();
+        let blocker = root.path().join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        let path = blocker.join("config.json");
+        let mut store = ConfigStore::new(path, Config::default());
+
+        assert!(store.set_theme(Theme::Dark).is_err());
+        assert_eq!(store.config().theme, Theme::System);
+        assert!(store.config().game_dirs.is_empty());
+    }
+
+    #[test]
+    fn remove_missing_stored_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        let missing = root.path().join("missing");
+        let mut config = Config::default();
+        config.add_game_dir(GameDir {
+            path: missing.clone(),
+            source: DiscoverySource::Manual,
+        });
+        let mut store = ConfigStore::new(path, config);
+
+        store.remove_game_dir(&missing).unwrap();
+
+        assert!(store.config().game_dirs.is_empty());
+    }
+
+    #[test]
+    fn remove_active_clears_active_and_last_world() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        let game = root.path().join("game");
+        let world = game.join("saves").join("world");
+        let mut config = Config::default();
+        config.add_game_dir(GameDir {
+            path: game.clone(),
+            source: DiscoverySource::Manual,
+        });
+        config.set_active_game_dir(&game);
+        config.last_world = Some(world);
+        let mut store = ConfigStore::new(path, config);
+
+        store.remove_game_dir(&game).unwrap();
+
+        assert_eq!(store.config().active_game_dir, None);
+        assert_eq!(store.config().last_world, None);
+    }
+
+    #[test]
+    fn set_active_rejects_missing_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        let game = root.path().join("game");
+        let entries = vec![GameDirEntry {
+            path: game.clone(),
+            source: DiscoverySource::Manual,
+            present: false,
+            stored: true,
+        }];
+        let mut store = ConfigStore::new(path, Config::default());
+
+        let err = store.set_active_game_dir(&game, &entries).unwrap_err();
+
+        assert_eq!(err.code(), "invalid_game_dir");
+        assert_eq!(store.config().active_game_dir, None);
+    }
+
+    #[test]
+    fn missing_fields_use_defaults() {
+        let config: Config = serde_json::from_str(r#"{"schema":1,"theme":"dark"}"#).unwrap();
+
+        assert_eq!(config.theme, Theme::Dark);
+        assert!(config.game_dirs.is_empty());
+        assert_eq!(config.active_game_dir, None);
+        assert_eq!(config.last_world, None);
+        assert_eq!(config.backups, BackupsConfig::default());
     }
 }

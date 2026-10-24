@@ -1,15 +1,16 @@
 import { invoke } from '@tauri-apps/api/core';
 import { mockClient } from './ipc.mock';
 import { IpcError } from './types';
-import type { Config, GameDirEntry } from './types';
+import type { Config, GameDirEntry, GameDirState, Theme } from './types';
 
 export interface IpcClient {
   listGameDirs(): Promise<GameDirEntry[]>;
-  addGameDir(path: string): Promise<GameDirEntry[]>;
-  removeGameDir(path: string): Promise<GameDirEntry[]>;
-  setActiveGameDir(path: string): Promise<Config>;
+  addGameDir(path: string): Promise<GameDirState>;
+  removeGameDir(path: string): Promise<GameDirState>;
+  setActiveGameDir(path: string): Promise<GameDirState>;
   getConfig(): Promise<Config>;
-  saveConfig(config: Config): Promise<Config>;
+  setTheme(theme: Theme): Promise<Config>;
+  getStartupWarning(): Promise<string | null>;
 }
 
 export function isTauriRuntime(win: Window = window): boolean {
@@ -37,11 +38,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 
 const tauriClient: IpcClient = {
   listGameDirs: () => call<GameDirEntry[]>('list_game_dirs'),
-  addGameDir: (path) => call<GameDirEntry[]>('add_game_dir', { path }),
-  removeGameDir: (path) => call<GameDirEntry[]>('remove_game_dir', { path }),
-  setActiveGameDir: (path) => call<Config>('set_active_game_dir', { path }),
+  addGameDir: (path) => call<GameDirState>('add_game_dir', { path }),
+  removeGameDir: (path) => call<GameDirState>('remove_game_dir', { path }),
+  setActiveGameDir: (path) => call<GameDirState>('set_active_game_dir', { path }),
   getConfig: () => call<Config>('get_config'),
-  saveConfig: (config) => call<Config>('save_config', { config }),
+  setTheme: (theme) => call<Config>('set_theme', { theme }),
+  getStartupWarning: () => call<string | null>('get_startup_warning'),
 };
 
 /**
@@ -54,7 +56,8 @@ export const ipc: IpcClient = {
   removeGameDir: (path) => pick().removeGameDir(path),
   setActiveGameDir: (path) => pick().setActiveGameDir(path),
   getConfig: () => pick().getConfig(),
-  saveConfig: (config) => pick().saveConfig(config),
+  setTheme: (theme) => pick().setTheme(theme),
+  getStartupWarning: () => pick().getStartupWarning(),
 };
 
 function pick(): IpcClient {

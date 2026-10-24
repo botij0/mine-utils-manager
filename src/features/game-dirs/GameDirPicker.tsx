@@ -38,7 +38,7 @@ export default function GameDirPicker({
               </span>
             </div>
             <div className="row-actions">
-              {isActive ? null : (
+              {isActive || !entry.present ? null : (
                 <button
                   type="button"
                   className="button"
@@ -47,7 +47,7 @@ export default function GameDirPicker({
                   Use
                 </button>
               )}
-              {onRemove && entry.source === 'manual' ? (
+              {onRemove && entry.stored ? (
                 <button
                   type="button"
                   className="button"

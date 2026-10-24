@@ -14,6 +14,12 @@ export interface GameDirEntry {
   path: string;
   source: DiscoverySource;
   present: boolean;
+  stored: boolean;
+}
+
+export interface GameDirState {
+  config: Config;
+  entries: GameDirEntry[];
 }
 
 export type Theme = 'system' | 'light' | 'dark';

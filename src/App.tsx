@@ -44,6 +44,7 @@ export default function App({ client = ipc }: AppProps) {
   const [page, setPage] = useState<PageId>(pageFromHash);
   const [config, setConfig] = useState<Config>(defaultConfig);
   const [error, setError] = useState<AppError | null>(null);
+  const [startupWarning, setStartupWarning] = useState<string | null>(null);
 
   useEffect(() => {
     window.location.hash = page;
@@ -54,6 +55,13 @@ export default function App({ client = ipc }: AppProps) {
       .getConfig()
       .then(setConfig)
       .catch((err: unknown) => setError(toAppError(err)));
+  }, [client]);
+
+  useEffect(() => {
+    client
+      .getStartupWarning()
+      .then(setStartupWarning)
+      .catch(() => setStartupWarning(null));
   }, [client]);
 
   useEffect(() => {
@@ -87,6 +95,11 @@ export default function App({ client = ipc }: AppProps) {
         </ul>
       </nav>
       <div className="main">
+        {startupWarning ? (
+          <div className="banner" role="status">
+            {startupWarning}
+          </div>
+        ) : null}
         <header className="header">
           <h1>{PAGES.find((item) => item.id === page)?.label}</h1>
           <button

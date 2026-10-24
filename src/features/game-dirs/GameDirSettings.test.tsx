@@ -1,106 +1,110 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
-import type { IpcClient } from '../../lib/ipc';
-import type { Config, GameDirEntry } from '../../lib/types';
-import { defaultConfig, IpcError } from '../../lib/types';
+import { describe, expect, it, vi } from 'vitest';
+import type { Config } from '../../lib/types';
 import GameDirSettings from './GameDirSettings';
+import { gameDir, makeFakeClient } from '../../test/fake-ipc';
 
-function fakeClient(entries: GameDirEntry[]): IpcClient {
-  let stored = [...entries];
-  const config: Config = defaultConfig();
-  return {
-    async listGameDirs() {
-      return stored;
-    },
-    async addGameDir(path: string) {
-      if (!path.startsWith('/')) {
-        throw new IpcError(
-          'invalid_game_dir',
-          `invalid game dir ${path}: path must be absolute`,
-        );
-      }
-      stored = [...stored, { path, source: 'manual', present: true }];
-      return stored;
-    },
-    async removeGameDir(path: string) {
-      stored = stored.filter((entry) => entry.path !== path);
-      return stored;
-    },
-    async setActiveGameDir(path: string) {
-      return { ...config, active_game_dir: path };
-    },
-    async getConfig() {
-      return config;
-    },
-    async saveConfig(next: Config) {
-      return next;
-    },
-  };
-}
-
-const DETECTED: GameDirEntry = {
-  path: '/home/demo/.minecraft',
-  source: 'std',
-  present: true,
-};
+const DETECTED = gameDir('/home/demo/.minecraft', true, false);
 
 describe('GameDirSettings', () => {
-  it('adds a dir to the list', async () => {
+  it('adds a dir to the list and reports the config', async () => {
     const user = userEvent.setup();
+    const client = makeFakeClient([DETECTED]);
+    const onConfigChanged = vi.fn();
     render(
       <GameDirSettings
-        client={fakeClient([DETECTED])}
+        client={client}
         activePath={null}
-        onConfigChanged={() => {}}
+        onConfigChanged={onConfigChanged}
       />,
     );
 
-    await user.type(screen.getByLabelText('Game dir path'), '/tmp/fixture-a');
+    await user.type(screen.getByLabelText('Game dir path'), '/tmp/saves/one');
     await user.click(screen.getByRole('button', { name: 'Add' }));
 
-    expect(await screen.findByText('/tmp/fixture-a')).toBeInTheDocument();
+    expect(await screen.findByText('/tmp/saves/one')).toBeInTheDocument();
+    expect(onConfigChanged).toHaveBeenCalled();
+    const last = onConfigChanged.mock.calls.at(-1)?.[0] as Config;
+    expect(last.game_dirs.map((dir) => dir.path)).toContain('/tmp/saves/one');
   });
 
   it('removes an added dir from the list', async () => {
     const user = userEvent.setup();
+    const client = makeFakeClient([
+      DETECTED,
+      gameDir('/tmp/saves/two', true, true),
+    ]);
+    const onConfigChanged = vi.fn();
     render(
       <GameDirSettings
-        client={fakeClient([
-          DETECTED,
-          { path: '/tmp/fixture-b', source: 'manual', present: true },
-        ])}
+        client={client}
         activePath={null}
-        onConfigChanged={() => {}}
+        onConfigChanged={onConfigChanged}
       />,
     );
 
-    await screen.findByText('/tmp/fixture-b');
+    await screen.findByText('/tmp/saves/two');
     await user.click(screen.getByRole('button', { name: 'Remove' }));
 
     await waitFor(() =>
-      expect(screen.queryByText('/tmp/fixture-b')).not.toBeInTheDocument(),
+      expect(screen.queryByText('/tmp/saves/two')).not.toBeInTheDocument(),
     );
     expect(screen.getByText('/home/demo/.minecraft')).toBeInTheDocument();
+    const last = onConfigChanged.mock.calls.at(-1)?.[0] as Config;
+    expect(last.game_dirs.map((dir) => dir.path)).not.toContain(
+      '/tmp/saves/two',
+    );
   });
 
-  it('shows an inline error and keeps the list when the path is invalid', async () => {
+  it('removes a stored dir that is missing on disk', async () => {
     const user = userEvent.setup();
+    const client = makeFakeClient([
+      DETECTED,
+      gameDir('/tmp/saves/missing', false, true),
+    ]);
     render(
       <GameDirSettings
-        client={fakeClient([DETECTED])}
+        client={client}
         activePath={null}
         onConfigChanged={() => {}}
       />,
     );
 
-    await user.type(screen.getByLabelText('Game dir path'), 'relative/path');
+    const missing = await screen.findByText('/tmp/saves/missing');
+    const row = missing.closest('li');
+    expect(row).not.toBeNull();
+    expect(within(row!).queryByRole('button', { name: 'Use' })).toBeNull();
+    await user.click(within(row!).getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() =>
+      expect(screen.queryByText('/tmp/saves/missing')).not.toBeInTheDocument(),
+    );
+  });
+
+  it('shows an inline error and keeps the list when the path is not a game dir', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient([DETECTED]);
+    const onConfigChanged = vi.fn();
+    render(
+      <GameDirSettings
+        client={client}
+        activePath={null}
+        onConfigChanged={onConfigChanged}
+      />,
+    );
+
+    await user.type(
+      screen.getByLabelText('Game dir path'),
+      '/tmp/not-a-game-dir',
+    );
     await user.click(screen.getByRole('button', { name: 'Add' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'invalid game dir relative/path: path must be absolute',
+      'invalid game dir /tmp/not-a-game-dir: expected one of versions, saves, or resourcepacks',
     );
     expect(screen.getByText('/home/demo/.minecraft')).toBeInTheDocument();
-    expect(screen.queryByText('relative/path')).not.toBeInTheDocument();
+    expect(screen.queryByText('/tmp/not-a-game-dir')).not.toBeInTheDocument();
+    expect(onConfigChanged).not.toHaveBeenCalled();
   });
 });
