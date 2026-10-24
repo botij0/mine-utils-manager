@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import type { ImportChoice } from '../../lib/types';
 
 export type ImportPrompt =
@@ -9,35 +8,48 @@ interface ImportSheetProps {
   open: boolean;
   prompt: ImportPrompt | null;
   busy: boolean;
+  /** Import and Replace errors render here, inside the sheet. */
+  error: string | null;
+  /** Extra dropped paths, reported when a drop carried more than one. */
+  extraPaths: string[];
+  path: string;
+  onPathChange: (path: string) => void;
+  /** False when no game dir is active, so nothing can be imported. */
+  canImport: boolean;
   onClose: () => void;
   onImportPath: (path: string) => Promise<void>;
   onChoose: (choice: ImportChoice) => Promise<void>;
-  onBrowse: () => Promise<string | null>;
+  onBrowse: (directory: boolean) => Promise<string | null>;
 }
 
 export default function ImportSheet({
   open,
   prompt,
   busy,
+  error,
+  extraPaths,
+  path,
+  onPathChange,
+  canImport,
   onClose,
   onImportPath,
   onChoose,
   onBrowse,
 }: ImportSheetProps) {
-  const [path, setPath] = useState('');
-  const [browseError, setBrowseError] = useState<string | null>(null);
-
   if (!open) return null;
 
-  const browse = async () => {
-    setBrowseError(null);
-    const picked = await onBrowse();
+  const browse = async (directory: boolean) => {
+    const picked = await onBrowse(directory);
     if (picked) {
-      setPath(picked);
-    } else {
-      setBrowseError('The file picker is only available in the desktop app.');
+      onPathChange(picked);
     }
   };
+
+  const errorBlock = error ? (
+    <p className="error" role="alert">
+      {error}
+    </p>
+  ) : null;
 
   if (prompt) {
     const duplicate = prompt.status === 'duplicate';
@@ -57,14 +69,16 @@ export default function ImportSheet({
               : 'is already in the resourcepacks folder with different content.'}
           </p>
           <p className="sheet-note">
-            Skip leaves the installed pack alone. Replace moves the old pack to the trash and
-            copies this one in.
+            Skip leaves the installed pack alone. Replace moves one old pack to the trash and
+            copies this one in. When a duplicate and a name clash both exist, each Replace
+            removes one pack.
           </p>
+          {errorBlock}
           <div className="sheet-actions">
             <button
               type="button"
               className="button button-primary"
-              disabled={busy}
+              disabled={busy || !canImport}
               onClick={() => {
                 void onChoose('replace');
               }}
@@ -103,7 +117,7 @@ export default function ImportSheet({
           className="sheet-form"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!path.trim()) return;
+            if (!path.trim() || !canImport) return;
             void onImportPath(path.trim());
           }}
         >
@@ -112,30 +126,34 @@ export default function ImportSheet({
             id="pack-path"
             value={path}
             placeholder="/home/you/Downloads/pack.zip"
-            onChange={(event) => setPath(event.target.value)}
+            onChange={(event) => onPathChange(event.target.value)}
             autoFocus
           />
           <div className="sheet-actions">
             <button
               type="submit"
               className="button button-primary"
-              disabled={busy || path.trim() === ''}
+              disabled={busy || !canImport || path.trim() === ''}
             >
               Import
             </button>
-            <button type="button" className="button" onClick={() => void browse()}>
-              Browse
+            <button type="button" className="button" disabled={busy} onClick={() => void browse(false)}>
+              Browse file
+            </button>
+            <button type="button" className="button" disabled={busy} onClick={() => void browse(true)}>
+              Browse folder
             </button>
             <button type="button" className="button" onClick={onClose}>
               Close
             </button>
           </div>
         </form>
-        {browseError ? (
+        {extraPaths.length > 0 ? (
           <p className="sheet-note" role="status">
-            {browseError}
+            Also dropped: {extraPaths.join(', ')}. Import them one at a time.
           </p>
         ) : null}
+        {errorBlock}
       </section>
     </div>
   );

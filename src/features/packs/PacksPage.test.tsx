@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { PackClient } from '../../lib/ipc';
@@ -10,6 +10,7 @@ import type {
   Pack,
   PackListing,
 } from '../../lib/types';
+import { IpcError } from '../../lib/types';
 import PacksPage from './PacksPage';
 
 function version(major: number, minor = 0): FormatVersion {
@@ -73,16 +74,19 @@ const BROKEN = pack('Broken', {
 interface FakeClient extends PackClient {
   current: Pack[];
   choices: ImportChoice[];
+  imports: string[];
 }
 
 function makeFakeClient(initial: Pack[]): FakeClient {
   let current = [...initial];
   const choices: ImportChoice[] = [];
+  const imports: string[] = [];
   const client: FakeClient = {
     get current() {
       return current;
     },
     choices,
+    imports,
     async listResourcePacks(): Promise<PackListing> {
       return {
         packs: [...current],
@@ -95,6 +99,7 @@ function makeFakeClient(initial: Pack[]): FakeClient {
       path: string,
       choice: ImportChoice = 'default',
     ): Promise<ImportOutcome> {
+      imports.push(path);
       choices.push(choice);
       const base = path.split('/').filter(Boolean).at(-1) ?? path;
       if (base.toLowerCase().includes('duplicate')) {
@@ -109,7 +114,10 @@ function makeFakeClient(initial: Pack[]): FakeClient {
         }
       }
       if (base.toLowerCase().includes('broken')) {
-        throw new Error('invalid Zip archive');
+        throw new IpcError(
+          'pack_broken_archive',
+          `${base} is not a readable pack: invalid Zip archive`,
+        );
       }
       const name = base.replace(/\.zip$/i, '');
       const imported = pack(name);
@@ -251,5 +259,94 @@ describe('PacksPage', () => {
     );
     expect(screen.getByText('Vanilla')).toBeInTheDocument();
     expect(client.current).toHaveLength(1);
+  });
+
+  it('shows an import failure inside the import sheet', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient([VANILLA]);
+    renderPage(client);
+
+    await screen.findByText('Vanilla');
+    await user.click(screen.getByRole('button', { name: 'Import pack' }));
+    const dialog = screen.getByRole('dialog', { name: 'Import pack' });
+    await user.type(
+      within(dialog).getByLabelText('Pack path'),
+      '/tmp/packs/broken.zip',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Import' }));
+
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'broken.zip is not a readable pack: invalid Zip archive',
+    );
+    expect(screen.getByRole('dialog', { name: 'Import pack' })).toBeInTheDocument();
+  });
+
+  it('opens the sheet on the first dropped path and reports the rest', async () => {
+    const client = makeFakeClient([VANILLA]);
+    const { container } = renderPage(client);
+    await screen.findByText('Vanilla');
+
+    const body = container.querySelector('.packs-body');
+    fireEvent.drop(body as Element, {
+      dataTransfer: {
+        files: [
+          { path: '/drop/One.zip' },
+          { path: '/drop/Two.zip' },
+          { path: '/drop/Three.zip' },
+        ],
+      },
+    });
+
+    const dialog = await screen.findByRole('dialog', { name: 'Import pack' });
+    expect(within(dialog).getByLabelText('Pack path')).toHaveValue('/drop/One.zip');
+    expect(within(dialog).getByRole('status')).toHaveTextContent(
+      'Also dropped: /drop/Two.zip, /drop/Three.zip. Import them one at a time.',
+    );
+    expect(client.imports).toEqual([]);
+  });
+
+  it('imports a folder picked with the folder picker', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient([VANILLA]);
+    const picked: boolean[] = [];
+    const pickPath = async (directory: boolean) => {
+      picked.push(directory);
+      return directory ? '/drop/PackFolder' : '/drop/Pack.zip';
+    };
+    render(<PacksPage client={client} pickPath={pickPath} />);
+
+    await screen.findByText('Vanilla');
+    await user.click(screen.getByRole('button', { name: 'Import pack' }));
+    const dialog = screen.getByRole('dialog', { name: 'Import pack' });
+    await user.click(within(dialog).getByRole('button', { name: 'Browse file' }));
+    expect(within(dialog).getByLabelText('Pack path')).toHaveValue('/drop/Pack.zip');
+    await user.click(within(dialog).getByRole('button', { name: 'Browse folder' }));
+    expect(within(dialog).getByLabelText('Pack path')).toHaveValue('/drop/PackFolder');
+    await user.click(within(dialog).getByRole('button', { name: 'Import' }));
+
+    expect(await screen.findByRole('heading', { name: 'PackFolder' })).toBeInTheDocument();
+    expect(picked).toEqual([false, true]);
+    expect(client.imports).toEqual(['/drop/PackFolder']);
+  });
+
+  it('disables import when no game dir is active', async () => {
+    const client: PackClient = {
+      async listResourcePacks() {
+        throw new IpcError(
+          'no_active_game_dir',
+          'no active game dir; pick one in Settings first',
+        );
+      },
+      async importResourcePack() {
+        throw new IpcError('no_active_game_dir', 'no active game dir');
+      },
+      async deleteResourcePack() {
+        throw new IpcError('pack_not_found', 'no packs');
+      },
+    };
+    render(<PacksPage client={client} />);
+
+    expect(await screen.findByRole('button', { name: 'Import pack' })).toBeDisabled();
   });
 });

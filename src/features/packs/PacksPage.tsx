@@ -16,9 +16,19 @@ import { usePacks } from './usePacks';
 
 interface PacksPageProps {
   client?: PackClient;
+  /** File and folder picker. Injected in tests. */
+  pickPath?: (directory: boolean) => Promise<string | null>;
 }
 
-export default function PacksPage({ client = ipc }: PacksPageProps) {
+/** Tauri adds a real path to dropped files; a browser drop has none. */
+function droppedPaths(transfer: DataTransfer | null): string[] {
+  if (!transfer) return [];
+  return Array.from(transfer.files)
+    .map((file) => (file as File & { path?: string }).path)
+    .filter((path): path is string => typeof path === 'string' && path !== '');
+}
+
+export default function PacksPage({ client = ipc, pickPath = pickPackPath }: PacksPageProps) {
   const { packs, stats, loading, busy, error, importPack, deletePack } = usePacks(client);
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<PackKind | 'all'>('all');
@@ -26,7 +36,10 @@ export default function PacksPage({ client = ipc }: PacksPageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [prompt, setPrompt] = useState<ImportPrompt | null>(null);
+  const [path, setPath] = useState('');
+  const [extraPaths, setExtraPaths] = useState<string[]>([]);
   const [lastPath, setLastPath] = useState<string | null>(null);
+  const [sheetError, setSheetError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -54,30 +67,30 @@ export default function PacksPage({ client = ipc }: PacksPageProps) {
   const closeSheet = () => {
     setSheetOpen(false);
     setPrompt(null);
+    setPath('');
+    setExtraPaths([]);
     setLastPath(null);
+    setSheetError(null);
   };
 
   const handleImportPath = useCallback(
-    async (path: string) => {
-      setActionError(null);
-      setLastPath(path);
+    async (source: string) => {
+      setSheetError(null);
+      setLastPath(source);
       try {
-        const outcome = await importPack(path);
+        const outcome = await importPack(source);
         if (outcome.status === 'imported') {
           setSelectedId(outcome.pack.id);
-          setSheetOpen(false);
-          setPrompt(null);
-          setLastPath(null);
+          closeSheet();
         } else if (outcome.status === 'duplicate' || outcome.status === 'collision') {
           setPrompt(outcome);
           setSheetOpen(true);
         } else {
-          setSheetOpen(false);
-          setPrompt(null);
-          setLastPath(null);
+          closeSheet();
         }
       } catch (err) {
-        setActionError(toAppError(err).message);
+        // Import failures stay inside the sheet, over its own backdrop.
+        setSheetError(toAppError(err).message);
         setSheetOpen(true);
       }
     },
@@ -86,7 +99,7 @@ export default function PacksPage({ client = ipc }: PacksPageProps) {
 
   const handleChoose = async (choice: ImportChoice) => {
     if (!lastPath) return;
-    setActionError(null);
+    setSheetError(null);
     try {
       const outcome = await importPack(lastPath, choice);
       if (outcome.status === 'imported') {
@@ -98,7 +111,7 @@ export default function PacksPage({ client = ipc }: PacksPageProps) {
         setPrompt(outcome);
       }
     } catch (err) {
-      setActionError(toAppError(err).message);
+      setSheetError(toAppError(err).message);
     }
   };
 
@@ -112,6 +125,28 @@ export default function PacksPage({ client = ipc }: PacksPageProps) {
     }
   };
 
+  /**
+   * A drop with one path imports it. A drop with several opens the sheet on
+   * the first path and names the rest, so nothing is imported silently.
+   */
+  const handleDroppedPaths = useCallback(
+    (paths: string[]) => {
+      const [first, ...rest] = paths.filter((item) => item.trim() !== '');
+      if (!first) return;
+      setActionError(null);
+      setSheetError(null);
+      if (rest.length === 0) {
+        void handleImportPath(first);
+        return;
+      }
+      setPrompt(null);
+      setPath(first);
+      setExtraPaths(rest);
+      setSheetOpen(true);
+    },
+    [handleImportPath],
+  );
+
   useEffect(() => {
     if (!isTauriRuntime()) return undefined;
     let unlisten: (() => void) | undefined;
@@ -120,8 +155,7 @@ export default function PacksPage({ client = ipc }: PacksPageProps) {
       .then(({ getCurrentWebview }) =>
         getCurrentWebview().onDragDropEvent((event) => {
           if (event.payload.type !== 'drop') return;
-          const [path] = event.payload.paths;
-          if (path) void handleImportPath(path);
+          handleDroppedPaths(event.payload.paths);
         }),
       )
       .then((stop) => {
@@ -133,7 +167,7 @@ export default function PacksPage({ client = ipc }: PacksPageProps) {
       cancelled = true;
       unlisten?.();
     };
-  }, [handleImportPath]);
+  }, [handleDroppedPaths]);
 
   return (
     <section className="packs-page">
@@ -175,8 +209,12 @@ export default function PacksPage({ client = ipc }: PacksPageProps) {
           <button
             type="button"
             className="button button-primary"
+            disabled={noGameDir}
+            title={noGameDir ? 'Pick a game dir in Settings first' : undefined}
             onClick={() => {
               setPrompt(null);
+              setSheetError(null);
+              setExtraPaths([]);
               setSheetOpen(true);
             }}
           >
@@ -206,7 +244,10 @@ export default function PacksPage({ client = ipc }: PacksPageProps) {
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
-          if (!isTauriRuntime()) {
+          const paths = droppedPaths(event.dataTransfer);
+          if (paths.length > 0) {
+            handleDroppedPaths(paths);
+          } else if (!isTauriRuntime()) {
             setActionError('Dropping files needs the desktop app. Use Import pack instead.');
           }
         }}
@@ -237,10 +278,15 @@ export default function PacksPage({ client = ipc }: PacksPageProps) {
         open={sheetOpen}
         prompt={prompt}
         busy={busy}
+        error={sheetError}
+        extraPaths={extraPaths}
+        path={path}
+        onPathChange={setPath}
+        canImport={!noGameDir}
         onClose={closeSheet}
         onImportPath={handleImportPath}
         onChoose={handleChoose}
-        onBrowse={pickPackPath}
+        onBrowse={pickPath}
       />
     </section>
   );

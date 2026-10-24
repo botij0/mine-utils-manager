@@ -73,7 +73,7 @@ export default function PackDetail({ pack, busy, onDelete }: PackDetailProps) {
         </dd>
         <dt>Supported</dt>
         <dd>{formatRangeLabel(pack.meta.supported_formats)}</dd>
-        <dt>Read from disk</dt>
+        <dt>Read for this pack</dt>
         <dd>{Math.round(pack.bytes_read / 102.4) / 10} KB</dd>
         <dt>Path</dt>
         <dd className="pack-path">{pack.path}</dd>

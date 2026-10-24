@@ -76,8 +76,10 @@ export interface FormatVersion {
 }
 
 export interface FormatRange {
-  min: FormatVersion;
-  max: FormatVersion;
+  /** Absent when the pack only declares a max_format. */
+  min: FormatVersion | null;
+  /** Absent when the pack only declares a min_format. */
+  max: FormatVersion | null;
 }
 
 export interface PackMeta {

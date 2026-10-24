@@ -7,11 +7,17 @@ export function formatVersionLabel(version: FormatVersion): string {
 }
 
 export function formatRangeLabel(range: FormatRange | null): string {
-  if (!range) return 'Unknown format';
-  if (range.min.major === range.max.major && range.min.minor === range.max.minor) {
-    return formatVersionLabel(range.min);
+  if (!range || (!range.min && !range.max)) return 'Unknown format';
+  const { min, max } = range;
+  if (min && max) {
+    if (min.major === max.major && min.minor === max.minor) {
+      return formatVersionLabel(min);
+    }
+    return `${formatVersionLabel(min)} to ${formatVersionLabel(max)}`;
   }
-  return `${formatVersionLabel(range.min)} to ${formatVersionLabel(range.max)}`;
+  if (min) return `${formatVersionLabel(min)} and up`;
+  if (max) return `up to ${formatVersionLabel(max)}`;
+  return 'Unknown format';
 }
 
 /** "Format 34 to 42" or "Unknown format". Never invents a game version. */
@@ -50,6 +56,10 @@ export function formatFilterOptions(packs: Pack[]): string[] {
   for (const pack of packs) {
     if (pack.format_range) seen.add(formatRangeLabel(pack.format_range));
   }
+  const lowEnd = (subject: Pack) => {
+    const bound = subject.format_range?.min ?? subject.format_range?.max;
+    return { major: bound?.major ?? 0, minor: bound?.minor ?? 0 };
+  };
   return [...seen].sort((left, right) => {
     const first = packs.find(
       (pack) => pack.format_range && formatRangeLabel(pack.format_range) === left,
@@ -57,10 +67,9 @@ export function formatFilterOptions(packs: Pack[]): string[] {
     const second = packs.find(
       (pack) => pack.format_range && formatRangeLabel(pack.format_range) === right,
     );
-    return (
-      (first?.format_range?.min.major ?? 0) - (second?.format_range?.min.major ?? 0) ||
-      (first?.format_range?.min.minor ?? 0) - (second?.format_range?.min.minor ?? 0)
-    );
+    const a = first ? lowEnd(first) : { major: 0, minor: 0 };
+    const b = second ? lowEnd(second) : { major: 0, minor: 0 };
+    return a.major - b.major || a.minor - b.minor;
   });
 }
 

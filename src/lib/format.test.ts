@@ -50,6 +50,18 @@ describe('format labels', () => {
     expect(formatRangeLabel(null)).toBe('Unknown format');
   });
 
+  it('labels a lone min or max as open instead of dropping it', () => {
+    expect(formatRangeLabel({ min: version(48), max: null })).toBe('48 and up');
+    expect(formatRangeLabel({ min: null, max: version(42) })).toBe('up to 42');
+    expect(formatRangeLabel({ min: null, max: null })).toBe('Unknown format');
+    const open = pack({
+      format_range: { min: version(48), max: null },
+      game_label: null,
+    });
+    expect(packFormatLabel(open)).toBe('Format 48 and up');
+    expect(packGameLabel(open)).toBe('Untested on 48 and up');
+  });
+
   it('labels unknown format numbers without inventing a version', () => {
     const unknown = pack({
       format_range: { min: version(999), max: version(999) },

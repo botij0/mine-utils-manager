@@ -61,6 +61,11 @@ export interface WirePack extends Omit<Pack, 'icon'> {
   icon: { sha256: string; path: string } | null;
 }
 
+/** The import command returns icon paths too; they are converted like listing. */
+export type WireImportOutcome =
+  | { status: 'imported'; pack: WirePack }
+  | Exclude<ImportOutcome, { status: 'imported' }>;
+
 export function packWithIconUrl(pack: WirePack): Pack {
   return {
     ...pack,
@@ -74,6 +79,12 @@ export function listingWithIconUrls(
   listing: Omit<PackListing, 'packs'> & { packs: WirePack[] },
 ): PackListing {
   return { ...listing, packs: listing.packs.map(packWithIconUrl) };
+}
+
+export function outcomeWithIconUrl(outcome: WireImportOutcome): ImportOutcome {
+  return outcome.status === 'imported'
+    ? { ...outcome, pack: packWithIconUrl(outcome.pack) }
+    : outcome;
 }
 
 const tauriClient: IpcClient = {
@@ -90,8 +101,13 @@ const tauriClient: IpcClient = {
     );
     return listingWithIconUrls(listing);
   },
-  importResourcePack: (path, choice) =>
-    call<ImportOutcome>('import_resource_pack', { path, choice: choice ?? 'default' }),
+  async importResourcePack(path, choice) {
+    const outcome = await call<WireImportOutcome>('import_resource_pack', {
+      path,
+      choice: choice ?? 'default',
+    });
+    return outcomeWithIconUrl(outcome);
+  },
   deleteResourcePack: (path) => call<void>('delete_resource_pack', { path }),
 };
 
@@ -116,18 +132,20 @@ function pick(): IpcClient {
   return isTauriRuntime() ? tauriClient : mockClient;
 }
 
-/** Open the native picker. The mock runtime has no picker, so it returns null. */
-export async function pickPackPath(): Promise<string | null> {
+/**
+ * Open the native picker. `directory` picks a pack folder instead of a zip;
+ * the mock runtime has no picker, so it returns null.
+ */
+export async function pickPackPath(directory = false): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   const selected = await call<string | string[] | null>('plugin:dialog|open', {
     options: {
-      title: 'Import a resource pack',
+      title: directory ? 'Import a pack folder' : 'Import a resource pack',
       multiple: false,
-      directory: false,
-      filters: [
-        { name: 'Resource packs', extensions: ['zip'] },
-        { name: 'Pack folders', extensions: ['*'] },
-      ],
+      directory,
+      filters: directory
+        ? undefined
+        : [{ name: 'Resource packs', extensions: ['zip'] }],
     },
   });
   if (Array.isArray(selected)) return selected[0] ?? null;
