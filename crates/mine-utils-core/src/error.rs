@@ -11,6 +11,8 @@ pub enum AppError {
     InvalidGameDir { path: PathBuf, reason: String },
     UnknownGameDir { path: PathBuf },
     Config { path: PathBuf, reason: String },
+    NoActiveGameDir,
+    Pack(crate::pack::PackError),
 }
 
 impl AppError {
@@ -20,6 +22,8 @@ impl AppError {
             AppError::InvalidGameDir { .. } => "invalid_game_dir",
             AppError::UnknownGameDir { .. } => "unknown_game_dir",
             AppError::Config { .. } => "config",
+            AppError::NoActiveGameDir => "no_active_game_dir",
+            AppError::Pack(err) => err.code(),
         }
     }
 }
@@ -37,6 +41,10 @@ impl fmt::Display for AppError {
             AppError::Config { path, reason } => {
                 write!(f, "config error in {}: {reason}", path.display())
             }
+            AppError::NoActiveGameDir => {
+                write!(f, "no active game dir; pick one in Settings first")
+            }
+            AppError::Pack(err) => write!(f, "{err}"),
         }
     }
 }
@@ -45,6 +53,7 @@ impl std::error::Error for AppError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             AppError::Io(err) => Some(err),
+            AppError::Pack(err) => Some(err),
             _ => None,
         }
     }
@@ -53,6 +62,12 @@ impl std::error::Error for AppError {
 impl From<std::io::Error> for AppError {
     fn from(err: std::io::Error) -> Self {
         AppError::Io(err)
+    }
+}
+
+impl From<crate::pack::PackError> for AppError {
+    fn from(err: crate::pack::PackError) -> Self {
+        AppError::Pack(err)
     }
 }
 
