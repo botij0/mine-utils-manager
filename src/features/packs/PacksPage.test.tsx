@@ -7,6 +7,7 @@ import type {
   FormatRange,
   FormatVersion,
   ImportChoice,
+  GameRunning,
   ImportOutcome,
   Pack,
   PackListing,
@@ -354,6 +355,146 @@ describe('PacksPage', () => {
     expect(await screen.findByRole('heading', { name: 'PackFolder' })).toBeInTheDocument();
     expect(picked).toEqual([false, true]);
     expect(client.imports).toEqual(['/drop/PackFolder']);
+  });
+
+  it('renders a distinct stack error with the launch hint and a retry action', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient([VANILLA]);
+    let failing = true;
+    client.getResourceStack = async () => {
+      if (failing) {
+        throw new IpcError(
+          'options_txt',
+          'options.txt is missing at /games/one/options.txt; launch Minecraft once so it writes the file, then try again',
+        );
+      }
+      return {
+        entries: [{ kind: 'foreign', value: 'vanilla' }],
+        incompatible: [],
+        running: null,
+        stale_locks: [],
+        detection_supported: true,
+      };
+    };
+    renderPage(client);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/options.txt is missing/);
+    expect(alert).toHaveTextContent(/launch Minecraft once/i);
+    expect(screen.queryByText('Loading the stack…')).not.toBeInTheDocument();
+
+    failing = false;
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('list', { name: 'Stack order' })).toBeInTheDocument();
+  });
+
+  it('refreshes the stack and shows the banner after a game_running toggle error', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient([VANILLA]);
+    const running: GameRunning = {
+      kind: 'session_lock',
+      detail: '/games/one/saves/world/session.lock is locked by pid 4242',
+      lock_path: '/games/one/saves/world/session.lock',
+      pid: 4242,
+      command: null,
+    };
+    let nowRunning: GameRunning | null = null;
+    client.getResourceStack = async () => ({
+      entries: [{ kind: 'file', value: 'file/Vanilla.zip', filename: 'Vanilla.zip' }],
+      incompatible: [],
+      running: nowRunning,
+      stale_locks: [],
+      detection_supported: true,
+    });
+    client.setResourcePackEnabled = async () => {
+      nowRunning = running;
+      throw new IpcError('game_running', 'Minecraft is running; close it first');
+    };
+    renderPage(client);
+
+    const list = await screen.findByRole('list', { name: 'Stack order' });
+    expect(screen.queryByText(/Minecraft is running/)).not.toBeInTheDocument();
+    await user.click(within(list).getByRole('checkbox'));
+
+    const banner = (await screen.findByText('Minecraft is running.')).closest(
+      '.banner',
+    ) as HTMLElement;
+    expect(banner).toHaveTextContent('session.lock is locked by pid 4242');
+    expect(within(list).getByRole('checkbox')).toBeDisabled();
+  });
+
+  it('rechecks both the stack and the app guard from the banner', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient([VANILLA]);
+    let stackReads = 0;
+    let guardChecks = 0;
+    client.getResourceStack = async () => {
+      stackReads += 1;
+      return {
+        entries: [{ kind: 'file', value: 'file/Vanilla.zip', filename: 'Vanilla.zip' }],
+        incompatible: [],
+        running: {
+          kind: 'process',
+          detail: 'pid 4242 runs java',
+          lock_path: null,
+          pid: 4242,
+          command: 'java',
+        },
+        stale_locks: [],
+        detection_supported: true,
+      };
+    };
+    render(
+      <PacksPage
+        client={client}
+        refreshGameRunning={() => {
+          guardChecks += 1;
+        }}
+      />,
+    );
+
+    await screen.findByText('Minecraft is running.');
+    const before = stackReads;
+    await user.click(screen.getByRole('button', { name: 'Recheck' }));
+    await waitFor(() => expect(stackReads).toBeGreaterThan(before));
+    expect(guardChecks).toBeGreaterThanOrEqual(1);
+  });
+
+  it('lets a fresh null app guard clear a stale stack banner', async () => {
+    const client = makeFakeClient([VANILLA]);
+    client.getResourceStack = async () => ({
+      entries: [{ kind: 'file', value: 'file/Vanilla.zip', filename: 'Vanilla.zip' }],
+      incompatible: [],
+      running: {
+        kind: 'process',
+        detail: 'pid 4242 runs java',
+        lock_path: null,
+        pid: 4242,
+        command: 'java',
+      },
+      stale_locks: [],
+      detection_supported: true,
+    });
+    render(<PacksPage client={client} gameRunning={null} refreshGameRunning={() => {}} />);
+
+    const list = await screen.findByRole('list', { name: 'Stack order' });
+    expect(screen.queryByText(/Minecraft is running/)).not.toBeInTheDocument();
+    expect(within(list).getByRole('checkbox')).toBeEnabled();
+  });
+
+  it('does not offer the stack toggle for a data pack', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient([VANILLA, AUTUMN]);
+    renderPage(client);
+
+    await user.click(await screen.findByRole('button', { name: /^Autumn,/ }));
+    const detail = screen.getByRole('complementary', { name: 'Pack details' });
+    expect(
+      within(detail).queryByRole('checkbox', { name: /Enabled in the active stack/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(detail).getByText('Data packs are not part of the resource pack stack.'),
+    ).toBeInTheDocument();
   });
 
   it('disables import when no game dir is active', async () => {

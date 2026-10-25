@@ -69,7 +69,7 @@ function makeClient({
       if (error) throw error;
       return backups;
     },
-    async restoreOptionsBackup(backup: string) {
+    async restoreOptionsBackup(backup: string): Promise<ResourceStack> {
       restores.push(backup);
       return restored;
     },
@@ -144,22 +144,62 @@ describe('BackupsPanel', () => {
     expect(status).toHaveTextContent(/The active stack now has 2 entries/);
   });
 
-  it('refuses to restore when the game started meanwhile', async () => {
+  it('surfaces the backend game_running error and asks the app guard to re-check', async () => {
     const user = userEvent.setup();
     const client = makeClient();
-    let runningNow = false;
-    client.getResourceStack = async () => ({
-      ...STACK,
-      running: runningNow ? RUNNING : null,
-    });
-    render(<BackupsPanel client={client} />);
+    let rechecks = 0;
+    client.restoreOptionsBackup = async () => {
+      throw new IpcError(
+        'game_running',
+        'Minecraft is running (pid 4242 runs java); close it before Mine Utils writes options.txt',
+      );
+    };
+    render(
+      <BackupsPanel
+        client={client}
+        gameRunning={null}
+        refreshGameRunning={() => {
+          rechecks += 1;
+        }}
+      />,
+    );
 
     const buttons = await screen.findAllByRole('button', { name: 'Restore' });
-    runningNow = true;
     await user.click(buttons[0]);
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/Minecraft is running/);
     expect(client.restores).toEqual([]);
+    expect(rechecks).toBe(1);
+  });
+
+  it('reloads the table when the active game dir changes, not when the guard object does', async () => {
+    const client = makeClient();
+    let calls = 0;
+    const original = client.listOptionsBackups;
+    client.listOptionsBackups = async () => {
+      calls += 1;
+      return original();
+    };
+    const { rerender } = render(
+      <BackupsPanel client={client} activeGameDir="/games/one" gameRunning={null} />,
+    );
+    await screen.findByText('2026-10-25 09:00:00 UTC');
+    expect(calls).toBe(1);
+
+    // A new 5-second poll object must not reload or flash the table.
+    rerender(
+      <BackupsPanel
+        client={client}
+        activeGameDir="/games/one"
+        gameRunning={{ ...RUNNING }}
+      />,
+    );
+    await waitFor(() => expect(calls).toBe(1));
+
+    rerender(
+      <BackupsPanel client={client} activeGameDir="/games/two" gameRunning={null} />,
+    );
+    await waitFor(() => expect(calls).toBe(2));
   });
 });
