@@ -8,11 +8,27 @@ use serde::{Serialize, Serializer};
 #[derive(Debug)]
 pub enum AppError {
     Io(std::io::Error),
-    InvalidGameDir { path: PathBuf, reason: String },
-    UnknownGameDir { path: PathBuf },
-    Config { path: PathBuf, reason: String },
+    InvalidGameDir {
+        path: PathBuf,
+        reason: String,
+    },
+    UnknownGameDir {
+        path: PathBuf,
+    },
+    Config {
+        path: PathBuf,
+        reason: String,
+    },
     NoActiveGameDir,
     Pack(crate::pack::PackError),
+    Options(crate::options_txt::OptionsError),
+    Stack(crate::resource_stack::StackError),
+    Backup {
+        reason: String,
+    },
+    GameRunning {
+        running: crate::game_lock::GameRunning,
+    },
 }
 
 impl AppError {
@@ -24,6 +40,10 @@ impl AppError {
             AppError::Config { .. } => "config",
             AppError::NoActiveGameDir => "no_active_game_dir",
             AppError::Pack(err) => err.code(),
+            AppError::Options(err) => err.code(),
+            AppError::Stack(err) => err.code(),
+            AppError::Backup { .. } => "backup",
+            AppError::GameRunning { .. } => "game_running",
         }
     }
 }
@@ -45,6 +65,14 @@ impl fmt::Display for AppError {
                 write!(f, "no active game dir; pick one in Settings first")
             }
             AppError::Pack(err) => write!(f, "{err}"),
+            AppError::Options(err) => write!(f, "{err}"),
+            AppError::Stack(err) => write!(f, "{err}"),
+            AppError::Backup { reason } => write!(f, "backup failed: {reason}"),
+            AppError::GameRunning { running } => write!(
+                f,
+                "Minecraft is running ({}); close it before Mine Utils writes options.txt",
+                running.detail
+            ),
         }
     }
 }
@@ -54,6 +82,8 @@ impl std::error::Error for AppError {
         match self {
             AppError::Io(err) => Some(err),
             AppError::Pack(err) => Some(err),
+            AppError::Options(err) => Some(err),
+            AppError::Stack(err) => Some(err),
             _ => None,
         }
     }
@@ -68,6 +98,18 @@ impl From<std::io::Error> for AppError {
 impl From<crate::pack::PackError> for AppError {
     fn from(err: crate::pack::PackError) -> Self {
         AppError::Pack(err)
+    }
+}
+
+impl From<crate::resource_stack::StackError> for AppError {
+    fn from(err: crate::resource_stack::StackError) -> Self {
+        AppError::Stack(err)
+    }
+}
+
+impl From<crate::options_txt::OptionsError> for AppError {
+    fn from(err: crate::options_txt::OptionsError) -> Self {
+        AppError::Options(err)
     }
 }
 

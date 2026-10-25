@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, Once};
 
 use mine_utils_core::{
-    discover_game_dirs, entry_for, home_dir, merge_game_dirs, validate_game_dir, AppError, Config,
-    ConfigStore, GameDirEntry, Theme,
+    discover_game_dirs, entry_for, home_dir, merge_game_dirs, validate_game_dir, AppError,
+    BackupsConfig, Config, ConfigStore, GameDirEntry, StackPaths, Theme,
 };
 use serde::Serialize;
 use tauri::State;
@@ -13,14 +13,16 @@ pub struct AppState {
     store: Mutex<ConfigStore>,
     startup_warning: Option<String>,
     first_ipc: Once,
+    data_dir: PathBuf,
 }
 
 impl AppState {
-    pub fn new(store: ConfigStore, startup_warning: Option<String>) -> Self {
+    pub fn new(store: ConfigStore, startup_warning: Option<String>, data_dir: PathBuf) -> Self {
         AppState {
             store: Mutex::new(store),
             startup_warning,
             first_ipc: Once::new(),
+            data_dir,
         }
     }
 
@@ -40,6 +42,22 @@ impl AppState {
     /// `resourcepacks` from it.
     pub fn active_game_dir(&self) -> Option<PathBuf> {
         self.lock().config().active_game_dir.clone()
+    }
+
+    /// The backup policy from the config. Config writes stay backend-owned.
+    pub fn backups_config(&self) -> BackupsConfig {
+        self.lock().config().backups.clone()
+    }
+
+    /// Where stack writes go: the active game dir's `options.txt`, its backup
+    /// folder under the app data dir, and the backup policy.
+    pub fn stack_paths(&self) -> Result<StackPaths, AppError> {
+        let game_dir = self.active_game_dir().ok_or(AppError::NoActiveGameDir)?;
+        Ok(StackPaths::for_game_dir(
+            &game_dir,
+            &self.data_dir,
+            self.backups_config(),
+        ))
     }
 }
 

@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mine_utils_core::{
-    delete_pack, import_pack, scan_packs, AppError, HashCache, IconCache, ImportChoice,
-    ImportOutcome, PackListing,
+    import_pack, resource_stack, scan_packs, AppError, HashCache, IconCache, ImportChoice,
+    ImportOutcome, PackListing, SystemTrash,
 };
 use tauri::State;
 
@@ -82,14 +82,22 @@ pub async fn import_resource_pack(
     .map_err(join_error)?
 }
 
+/// Trash a pack and remove its `options.txt` references under the stack mutex.
 #[tauri::command]
 pub async fn delete_resource_pack(
     state: State<'_, AppState>,
+    stack: State<'_, super::resource_stack::StackState>,
     path: String,
 ) -> Result<(), AppError> {
     state.note_ipc();
-    let root = resourcepacks(&state)?;
-    tauri::async_runtime::spawn_blocking(move || delete_pack(Path::new(&path), &root))
-        .await
-        .map_err(join_error)?
+    // One config read decides the root and the stack paths, so a concurrent
+    // active-dir change cannot split the delete across two game dirs.
+    let stack_paths = state.stack_paths()?;
+    let guard = stack.lock_for(&stack_paths.game_dir);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
+        resource_stack::delete_pack_safely(&stack_paths, Path::new(&path), &SystemTrash).map(|_| ())
+    })
+    .await
+    .map_err(join_error)?
 }

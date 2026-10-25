@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PackClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
-import type { ImportChoice, ImportOutcome, IpcError, Pack } from '../../lib/types';
+import type {
+  ImportChoice,
+  ImportOutcome,
+  IpcError,
+  Pack,
+  ResourceStack,
+  StackSnapshot,
+} from '../../lib/types';
 
 export interface PackStats {
   bytesRead: number;
@@ -13,15 +20,33 @@ export interface PacksState {
   stats: PackStats | null;
   loading: boolean;
   busy: boolean;
+  /** The pack-list failure. A stack failure never lands here. */
   error: IpcError | null;
+  stack: ResourceStack | null;
+  stackLoading: boolean;
+  /** The stack-read failure. A pack-list failure never lands here. */
+  stackError: IpcError | null;
   reload: () => Promise<void>;
+  refreshStack: () => Promise<void>;
   importPack: (path: string, choice?: ImportChoice) => Promise<ImportOutcome>;
   deletePack: (path: string) => Promise<void>;
+  togglePack: (filename: string, enabled: boolean) => Promise<void>;
+  reorderStack: (order: string[]) => Promise<void>;
+}
+
+/** What the UI rendered, sent along so a write against a changed file set is
+ *  refused instead of clobbering content the user has not seen. */
+export function snapshotOf(stack: ResourceStack): StackSnapshot {
+  return {
+    resource: stack.entries.map((entry) => entry.value),
+    incompatible: [...stack.incompatible],
+  };
 }
 
 /**
- * Loads the active game dir's pack list and keeps it fresh after imports and
- * deletes. The page owns filters and selection, since those are view state.
+ * Loads the active game dir's pack list and resource stack, and keeps both
+ * fresh after every mutation. Each write rechecks the stack first, so a game
+ * that started in the meantime blocks the write before it reaches the disk.
  */
 export function usePacks(client: PackClient): PacksState {
   const [packs, setPacks] = useState<Pack[]>([]);
@@ -29,6 +54,9 @@ export function usePacks(client: PackClient): PacksState {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<IpcError | null>(null);
+  const [stack, setStack] = useState<ResourceStack | null>(null);
+  const [stackLoading, setStackLoading] = useState(true);
+  const [stackError, setStackError] = useState<IpcError | null>(null);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -55,9 +83,28 @@ export function usePacks(client: PackClient): PacksState {
     }
   }, [client]);
 
+  const refreshStack = useCallback(async () => {
+    setStackLoading(true);
+    setStackError(null);
+    try {
+      const next = await client.getResourceStack();
+      if (mounted.current) {
+        setStack(next);
+        setStackError(null);
+      }
+    } catch (err) {
+      if (!mounted.current) return;
+      setStack(null);
+      setStackError(toAppError(err));
+    } finally {
+      if (mounted.current) setStackLoading(false);
+    }
+  }, [client]);
+
   useEffect(() => {
     void reload();
-  }, [reload]);
+    void refreshStack();
+  }, [reload, refreshStack]);
 
   const importPack = useCallback(
     async (path: string, choice: ImportChoice = 'default') => {
@@ -77,14 +124,61 @@ export function usePacks(client: PackClient): PacksState {
     async (path: string) => {
       setBusy(true);
       try {
+        // The backend handles a missing options.txt without a pre-read, so a
+        // delete still works when the stack cannot be read.
         await client.deleteResourcePack(path);
         await reload();
+        await refreshStack();
       } finally {
         if (mounted.current) setBusy(false);
       }
     },
-    [client, reload],
+    [client, reload, refreshStack],
   );
 
-  return { packs, stats, loading, busy, error, reload, importPack, deletePack };
+  const togglePack = useCallback(
+    async (filename: string, enabled: boolean) => {
+      setBusy(true);
+      try {
+        await refreshStack();
+        await client.setResourcePackEnabled(filename, enabled);
+        await refreshStack();
+      } finally {
+        if (mounted.current) setBusy(false);
+      }
+    },
+    [client, refreshStack],
+  );
+
+  const reorderStack = useCallback(
+    async (order: string[]) => {
+      setBusy(true);
+      try {
+        const expected = snapshotOf(stack ?? (await client.getResourceStack()));
+        await refreshStack();
+        await client.reorderResourceStack(order, expected);
+        await refreshStack();
+      } finally {
+        if (mounted.current) setBusy(false);
+      }
+    },
+    [client, stack, refreshStack],
+  );
+
+  return {
+    packs,
+    stats,
+    loading,
+    busy,
+    error,
+    stack,
+    stackLoading,
+    stackError,
+    reload,
+    refreshStack,
+    importPack,
+    deletePack,
+    togglePack,
+    reorderStack,
+  };
 }

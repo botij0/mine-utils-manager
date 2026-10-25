@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ipc } from './lib/ipc';
 import type { IpcClient } from './lib/ipc';
-import type { AppError, Config, Theme } from './lib/types';
+import type { AppError, Config, GameRunning, Theme } from './lib/types';
 import { defaultConfig } from './lib/types';
 import { toAppError } from './lib/ipc';
 import DiscoverPage from './features/discover/DiscoverPage';
@@ -45,6 +45,12 @@ export default function App({ client = ipc }: AppProps) {
   const [config, setConfig] = useState<Config>(defaultConfig);
   const [error, setError] = useState<AppError | null>(null);
   const [startupWarning, setStartupWarning] = useState<string | null>(null);
+  // Undefined until the first check lands, so the pages can tell "not yet
+  // checked" apart from a fresh "not running" result.
+  const [gameRunning, setGameRunning] = useState<GameRunning | null | undefined>(undefined);
+  // A failed check is unknown, not evidence the game stopped. The last known
+  // running value stays and writes stay paused until a check succeeds.
+  const [gameGuardUnknown, setGameGuardUnknown] = useState(false);
 
   useEffect(() => {
     window.location.hash = page;
@@ -56,6 +62,25 @@ export default function App({ client = ipc }: AppProps) {
       .then(setConfig)
       .catch((err: unknown) => setError(toAppError(err)));
   }, [client]);
+
+  const refreshGameRunning = useCallback(async () => {
+    try {
+      const stack = await client.getResourceStack();
+      setGameRunning(stack.running);
+      setGameGuardUnknown(false);
+    } catch {
+      // Keep the last known value: only a successful check may clear it.
+      setGameGuardUnknown(true);
+    }
+  }, [client]);
+
+  // Writes on any page stop while Minecraft runs. The callback is stable, so
+  // pages can force a fresh check without re-subscribing the poll.
+  useEffect(() => {
+    void refreshGameRunning();
+    const timer = setInterval(() => void refreshGameRunning(), 5000);
+    return () => clearInterval(timer);
+  }, [refreshGameRunning]);
 
   useEffect(() => {
     client
@@ -117,13 +142,23 @@ export default function App({ client = ipc }: AppProps) {
               {error.message}
             </p>
           ) : null}
-          {page === 'packs' ? <PacksPage client={client} /> : null}
+          {page === 'packs' ? (
+            <PacksPage
+              client={client}
+              gameRunning={gameRunning}
+              gameGuardUnknown={gameGuardUnknown}
+              refreshGameRunning={refreshGameRunning}
+            />
+          ) : null}
           {page === 'worlds' ? <WorldsPage /> : null}
           {page === 'discover' ? <DiscoverPage /> : null}
           {page === 'settings' ? (
             <SettingsPage
               client={client}
               config={config}
+              gameRunning={gameRunning}
+              gameGuardUnknown={gameGuardUnknown}
+              refreshGameRunning={refreshGameRunning}
               onConfigChanged={setConfig}
             />
           ) : null}

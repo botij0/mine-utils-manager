@@ -1,9 +1,10 @@
-import type { Config, Theme } from '../../lib/types';
+import type { Config, GameRunning, Theme } from '../../lib/types';
 import type { IpcClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import { useState } from 'react';
 import type { AppError } from '../../lib/types';
 import GameDirSettings from '../game-dirs/GameDirSettings';
+import BackupsPanel from './BackupsPanel';
 
 const THEMES: { value: Theme; label: string }[] = [
   { value: 'system', label: 'System' },
@@ -15,12 +16,21 @@ interface SettingsPageProps {
   client: IpcClient;
   config: Config;
   onConfigChanged: (config: Config) => void;
+  /** From the app-level game guard poll. Undefined until the first check. */
+  gameRunning?: GameRunning | null;
+  /** A failed guard check: unknown, so writes stay paused. */
+  gameGuardUnknown?: boolean;
+  /** Force the app-level game guard to re-check now. */
+  refreshGameRunning?: () => void | Promise<void>;
 }
 
 export default function SettingsPage({
   client,
   config,
   onConfigChanged,
+  gameRunning,
+  gameGuardUnknown = false,
+  refreshGameRunning = () => {},
 }: SettingsPageProps) {
   const [error, setError] = useState<AppError | null>(null);
 
@@ -61,6 +71,13 @@ export default function SettingsPage({
         client={client}
         activePath={config.active_game_dir}
         onConfigChanged={onConfigChanged}
+      />
+      <BackupsPanel
+        client={client}
+        activeGameDir={config.active_game_dir}
+        gameRunning={gameRunning}
+        gameGuardUnknown={gameGuardUnknown}
+        refreshGameRunning={refreshGameRunning}
       />
     </div>
   );

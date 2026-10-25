@@ -57,8 +57,10 @@ pub fn run() {
             app.manage(AppState::new(
                 ConfigStore::new(config_path, config),
                 startup_warning,
+                paths.data_dir.clone(),
             ));
             app.manage(PackState::new(&paths.cache_dir));
+            app.manage(commands::resource_stack::StackState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -72,6 +74,11 @@ pub fn run() {
             commands::packs::list_resource_packs,
             commands::packs::import_resource_pack,
             commands::packs::delete_resource_pack,
+            commands::resource_stack::get_resource_stack,
+            commands::resource_stack::set_resource_pack_enabled,
+            commands::resource_stack::reorder_resource_stack,
+            commands::resource_stack::list_options_backups,
+            commands::resource_stack::restore_options_backup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -130,3 +130,45 @@ export type ImportOutcome =
   | { status: 'duplicate'; name: string; sha256: string; existing: string }
   | { status: 'collision'; name: string }
   | { status: 'skipped' };
+
+export type StackEntry =
+  | { kind: 'file'; value: string; filename: string }
+  | { kind: 'foreign'; value: string };
+
+export type GameRunningKind = 'session_lock' | 'process';
+
+export interface GameRunning {
+  kind: GameRunningKind;
+  detail: string;
+  lock_path: string | null;
+  pid: number | null;
+  command: string | null;
+}
+
+/**
+ * The enabled stack. `entries` is the `resourcePacks` array in load order,
+ * low to high: the last entry wins. The UI shows the reverse, so the top card
+ * is the highest priority and loads last. Foreign entries such as `vanilla`
+ * and `fabric` are locked to their indices and never move.
+ */
+export interface ResourceStack {
+  entries: StackEntry[];
+  incompatible: string[];
+  running: GameRunning | null;
+  /** Stale `session.lock` files. They never block a write. */
+  stale_locks: string[];
+  /** False where POSIX lock probing is unsupported. */
+  detection_supported: boolean;
+}
+
+/** What the UI rendered, so a write against a changed file set is refused. */
+export interface StackSnapshot {
+  resource: string[];
+  incompatible: string[];
+}
+
+export interface BackupInfo {
+  file_name: string;
+  bytes: number;
+  display: string;
+}

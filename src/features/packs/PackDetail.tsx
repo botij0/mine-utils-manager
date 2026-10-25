@@ -11,6 +11,9 @@ import {
 interface PackDetailProps {
   pack: Pack | null;
   busy: boolean;
+  writesBlocked: boolean;
+  enabledInStack: boolean;
+  onSetEnabled: (enabled: boolean) => void;
   onDelete: (pack: Pack) => Promise<void>;
 }
 
@@ -18,7 +21,14 @@ function versionOrDash(value: { major: number; minor: number } | null): string {
   return value ? formatVersionLabel(value) : 'Not declared';
 }
 
-export default function PackDetail({ pack, busy, onDelete }: PackDetailProps) {
+export default function PackDetail({
+  pack,
+  busy,
+  writesBlocked,
+  enabledInStack,
+  onSetEnabled,
+  onDelete,
+}: PackDetailProps) {
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
@@ -36,6 +46,8 @@ export default function PackDetail({ pack, busy, onDelete }: PackDetailProps) {
   }
 
   const range = pack.format_range;
+  const stackEligible = pack.kind === 'resource' || pack.kind === 'both';
+  const symlinkPack = pack.error?.code === 'pack_symlink';
   return (
     <aside className="pack-detail" aria-label="Pack details">
       <div className="pack-detail-head">
@@ -81,47 +93,77 @@ export default function PackDetail({ pack, busy, onDelete }: PackDetailProps) {
 
       {range ? (
         <p className="pack-range-note">
-          This build is read-only. Format {formatRangeLabel(range)} is not changed by
-          Mine Utils.
+          Mine Utils does not change this pack's declared format range
+          ({formatRangeLabel(range)}).
         </p>
       ) : null}
 
-      <div className="pack-danger-zone">
-        {confirming ? (
-          <div className="pack-confirm" role="alert">
-            <p>Move this pack to the system trash?</p>
-            <div className="pack-confirm-actions">
-              <button
-                type="button"
-                className="button button-danger"
-                disabled={busy}
-                onClick={() => {
-                  void onDelete(pack).finally(() => setConfirming(false));
-                }}
-              >
-                Move to trash
-              </button>
-              <button
-                type="button"
-                className="button"
-                disabled={busy}
-                onClick={() => setConfirming(false)}
-              >
-                Cancel
-              </button>
+      {pack.error ? null : stackEligible ? (
+        <label className="stack-toggle pack-stack-toggle">
+          <input
+            type="checkbox"
+            checked={enabledInStack}
+            disabled={busy || writesBlocked}
+            onChange={(event) => onSetEnabled(event.target.checked)}
+          />
+          Enabled in the active stack
+        </label>
+      ) : (
+        <p className="pack-range-note">
+          {pack.kind === 'data'
+            ? 'Data packs are not part of the resource pack stack.'
+            : 'The pack kind is unknown, so the stack toggle is unavailable.'}
+        </p>
+      )}
+
+      {symlinkPack ? (
+        <p className="pack-range-note">
+          This entry is a symlink. Remove the link from resourcepacks in a file
+          manager; Mine Utils does not delete links.
+        </p>
+      ) : (
+        <div className="pack-danger-zone">
+          {confirming ? (
+            <div className="pack-confirm" role="alert">
+              <p>Move this pack to the system trash?</p>
+              <div className="pack-confirm-actions">
+                <button
+                  type="button"
+                  className="button button-danger"
+                  disabled={busy || writesBlocked}
+                  onClick={() => {
+                    void onDelete(pack).finally(() => setConfirming(false));
+                  }}
+                >
+                  Move to trash
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy}
+                  onClick={() => setConfirming(false)}
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            className="button button-danger"
-            disabled={busy}
-            onClick={() => setConfirming(true)}
-          >
-            Delete pack
-          </button>
-        )}
-      </div>
+          ) : (
+            <button
+              type="button"
+              className="button button-danger"
+              disabled={busy || writesBlocked}
+              title={
+                writesBlocked
+                  ? 'Writes are paused until the game is confirmed closed'
+                  : undefined
+              }
+              onClick={() => setConfirming(true)}
+            >
+              Delete pack
+            </button>
+          )}
+        </div>
+      )}
     </aside>
   );
 }
