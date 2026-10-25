@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { WorldsClient } from '../../lib/ipc';
 import { ipc, pickPackPath, toAppError } from '../../lib/ipc';
+import { formatVersionLabel } from '../../lib/format';
+import { packFilename } from '../../lib/packPath';
 import type { DatapackImportOutcome, GameRunning } from '../../lib/types';
 import DatapackDetail from './DatapackDetail';
 import DatapackGrid, { type DatapackRow } from './DatapackGrid';
@@ -37,11 +39,13 @@ export default function WorldsPage({
     stackLoading,
     busy,
     actionError,
+    reload,
     refreshListing,
     toggleDatapack,
     reorderDatapacks,
     importDatapack,
     deleteDatapack,
+    removeDatapackReference,
     clearActionError,
   } = useWorlds(client);
   const [selectedFilename, setSelectedFilename] = useState<string | null>(null);
@@ -52,38 +56,46 @@ export default function WorldsPage({
   const [importPath, setImportPath] = useState<string | null>(null);
   const [lockedNotice, setLockedNotice] = useState<string | null>(null);
 
+  // Re-check everything after a lock release: the app guard, the world's
+  // listing, and the world list itself (a release is never blocked by issue).
+  const refreshAfterGuard = useCallback(async () => {
+    await refreshGameRunning();
+    await refreshListing();
+    await reload();
+  }, [refreshGameRunning, refreshListing, reload]);
+
   const worldFormat = selected?.version?.data_format ?? null;
   const worldLabel = selected?.version?.name ?? selected?.level_name ?? null;
 
   const rows = useMemo<DatapackRow[]>(() => {
     if (!stack) return [];
-    const byFilename = new Map(packs.map((pack) => [filenameOf(pack.path), pack]));
-    const loadOrder = stack.enabled.map((entry) => entry.value);
-    // Moving up raises load priority (later in Enabled); moving down lowers
-    // it. A swap that touches a locked entry or the array edge is refused, so
-    // the button is disabled instead of failing on click.
-    const moveable = (value: string, delta: 1 | -1): boolean => {
-      const index = loadOrder.indexOf(value);
-      const target = index + delta;
-      return (
-        index >= 0 && target >= 0 && target < loadOrder.length && isFileValue(loadOrder[target])
-      );
-    };
-    const topFirst = [...stack.enabled].reverse().map((entry) => {
+    const byFilename = new Map(packs.map((pack) => [packFilename(pack), pack]));
+    const listed = new Set([
+      ...stack.enabled.map((entry) => entry.value),
+      ...stack.disabled.map((entry) => entry.value),
+    ]);
+    const reversed = [...stack.enabled].reverse();
+    const topFirst = reversed.map((entry, display) => {
       const filename = entry.kind === 'file' ? entry.filename : entry.value;
       const pack = entry.kind === 'file' ? (byFilename.get(entry.filename) ?? null) : null;
+      // Positions, not values: duplicates share a value but not a position.
+      // Up the display means later in load order; the neighbor on that side
+      // must be a movable `file/` entry.
+      const neighborUp = display > 0 ? reversed[display - 1] : null;
+      const neighborDown = display < reversed.length - 1 ? reversed[display + 1] : null;
       return {
         pack,
         entry,
         enabled: true,
         locked: entry.kind === 'foreign',
+        missing: entry.kind === 'file' && pack === null,
         warning:
           entry.kind === 'file' && pack
             ? compatibilityWarning(pack, worldFormat, worldLabel)
             : null,
         filename,
-        canMoveUp: entry.kind === 'file' && moveable(entry.value, 1),
-        canMoveDown: entry.kind === 'file' && moveable(entry.value, -1),
+        canMoveUp: entry.kind === 'file' && neighborUp?.kind === 'file',
+        canMoveDown: entry.kind === 'file' && neighborDown?.kind === 'file',
       };
     });
     const disabled = stack.disabled.flatMap((entry) => {
@@ -94,6 +106,7 @@ export default function WorldsPage({
         entry,
         enabled: false,
         locked: false,
+        missing: pack === null,
         warning: pack ? compatibilityWarning(pack, worldFormat, worldLabel) : null,
         filename: entry.filename,
         canMoveUp: false,
@@ -101,7 +114,26 @@ export default function WorldsPage({
       };
       return [row];
     });
-    return [...topFirst, ...disabled];
+    // On-disk packs that `level.dat` never names (hand-dropped folders) get
+    // an installed row with an Enable action instead of being invisible.
+    const installed = packs.flatMap((pack) => {
+      const filename = packFilename(pack);
+      const value = `file/${filename}`;
+      if (listed.has(value)) return [];
+      const row: DatapackRow = {
+        pack,
+        entry: { kind: 'file', value, filename },
+        enabled: false,
+        locked: false,
+        missing: false,
+        warning: compatibilityWarning(pack, worldFormat, worldLabel),
+        filename,
+        canMoveUp: false,
+        canMoveDown: false,
+      };
+      return [row];
+    });
+    return [...topFirst, ...disabled, ...installed];
   }, [stack, packs, worldFormat, worldLabel]);
 
   const selectedRow = rows.find((row) => row.filename === selectedFilename) ?? null;
@@ -120,28 +152,29 @@ export default function WorldsPage({
       await toggleDatapack(filename, enabled);
       void refreshGameRunning();
     } catch (err) {
-      if (toAppError(err).code === 'game_running') void refreshGameRunning();
+      if (toAppError(err).code === 'game_running') void refreshAfterGuard();
     }
   };
 
-  const handleMove = async (filename: string, direction: -1 | 1) => {
+  // The grid is top-first, so position `index` maps to load order reversed.
+  const handleMove = async (index: number, direction: -1 | 1) => {
     if (!stack) return;
-    const order = stack.enabled.map((entry) => entry.value);
-    const value = `file/${filename}`;
-    const index = order.indexOf(value);
-    // The grid is top-first (reverse load order), so moving a card up raises
-    // its load priority: one step later in the Enabled array.
-    const target = index - direction;
-    if (index < 0 || target < 0 || target >= order.length) return;
+    const topFirst = [...stack.enabled].reverse();
+    const from = index;
+    const to = index + direction;
+    if (from < 0 || to < 0 || from >= topFirst.length || to >= topFirst.length) return;
+    const moving = topFirst[from];
+    const target = topFirst[to];
     // Only file entries move; a swap that touches a foreign entry is refused.
-    if (!isFileValue(order[index]) || !isFileValue(order[target])) return;
-    const next = [...order];
-    [next[index], next[target]] = [next[target], next[index]];
+    if (moving.kind !== 'file' || target.kind !== 'file') return;
+    const next = [...topFirst];
+    [next[from], next[to]] = [next[to], next[from]];
+    const order = [...next].reverse().map((entry) => entry.value);
     clearActionError();
     try {
-      await reorderDatapacks(next);
+      await reorderDatapacks(order);
     } catch (err) {
-      if (toAppError(err).code === 'game_running') void refreshGameRunning();
+      if (toAppError(err).code === 'game_running') void refreshAfterGuard();
     }
   };
 
@@ -151,7 +184,16 @@ export default function WorldsPage({
       await deleteDatapack(path);
       setSelectedFilename(null);
     } catch (err) {
-      if (toAppError(err).code === 'game_running') void refreshGameRunning();
+      if (toAppError(err).code === 'game_running') void refreshAfterGuard();
+    }
+  };
+
+  const handleRemoveReference = async (filename: string) => {
+    clearActionError();
+    try {
+      await removeDatapackReference(filename);
+    } catch (err) {
+      if (toAppError(err).code === 'game_running') void refreshAfterGuard();
     }
   };
 
@@ -185,11 +227,10 @@ export default function WorldsPage({
   const handleImportPick = async (directory: boolean) => {
     if (!selected) return;
     setImportError(null);
-    const path = await pickPackPath(directory);
+    const path = await pickPackPath(directory, 'Import a datapack');
     if (!path) return;
     await runImport(selected.dir_name, path);
   };
-
 
   return (
     <section className="worlds-page">
@@ -220,7 +261,10 @@ export default function WorldsPage({
                 <WorldHeader
                   world={selected}
                   gameRunning={gameRunning}
+                  gameGuardUnknown={gameGuardUnknown}
+                  staleLocks={stack?.stale_locks ?? []}
                   refreshGameRunning={refreshGameRunning}
+                  onRefresh={refreshAfterGuard}
                 />
                 {lockedNotice ? (
                   <p className="banner" role="status">
@@ -232,10 +276,10 @@ export default function WorldsPage({
                     {actionError.message}
                   </p>
                 ) : null}
-                {packsError && !stack ? (
+                {packsError && !stack && !readOnly ? (
                   <p className="error" role="alert">
                     {packsError.message}{' '}
-                    <button type="button" className="button" onClick={() => void refreshListing()}>
+                    <button type="button" className="button" onClick={() => void refreshAfterGuard()}>
                       Retry
                     </button>
                   </p>
@@ -294,12 +338,12 @@ export default function WorldsPage({
                 {!readOnly ? (
                   <DatapackGrid
                     rows={rows}
-                    loading={packsLoading || stackLoading || busy}
+                    loading={packsLoading || stackLoading}
                     selectedFilename={selectedFilename}
                     onSelect={setSelectedFilename}
                     writesBlocked={writesBlocked || busy}
                     onToggle={(filename, enabled) => void handleToggle(filename, enabled)}
-                    onMove={(filename, direction) => void handleMove(filename, direction)}
+                    onMove={(index, direction) => void handleMove(index, direction)}
                   />
                 ) : (
                   <p className="empty-note">
@@ -311,12 +355,19 @@ export default function WorldsPage({
                   filename={selectedRow?.filename ?? null}
                   enabled={selectedRow?.enabled ?? false}
                   locked={selectedRow?.locked ?? false}
+                  missing={selectedRow?.missing ?? false}
                   warning={selectedRow?.warning ?? null}
                   writesBlocked={writesBlocked || busy}
                   busy={busy}
                   onToggle={(filename, enabled) => void handleToggle(filename, enabled)}
                   onDelete={(path) => void handleDelete(path)}
+                  onRemoveReference={(filename) => void handleRemoveReference(filename)}
                 />
+                {worldFormat ? (
+                  <p className="panel-note">
+                    This world needs data format {formatVersionLabel(worldFormat)}.
+                  </p>
+                ) : null}
               </>
             ) : (
               <p className="empty-note">
@@ -328,12 +379,4 @@ export default function WorldsPage({
       )}
     </section>
   );
-}
-
-function filenameOf(path: string): string {
-  return path.split('/').filter(Boolean).at(-1) ?? path;
-}
-
-function isFileValue(value: string): boolean {
-  return value.startsWith('file/');
 }

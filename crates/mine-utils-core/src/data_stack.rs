@@ -362,16 +362,26 @@ pub fn remove_references(paths: &DataPaths, filename: &str) -> Result<bool, AppE
 
 /// Restore one backup over `level.dat` and refresh the stack.
 pub fn restore_backup(paths: &DataPaths, file_name: &str) -> Result<DataStack, AppError> {
-    writable(&paths.game_dir, &paths.world_dir, &SystemGuard)?;
-    let outcome = level_backup::restore_guarded(
+    restore_backup_with_guard(paths, file_name, &SystemGuard)
+}
+
+/// [`restore_backup`] with an injectable guard, so tests can fail the check
+/// that runs after the pre-restore backup and prove the current file survives.
+#[doc(hidden)]
+pub fn restore_backup_with_guard(
+    paths: &DataPaths,
+    file_name: &str,
+    guard: &dyn WriteGuard,
+) -> Result<DataStack, AppError> {
+    writable(&paths.game_dir, &paths.world_dir, guard)?;
+    level_backup::restore_guarded(
         &paths.backups_root,
         &paths.world_name(),
         &paths.level_dat_path,
         file_name,
         &paths.backups,
-        || writable(&paths.game_dir, &paths.world_dir, &SystemGuard),
+        || writable(&paths.game_dir, &paths.world_dir, guard),
     )?;
-    let _ = outcome;
     load(paths)
 }
 
@@ -450,6 +460,11 @@ pub fn import_datapack_with(
     reject_symlink_source(source)?;
     let location = source_location(source)?;
     require_data_root(source, location)?;
+    // A running game is refused before anything is copied. A world-level lock
+    // still allows the copy; the pack is left disabled (Locked below).
+    if game_lock::world_locked(&paths.world_dir).is_none() {
+        guard.ensure_writable(&paths.game_dir)?;
+    }
     std::fs::create_dir_all(&paths.datapacks_dir)?;
     let outcome =
         pack_scan::import_pack_with(source, &paths.datapacks_dir, icons, choice, hashes, trash)?;
@@ -528,7 +543,7 @@ fn source_location(source: &Path) -> Result<crate::pack::PackLocation, AppError>
         path: source.to_path_buf(),
     })?;
     if canonical.is_dir() {
-        reject_dir_symlinks(&canonical)?;
+        pack_scan::reject_symlinks(&canonical)?;
         return Ok(PackLocation::Directory);
     }
     if canonical
@@ -548,27 +563,6 @@ fn display_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path.display().to_string())
-}
-
-fn reject_dir_symlinks(dir: &Path) -> Result<(), AppError> {
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(current) = stack.pop() {
-        let entries = std::fs::read_dir(&current).map_err(|_| PackError::NotFound {
-            path: current.clone(),
-        })?;
-        for entry in entries.filter_map(|e| e.ok()) {
-            let file_type = entry
-                .file_type()
-                .map_err(|_| PackError::NotFound { path: entry.path() })?;
-            if file_type.is_symlink() {
-                return Err(PackError::Symlink { path: entry.path() }.into());
-            }
-            if file_type.is_dir() {
-                stack.push(entry.path());
-            }
-        }
-    }
-    Ok(())
 }
 
 /// A datapack must carry a `data` root and a `pack.mcmeta`. A resource-only
@@ -778,6 +772,15 @@ fn commit(
         // Re-check after the backup and immediately before the replace. A game
         // that started during the backup leaves the old bytes in place.
         writable(&paths.game_dir, &paths.world_dir, guard)?;
+        // Re-read immediately before the replace: an external writer that
+        // landed during the backup is rebased once; a second race comes back
+        // as stale instead of clobbering the new content.
+        if std::fs::read(&paths.level_dat_path).ok().as_deref() != Some(before.as_slice()) {
+            if attempt == 1 {
+                return Err(AppError::from(DataStackError::StaleFile));
+            }
+            continue;
+        }
         let rendered =
             level_dat::render_with(&before, &enabled, &disabled).map_err(AppError::from)?;
         level_dat::write_level_dat(&paths.world_dir, &rendered)?;

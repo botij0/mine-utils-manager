@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, Once};
 
 use mine_utils_core::{
-    discover_game_dirs, entry_for, home_dir, merge_game_dirs, validate_game_dir, AppError,
-    BackupsConfig, Config, ConfigStore, DataPaths, GameDirEntry, StackPaths, Theme, WorldPaths,
+    discover_game_dirs, entry_for, home_dir, level_backup, merge_game_dirs, validate_game_dir,
+    AppError, BackupsConfig, Config, ConfigStore, DataPaths, GameDirEntry, StackPaths, Theme,
+    WorldPaths,
 };
 use serde::Serialize;
 use tauri::State;
@@ -71,6 +72,12 @@ impl AppState {
             &self.data_dir,
             self.backups_config(),
         ))
+    }
+
+    /// The shared backup folder for the active game dir's `level.dat` files.
+    pub fn level_backups_root(&self) -> Result<PathBuf, AppError> {
+        let game_dir = self.active_game_dir().ok_or(AppError::NoActiveGameDir)?;
+        Ok(level_backup::root_for(&self.data_dir, &game_dir))
     }
 }
 

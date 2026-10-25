@@ -65,8 +65,6 @@ fn is_level_backup(name: &str) -> bool {
 
 fn world_of(file_name: &str) -> Option<&str> {
     let rest = file_name.strip_suffix("-level.dat")?;
-    let stamp_end = rest.find('T').and_then(|t| rest[..t].find('-').map(|_| t));
-    let _ = stamp_end;
     // The stamp is `YYYYMMDDTHHMMSS.fraction`, which holds no `-`, so the
     // first `-` separates the stamp from the world name.
     let (stamp, world) = rest.split_once('-')?;
@@ -493,7 +491,13 @@ mod tests {
             .unwrap()
             .created
             .unwrap();
-        let second = level_dat::set_enabled(&first, "a.zip", true).unwrap();
+        let second = level_dat::render_with(&first, &["vanilla".to_string()], &[]).unwrap();
+        let second = level_dat::render_with(
+            &second,
+            &["vanilla".to_string(), "file/a.zip".to_string()],
+            &[],
+        )
+        .unwrap();
         std::fs::write(&level, &second).unwrap();
 
         restore_guarded(

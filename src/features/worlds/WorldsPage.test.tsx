@@ -118,6 +118,15 @@ function baseClient(overrides: Partial<WorldsClient> = {}): WorldsClient {
       detection_supported: true,
     }),
     listLevelBackups: async () => [],
+    listAllLevelBackups: async () => [],
+    removeDatapackReference: async () => ({
+      enabled: [],
+      disabled: [],
+      running: null,
+      world_locked: null,
+      stale_locks: [],
+      detection_supported: true,
+    }),
     restoreLevelBackup: async () => ({
       enabled: [],
       disabled: [],
@@ -204,5 +213,205 @@ describe('WorldsPage', () => {
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     await user.click(within(grid).getByRole('button', { name: 'Disable' }));
     await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('Survival 1_17', 'a.zip', false));
+  });
+
+  it('keys duplicate entries by position so both cards render', async () => {
+    const dupClient = baseClient({
+      listDatapacks: async () => ({
+        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        stack: {
+          enabled: [
+            { kind: 'file' as const, value: 'file/dup.zip', filename: 'dup.zip' },
+            { kind: 'file' as const, value: 'file/dup.zip', filename: 'dup.zip' },
+          ],
+          disabled: [],
+          running: null,
+          world_locked: null,
+          stale_locks: [],
+          detection_supported: true,
+        },
+      }),
+    });
+    render(<WorldsPage client={dupClient} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    expect(within(grid).getAllByRole('button', { name: 'dup.zip, enabled' })).toHaveLength(2);
+  });
+
+  it('moves by row index so a duplicate card swaps with its neighbor', async () => {
+    const user = userEvent.setup();
+    const reorder = vi.fn(async () => ({
+      enabled: [],
+      disabled: [],
+      running: null,
+      world_locked: null,
+      stale_locks: [],
+      detection_supported: true,
+    }));
+    const orderClient = baseClient({
+      reorderDatapacks: reorder,
+      listDatapacks: async () => ({
+        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        stack: {
+          enabled: [
+            { kind: 'file' as const, value: 'file/a.zip', filename: 'a.zip' },
+            { kind: 'file' as const, value: 'file/b.zip', filename: 'b.zip' },
+          ],
+          disabled: [],
+          running: null,
+          world_locked: null,
+          stale_locks: [],
+          detection_supported: true,
+        },
+      }),
+    });
+    render(<WorldsPage client={orderClient} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    // Top-first display: b.zip is first, so "Move b.zip down" swaps it below a.zip.
+    await user.click(within(grid).getByRole('button', { name: 'Move b.zip down' }));
+    await waitFor(() =>
+      expect(reorder).toHaveBeenCalledWith(
+        'Survival 1_17',
+        ['file/b.zip', 'file/a.zip'],
+        expect.objectContaining({ enabled: ['file/a.zip', 'file/b.zip'] }),
+      ),
+    );
+  });
+
+  it('shows an installed-but-unlisted pack with an Enable action', async () => {
+    const user = userEvent.setup();
+    const setEnabled = vi.fn(async () => ({
+      enabled: [{ kind: 'file' as const, value: 'file/hand.zip', filename: 'hand.zip' }],
+      disabled: [],
+      running: null,
+      world_locked: null,
+      stale_locks: [],
+      detection_supported: true,
+    }));
+    const handClient = baseClient({
+      setDatapackEnabled: setEnabled,
+      listDatapacks: async () => ({
+        packs: {
+          packs: [
+            {
+              id: '/saves/Survival/hand.zip',
+              name: 'hand',
+              path: '/saves/Survival/datapacks/hand.zip',
+              location: 'zip' as const,
+              kind: 'data' as const,
+              description: 'Hand-dropped',
+              meta: {
+                pack_format: null,
+                min_format: null,
+                max_format: null,
+                supported_formats: null,
+                description: 'Hand-dropped',
+              },
+              format: null,
+              format_range: null,
+              game_label: null,
+              icon: null,
+              error: null,
+              bytes_read: 8,
+            },
+          ],
+          count: 1,
+          bytes_read: 8,
+          elapsed_ms: 1,
+        },
+        stack: {
+          enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
+          disabled: [],
+          running: null,
+          world_locked: null,
+          stale_locks: [],
+          detection_supported: true,
+        },
+      }),
+    });
+    render(<WorldsPage client={handClient} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    expect(within(grid).getByRole('button', { name: /hand\.zip/ })).toBeInTheDocument();
+    await user.click(within(grid).getByRole('button', { name: 'Enable' }));
+    await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('Survival 1_17', 'hand.zip', true));
+  });
+
+  it('disables Enable for a missing file and offers to remove the reference', async () => {
+    const user = userEvent.setup();
+    const remove = vi.fn(async () => ({
+      enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
+      disabled: [],
+      running: null,
+      world_locked: null,
+      stale_locks: [],
+      detection_supported: true,
+    }));
+    const missingClient = baseClient({
+      removeDatapackReference: remove,
+      listDatapacks: async () => ({
+        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        stack: {
+          enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
+          disabled: [{ kind: 'file' as const, value: 'file/gone.zip', filename: 'gone.zip' }],
+          running: null,
+          world_locked: null,
+          stale_locks: [],
+          detection_supported: true,
+        },
+      }),
+    });
+    render(<WorldsPage client={missingClient} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    expect(within(grid).getByText('File missing from datapacks')).toBeInTheDocument();
+    expect(within(grid).getByRole('button', { name: 'Enable' })).toBeDisabled();
+    await user.click(within(grid).getByRole('button', { name: /gone\.zip/ }));
+    await user.click(await screen.findByRole('button', { name: 'Remove reference' }));
+    await waitFor(() => expect(remove).toHaveBeenCalledWith('Survival 1_17', 'gone.zip'));
+  });
+
+  it('renders a broken datapack as an error card', async () => {
+    const brokenClient = baseClient({
+      listDatapacks: async () => ({
+        packs: {
+          packs: [
+            {
+              id: '/saves/Survival/broken.zip',
+              name: 'broken',
+              path: '/saves/Survival/datapacks/broken.zip',
+              location: 'zip' as const,
+              kind: 'data' as const,
+              description: '',
+              meta: {
+                pack_format: null,
+                min_format: null,
+                max_format: null,
+                supported_formats: null,
+                description: '',
+              },
+              format: null,
+              format_range: null,
+              game_label: null,
+              icon: null,
+              error: { code: 'pack_broken_archive', message: 'broken.zip is not readable' },
+              bytes_read: 8,
+            },
+          ],
+          count: 1,
+          bytes_read: 8,
+          elapsed_ms: 1,
+        },
+        stack: {
+          enabled: [{ kind: 'file' as const, value: 'file/broken.zip', filename: 'broken.zip' }],
+          disabled: [],
+          running: null,
+          world_locked: null,
+          stale_locks: [],
+          detection_supported: true,
+        },
+      }),
+    });
+    render(<WorldsPage client={brokenClient} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    expect(within(grid).getByText('Broken datapack')).toBeInTheDocument();
+    expect(within(grid).getByText('broken.zip is not readable')).toBeInTheDocument();
   });
 });

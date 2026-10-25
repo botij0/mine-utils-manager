@@ -436,6 +436,16 @@ export const mockClient: IpcClient = {
     mockDeleteDatapack(world, path);
     return { removed_references: true, stack: mockDataStack(world) };
   },
+  async removeDatapackReference(world: string, filename: string) {
+    await delay();
+    mockAssertDatapackWritable(world);
+    const state = stackStateOf(world);
+    const value = `file/${filename}`;
+    state.enabled = state.enabled.filter((entry) => entry !== value);
+    state.disabled = state.disabled.filter((entry) => entry !== value);
+    snapshotLevelBackup(world);
+    return mockDataStack(world);
+  },
   async setDatapackEnabled(world: string, filename: string, enabled: boolean) {
     await delay();
     mockAssertDatapackWritable(world);
@@ -458,6 +468,15 @@ export const mockClient: IpcClient = {
         display,
         world: entryWorld,
       }));
+  },
+  async listAllLevelBackups() {
+    await delay();
+    return mockLevelBackups.map(({ file_name, bytes, display, world }) => ({
+      file_name,
+      bytes,
+      display,
+      world,
+    }));
   },
   async restoreLevelBackup(world: string, backup: string) {
     await delay();
@@ -773,7 +792,7 @@ function mockAssertDatapackWritable(world: string) {
   if (mockGameState === 'running' || mockLockedWorld === world) {
     throw new IpcError(
       'game_running',
-      `Minecraft is running (/home/demo/.minecraft/saves/${world}/session.lock is locked by pid 4242); close it before Mine Utils writes level.dat`,
+      `Minecraft is running (/home/demo/.minecraft/saves/${world}/session.lock is locked by pid 4242); close it before Mine Utils writes game files`,
     );
   }
 }
@@ -861,11 +880,19 @@ function mockImportDatapack(
   }
   const taken = packs.some((item) => item.filename.toLowerCase() === lower);
   if (taken && choice !== 'replace') return { status: 'collision', name: base };
+  // A running game is refused before anything is copied. A world-level lock
+  // still allows the copy; the pack is left disabled (locked below).
+  if (mockGameState === 'running') {
+    throw new IpcError(
+      'game_running',
+      `Minecraft is running (/home/demo/.minecraft/saves/${world}/session.lock is locked by pid 4242); close it before Mine Utils writes game files`,
+    );
+  }
   mockWorldPacks[world] = [
     ...packs,
     { filename: base, kind: 'data', minFormat: 7, maxFormat: 7, gameLabel: '1.17 to 1.17.1' },
   ];
-  if (mockGameState === 'running' || mockLockedWorld === world) {
+  if (mockLockedWorld === world) {
     return {
       status: 'locked',
       filename: base,

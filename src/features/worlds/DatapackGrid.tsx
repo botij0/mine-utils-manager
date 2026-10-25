@@ -8,6 +8,8 @@ export interface DatapackRow {
   enabled: boolean;
   /** Foreign entries are locked: they never toggle or move. */
   locked: boolean;
+  /** True when the `file/` entry has no pack on disk. */
+  missing: boolean;
   warning: string | null;
   filename: string;
   /** False at the top of the enabled stack or under a locked entry. */
@@ -18,12 +20,14 @@ export interface DatapackRow {
 
 interface DatapackGridProps {
   rows: DatapackRow[];
+  /** True while the first listing loads. Rows stay visible on every
+   *  later refresh; the list is never replaced by a spinner mid-write. */
   loading: boolean;
   selectedFilename: string | null;
   onSelect: (filename: string) => void;
   writesBlocked: boolean;
   onToggle: (filename: string, enabled: boolean) => void;
-  onMove: (filename: string, direction: -1 | 1) => void;
+  onMove: (index: number, direction: -1 | 1) => void;
 }
 
 /** The enabled stack, top-first: the first card loads last and wins. Foreign
@@ -38,18 +42,45 @@ export default function DatapackGrid({
   onToggle,
   onMove,
 }: DatapackGridProps) {
-  if (loading) {
+  if (loading && rows.length === 0) {
     return <p className="empty-note">Loading datapacks…</p>;
   }
   if (rows.length === 0) {
     return <p className="empty-note">No datapacks yet. Import a zip or a folder to add one.</p>;
   }
   return (
-    <ul className="datapack-grid" aria-label="Datapack stack">
-      {rows.map((row) => {
+    <ul className="datapack-grid" aria-label="Datapack stack" aria-busy={loading}>
+      {rows.map((row, index) => {
         const name =
           row.entry.kind === 'file' ? row.entry.filename : row.entry.value;
-        const key = row.entry.value;
+        // Rows are keyed by position, not by value: `Enabled` may hold the
+        // same `file/` value twice, and value keys would mis-render.
+        const key = `${row.entry.value}#${index}`;
+        const broken = row.pack?.error ?? null;
+        if (broken) {
+          return (
+            <li
+              key={key}
+              className={`datapack-card datapack-card-broken${selectedFilename === name ? ' is-selected' : ''}`}
+            >
+              <button
+                type="button"
+                className="datapack-card-main"
+                onClick={() => onSelect(name)}
+                aria-label={`${name}, broken`}
+              >
+                <span className="datapack-name">{name}</span>
+                <span className="datapack-kind">Broken datapack</span>
+                <span className="datapack-error" role="alert">
+                  {broken.message}
+                </span>
+              </button>
+              <span className="datapack-lock" title={broken.message}>
+                Error
+              </span>
+            </li>
+          );
+        }
         return (
           <li
             key={key}
@@ -78,7 +109,8 @@ export default function DatapackGrid({
                 <button
                   type="button"
                   className="button"
-                  disabled={writesBlocked}
+                  disabled={writesBlocked || row.missing}
+                  title={row.missing ? 'The file is gone; remove the reference instead' : undefined}
                   onClick={() => onToggle(name, !row.enabled)}
                 >
                   {row.enabled ? 'Disable' : 'Enable'}
@@ -91,7 +123,7 @@ export default function DatapackGrid({
                       disabled={writesBlocked || !row.canMoveUp}
                       title={row.canMoveUp ? undefined : 'Locked entries cannot move'}
                       aria-label={`Move ${name} up`}
-                      onClick={() => onMove(name, -1)}
+                      onClick={() => onMove(index, -1)}
                     >
                       ↑
                     </button>
@@ -101,7 +133,7 @@ export default function DatapackGrid({
                       disabled={writesBlocked || !row.canMoveDown}
                       title={row.canMoveDown ? undefined : 'Locked entries cannot move'}
                       aria-label={`Move ${name} down`}
-                      onClick={() => onMove(name, 1)}
+                      onClick={() => onMove(index, 1)}
                     >
                       ↓
                     </button>

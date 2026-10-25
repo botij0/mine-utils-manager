@@ -21,7 +21,7 @@ pub use backup::{BackupInfo, BackupOutcome};
 pub use config::{
     load_config, save_config, BackupsConfig, Config, ConfigStore, Theme, CONFIG_SCHEMA,
 };
-pub use data_format_table::data_format_for_version;
+pub use data_format_table::{data_format_for_version, data_format_for_version_in};
 pub use data_stack::{
     DataPaths, DataSnapshot, DataStack, DataStackEntry, DataStackError, DataWrite,
     DatapackDeleteOutcome, DatapackImportOutcome,

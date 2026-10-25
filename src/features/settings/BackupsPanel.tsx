@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { IpcClient } from '../../lib/ipc';
+import type { BackupsClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import type {
   BackupInfo,
@@ -10,7 +10,7 @@ import type {
 } from '../../lib/types';
 
 interface BackupsPanelProps {
-  client: IpcClient;
+  client: BackupsClient;
   /** Changes here must reload the list; a game-running change must not. */
   activeGameDir?: string | null;
   /** When the parent already tracks the game guard, it decides the block. */
@@ -103,28 +103,31 @@ export default function BackupsPanel({
     };
   }, [client, activeGameDir, gameRunning]);
 
-  // The level.dat backups of every world, grouped by world. Worlds without
-  // backups keep an empty group so the section names them.
+  // The `level.dat` backups of every world in one batch call, grouped by
+  // world. Groups come from the backups themselves, so a corrupt `level.dat`
+  // (the main restore case) or a deleted one still shows its backups, and a
+  // world without `level.dat` is listed by its backups.
   useEffect(() => {
     let cancelled = false;
     setLevelLoading(true);
     setLevelError(null);
     client
-      .listWorlds()
-      .then(async (worlds) => {
-        const groups: { dirName: string; label: string; backups: LevelBackupInfo[] }[] = [];
-        for (const world of worlds) {
-          if (world.issue) continue;
-          try {
-            const backups = await client.listLevelBackups(world.dir_name);
-            if (cancelled) return;
-            groups.push({ dirName: world.dir_name, label: world.level_name, backups });
-          } catch {
-            if (cancelled) return;
-            groups.push({ dirName: world.dir_name, label: world.level_name, backups: [] });
-          }
+      .listAllLevelBackups()
+      .then((all) => {
+        if (cancelled) return;
+        const byWorld = new Map<string, LevelBackupInfo[]>();
+        for (const backup of all) {
+          const group = byWorld.get(backup.world);
+          if (group) group.push(backup);
+          else byWorld.set(backup.world, [backup]);
         }
-        if (!cancelled) setLevelGroups(groups);
+        setLevelGroups(
+          [...byWorld.entries()].map(([dirName, backups]) => ({
+            dirName,
+            label: dirName,
+            backups,
+          })),
+        );
       })
       .catch((err) => {
         if (cancelled) return;

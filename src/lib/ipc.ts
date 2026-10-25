@@ -41,9 +41,23 @@ export interface WorldsClient {
   listDatapacks(world: string): Promise<DatapackListing>;
   importDatapack(world: string, path: string, choice?: ImportChoice): Promise<DatapackImportOutcome>;
   deleteDatapack(world: string, path: string): Promise<DatapackDeleteOutcome>;
+  removeDatapackReference(world: string, filename: string): Promise<DataStack>;
   setDatapackEnabled(world: string, filename: string, enabled: boolean): Promise<DataStack>;
   reorderDatapacks(world: string, order: string[], expected: DataSnapshot): Promise<DataStack>;
   listLevelBackups(world: string): Promise<LevelBackupInfo[]>;
+  listAllLevelBackups(): Promise<LevelBackupInfo[]>;
+  restoreLevelBackup(world: string, backup: string): Promise<DataStack>;
+}
+
+/** The narrow surface `BackupsPanel` needs: options backups, the game guard,
+ *  and every world's `level.dat` backups in one batch call. Tests fake this
+ *  instead of the whole `IpcClient`. */
+export interface BackupsClient {
+  listOptionsBackups(): Promise<BackupInfo[]>;
+  restoreOptionsBackup(backup: string): Promise<ResourceStack>;
+  getResourceStack(): Promise<ResourceStack>;
+  listLevelBackups(world: string): Promise<LevelBackupInfo[]>;
+  listAllLevelBackups(): Promise<LevelBackupInfo[]>;
   restoreLevelBackup(world: string, backup: string): Promise<DataStack>;
 }
 
@@ -172,11 +186,14 @@ const tauriClient: IpcClient = {
     }),
   deleteDatapack: (world, path) =>
     call<DatapackDeleteOutcome>('delete_datapack', { world, path }),
+  removeDatapackReference: (world, filename) =>
+    call<DataStack>('remove_datapack_reference', { world, filename }),
   setDatapackEnabled: (world, filename, enabled) =>
     call<DataStack>('set_datapack_enabled', { world, filename, enabled }),
   reorderDatapacks: (world, order, expected) =>
     call<DataStack>('reorder_datapacks', { world, order, expected }),
   listLevelBackups: (world) => call<LevelBackupInfo[]>('list_level_backups', { world }),
+  listAllLevelBackups: () => call<LevelBackupInfo[]>('list_all_level_backups'),
   restoreLevelBackup: (world, backup) =>
     call<DataStack>('restore_level_backup', { world, backup }),
 };
@@ -216,11 +233,14 @@ export const ipc: IpcClient = {
   listDatapacks: (world) => pick().listDatapacks(world),
   importDatapack: (world, path, choice) => pick().importDatapack(world, path, choice),
   deleteDatapack: (world, path) => pick().deleteDatapack(world, path),
+  removeDatapackReference: (world, filename) =>
+    pick().removeDatapackReference(world, filename),
   setDatapackEnabled: (world, filename, enabled) =>
     pick().setDatapackEnabled(world, filename, enabled),
   reorderDatapacks: (world, order, expected) =>
     pick().reorderDatapacks(world, order, expected),
   listLevelBackups: (world) => pick().listLevelBackups(world),
+  listAllLevelBackups: () => pick().listAllLevelBackups(),
   restoreLevelBackup: (world, backup) => pick().restoreLevelBackup(world, backup),
 };
 
@@ -232,16 +252,21 @@ function pick(): IpcClient {
  * Open the native picker. `directory` picks a pack folder instead of a zip;
  * the mock runtime has no picker, so it returns null.
  */
-export async function pickPackPath(directory = false): Promise<string | null> {
+export async function pickPackPath(
+  directory = false,
+  title?: string,
+  extensions?: string[],
+): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   const selected = await call<string | string[] | null>('plugin:dialog|open', {
     options: {
-      title: directory ? 'Import a pack folder' : 'Import a resource pack',
+      title:
+        title ?? (directory ? 'Import a pack folder' : 'Import a resource pack'),
       multiple: false,
       directory,
       filters: directory
         ? undefined
-        : [{ name: 'Resource packs', extensions: ['zip'] }],
+        : [{ name: 'Packs', extensions: extensions ?? ['zip'] }],
     },
   });
   if (Array.isArray(selected)) return selected[0] ?? null;

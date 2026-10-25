@@ -201,6 +201,9 @@ export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
     async deleteDatapack() {
       return { removed_references: false, stack: dataStack() };
     },
+    async removeDatapackReference() {
+      return dataStack();
+    },
     async setDatapackEnabled() {
       return dataStack();
     },
@@ -208,6 +211,9 @@ export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
       return dataStack();
     },
     async listLevelBackups(): Promise<LevelBackupInfo[]> {
+      return [];
+    },
+    async listAllLevelBackups(): Promise<LevelBackupInfo[]> {
       return [];
     },
     async restoreLevelBackup() {

@@ -727,7 +727,7 @@ fn detect_kind(path: &Path, location: PackLocation) -> Result<PackKind, AppError
     }
 }
 
-fn reject_symlinks(root: &Path) -> Result<(), AppError> {
+pub(crate) fn reject_symlinks(root: &Path) -> Result<(), AppError> {
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;
         let file_type = entry.file_type()?;

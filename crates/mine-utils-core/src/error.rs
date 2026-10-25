@@ -86,7 +86,7 @@ impl fmt::Display for AppError {
             AppError::Backup { reason } => write!(f, "backup failed: {reason}"),
             AppError::GameRunning { running } => write!(
                 f,
-                "Minecraft is running ({}); close it before Mine Utils writes options.txt",
+                "Minecraft is running ({}); close it before Mine Utils writes game files",
                 running.detail
             ),
         }

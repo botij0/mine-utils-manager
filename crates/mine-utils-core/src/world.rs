@@ -70,10 +70,57 @@ impl WorldPaths {
             });
         }
         let world_dir = game_dir.join("saves").join(world);
+        let resolved = resolve_inside_saves(game_dir, &world_dir)?;
         Ok(WorldPaths {
             game_dir: game_dir.to_path_buf(),
-            world_dir,
+            world_dir: resolved,
         })
+    }
+}
+
+/// Resolve a world dir and prove it stays inside the canonical `saves` root.
+/// A symlinked `saves/<name>` (even one pointing elsewhere on disk) is
+/// rejected before any write, import, or delete touches it.
+fn resolve_inside_saves(
+    game_dir: &Path,
+    world_dir: &Path,
+) -> Result<PathBuf, crate::error::AppError> {
+    let reject = |reason: String| {
+        Err(crate::error::AppError::World {
+            reason: format!("{}: {reason}", world_dir.display()),
+        })
+    };
+    if let Ok(meta) = std::fs::symlink_metadata(world_dir) {
+        if meta.file_type().is_symlink() {
+            return reject("a symlinked world is never a write target".to_string());
+        }
+    }
+    let canonical_game = std::fs::canonicalize(game_dir).unwrap_or_else(|_| game_dir.to_path_buf());
+    let canonical_saves = std::fs::canonicalize(canonical_game.join("saves"))
+        .unwrap_or_else(|_| canonical_game.join("saves"));
+    let resolved = std::fs::canonicalize(world_dir)
+        .unwrap_or_else(|_| canonical_saves.join(world_dir.file_name().unwrap_or_default()));
+    if resolved != canonical_saves && !resolved.starts_with(&canonical_saves) {
+        return reject(format!("is outside {}", canonical_saves.display()));
+    }
+    Ok(resolved)
+}
+
+/// True only for a real directory: symlinks (even to directories) are
+/// rejected so a linked `saves` entry can never become a write target.
+fn is_real_dir(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta.file_type().is_dir() && !meta.file_type().is_symlink(),
+        Err(_) => false,
+    }
+}
+
+/// A real `level.dat` file. A symlink is never followed: it could point
+/// outside the game dir.
+fn is_level_file(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta.file_type().is_file() && !meta.file_type().is_symlink(),
+        Err(_) => false,
     }
 }
 
@@ -85,24 +132,28 @@ fn issue(err: &level_dat::LevelDatError) -> WorldIssue {
 }
 
 /// List every world in `saves`, sorted by directory name. A missing `saves`
-/// directory means no worlds, not an error.
+/// directory means no worlds, not an error. Symlinked entries are skipped:
+/// following one could read or write outside the game dir.
 pub fn scan_worlds(game_dir: &Path, icons: &IconCache) -> Vec<World> {
     let saves = game_dir.join("saves");
     let mut dirs: Vec<PathBuf> = match std::fs::read_dir(&saves) {
         Ok(entries) => entries
             .filter_map(|entry| entry.ok())
             .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
+            .filter(|path| is_real_dir(path))
             .collect(),
         Err(_) => return Vec::new(),
     };
     dirs.sort();
+    // One game-guard probe for the whole scan; per-world session locks are
+    // still probed individually inside `read_world`.
+    let status = game_lock::check(game_dir);
     dirs.into_iter()
-        .filter_map(|dir| read_world(game_dir, &dir, icons))
+        .filter_map(|dir| read_world(&dir, icons, &status))
         .collect()
 }
 
-fn read_world(game_dir: &Path, dir: &Path, icons: &IconCache) -> Option<World> {
+fn read_world(dir: &Path, icons: &IconCache, status: &game_lock::GameStatus) -> Option<World> {
     let dir_name = dir
         .file_name()
         .and_then(|name| name.to_str())
@@ -111,7 +162,11 @@ fn read_world(game_dir: &Path, dir: &Path, icons: &IconCache) -> Option<World> {
     if dir_name.is_empty() {
         return None;
     }
-    if !dir.join("level.dat").is_file() {
+    if !is_real_dir(dir) {
+        // A symlinked `saves` entry is never a world the app opens.
+        return None;
+    }
+    if !is_level_file(&dir.join("level.dat")) {
         // Not a world the app can open; skip it silently.
         return None;
     }
@@ -119,14 +174,13 @@ fn read_world(game_dir: &Path, dir: &Path, icons: &IconCache) -> Option<World> {
     let stale_lock = dir.join("session.lock").is_file()
         && world_locked.is_none()
         && game_lock::lock_detection_supported();
-    let status = game_lock::check(game_dir);
     let mut world = World {
         dir_name: dir_name.clone(),
         path: dir.to_path_buf(),
         level_name: dir_name.clone(),
         version: None,
         icon: None,
-        running: status.running,
+        running: status.running.clone(),
         world_locked,
         stale_lock,
         detection_supported: status.supported,
@@ -316,5 +370,37 @@ mod tests {
             assert!(WorldPaths::for_world(game, bad).is_err());
         }
         assert!(WorldPaths::for_world(game, "Survival 1_17").is_ok());
+    }
+
+    #[test]
+    fn symlinked_worlds_are_skipped_and_rejected_for_writes() {
+        let (dir, icons) = game_with(&[("real", Some(level_dat_bytes(Some("1.21.10"), true)))]);
+        let game = dir.path().join("game");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("level.dat"), b"not a world").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, game.join("saves").join("linked")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            game.join("saves").join("real"),
+            game.join("saves").join("alias"),
+        )
+        .unwrap();
+        let worlds = scan_worlds(&game, &icons);
+        assert_eq!(worlds.len(), 1, "only the real dir scans, got {worlds:?}");
+        assert_eq!(worlds[0].dir_name, "real");
+        #[cfg(unix)]
+        {
+            assert!(
+                WorldPaths::for_world(&game, "linked").is_err(),
+                "a symlink out of saves is never a write target"
+            );
+            assert!(
+                WorldPaths::for_world(&game, "alias").is_err(),
+                "even a symlink staying inside saves is rejected"
+            );
+            assert!(WorldPaths::for_world(&game, "real").is_ok());
+        }
     }
 }

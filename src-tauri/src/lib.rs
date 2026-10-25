@@ -85,7 +85,9 @@ pub fn run() {
             commands::worlds::set_datapack_enabled,
             commands::worlds::reorder_datapacks,
             commands::worlds::delete_datapack,
+            commands::worlds::remove_datapack_reference,
             commands::worlds::list_level_backups,
+            commands::worlds::list_all_level_backups,
             commands::worlds::restore_level_backup,
         ])
         .run(tauri::generate_context!())

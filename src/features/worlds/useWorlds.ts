@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { formatVersionLabel } from '../../lib/format';
 import type { WorldsClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import type {
@@ -37,6 +38,7 @@ export interface WorldsState {
     choice?: ImportChoice,
   ) => Promise<DatapackImportOutcome>;
   deleteDatapack: (path: string) => Promise<DatapackDeleteOutcomeSummary>;
+  removeDatapackReference: (filename: string) => Promise<void>;
   clearActionError: () => void;
 }
 
@@ -72,7 +74,7 @@ export function compatibilityWarning(
   if (!pack.format_range || !format || !worldName) return null;
   if (isCompatible(pack.format_range, format)) return null;
   const packLabel = pack.game_label ?? 'an unknown range';
-  return `Built for ${packLabel}, but ${worldName} needs data format ${format.major}.${format.minor}. It may not load, but you can still enable it.`;
+  return `Built for ${packLabel}, but ${worldName} needs data format ${formatVersionLabel(format)}. It may not load, but you can still enable it.`;
 }
 
 /**
@@ -93,6 +95,11 @@ export function useWorlds(client: WorldsClient): WorldsState {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<IpcError | null>(null);
   const mounted = useRef(true);
+  // Monotonic id of the latest mutation. A response from an older request,
+  // or for a world that is no longer selected, is ignored.
+  const requestId = useRef(0);
+  const selectedRef = useRef<string | null>(null);
+  selectedRef.current = selectedName;
 
   useEffect(() => {
     mounted.current = true;
@@ -172,41 +179,64 @@ export function useWorlds(client: WorldsClient): WorldsState {
   const toggleDatapack = useCallback(
     async (filename: string, enabled: boolean) => {
       if (!selectedName) return;
+      const world = selectedName;
+      const request = (requestId.current += 1);
       setBusy(true);
       setActionError(null);
       try {
-        await refreshListing();
-        const next = await client.setDatapackEnabled(selectedName, filename, enabled);
-        if (mounted.current) setStack(next);
+        // No pre-toggle fetch: the backend re-reads `level.dat` anyway, and
+        // the extra round-trip only flashes the loading state.
+        const next = await client.setDatapackEnabled(world, filename, enabled);
+        if (!mounted.current) return;
+        if (selectedRef.current !== world || request !== requestId.current) return;
+        setStack(next);
       } catch (err) {
-        if (mounted.current) setActionError(toAppError(err));
+        if (!mounted.current) return;
+        if (selectedRef.current !== world || request !== requestId.current) return;
+        setActionError(toAppError(err));
         throw err;
       } finally {
-        if (mounted.current) setBusy(false);
+        if (mounted.current && selectedRef.current === world && request === requestId.current) {
+          setBusy(false);
+        }
       }
     },
-    [client, selectedName, refreshListing],
+    [client, selectedName],
   );
 
   const reorderDatapacks = useCallback(
     async (order: string[]) => {
       if (!selectedName) return;
+      const world = selectedName;
+      const request = (requestId.current += 1);
       setBusy(true);
       setActionError(null);
       try {
-        const current = stack ?? (await client.listDatapacks(selectedName)).stack;
-        const expected = dataSnapshotOf(current);
-        await refreshListing();
-        const next = await client.reorderDatapacks(selectedName, order, expected);
-        if (mounted.current) setStack(next);
+        // Build `expected` from the fresh listing, not from a possibly stale
+        // `stack`: the previous code snapshotted first and refreshed after,
+        // so the guard compared against the wrong file set.
+        const fresh = await client.listDatapacks(world);
+        if (!mounted.current) return;
+        if (selectedRef.current !== world || request !== requestId.current) return;
+        setPacks(fresh.packs.packs);
+        setStack(fresh.stack);
+        const expected = dataSnapshotOf(fresh.stack);
+        const next = await client.reorderDatapacks(world, order, expected);
+        if (!mounted.current) return;
+        if (selectedRef.current !== world || request !== requestId.current) return;
+        setStack(next);
       } catch (err) {
-        if (mounted.current) setActionError(toAppError(err));
+        if (!mounted.current) return;
+        if (selectedRef.current !== world || request !== requestId.current) return;
+        setActionError(toAppError(err));
         throw err;
       } finally {
-        if (mounted.current) setBusy(false);
+        if (mounted.current && selectedRef.current === world && request === requestId.current) {
+          setBusy(false);
+        }
       }
     },
-    [client, selectedName, stack, refreshListing],
+    [client, selectedName],
   );
 
   const importDatapack = useCallback(
@@ -228,17 +258,57 @@ export function useWorlds(client: WorldsClient): WorldsState {
   const deleteDatapack = useCallback(
     async (path: string): Promise<DatapackDeleteOutcomeSummary> => {
       if (!selectedName) return { removedReferences: false };
+      const world = selectedName;
+      const request = (requestId.current += 1);
       setBusy(true);
       setActionError(null);
       try {
-        const outcome = await client.deleteDatapack(selectedName, path);
+        const outcome = await client.deleteDatapack(world, path);
+        if (!mounted.current) return { removedReferences: outcome.removed_references };
+        if (selectedRef.current !== world || request !== requestId.current) {
+          return { removedReferences: outcome.removed_references };
+        }
         await refreshListing();
+        if (selectedRef.current !== world || request !== requestId.current) {
+          return { removedReferences: outcome.removed_references };
+        }
         return { removedReferences: outcome.removed_references };
       } catch (err) {
-        if (mounted.current) setActionError(toAppError(err));
+        if (!mounted.current) throw err;
+        if (selectedRef.current !== world || request !== requestId.current) throw err;
+        setActionError(toAppError(err));
         throw err;
       } finally {
-        if (mounted.current) setBusy(false);
+        if (mounted.current && selectedRef.current === world && request === requestId.current) {
+          setBusy(false);
+        }
+      }
+    },
+    [client, selectedName, refreshListing],
+  );
+
+  const removeDatapackReference = useCallback(
+    async (filename: string) => {
+      if (!selectedName) return;
+      const world = selectedName;
+      const request = (requestId.current += 1);
+      setBusy(true);
+      setActionError(null);
+      try {
+        const next = await client.removeDatapackReference(world, filename);
+        if (!mounted.current) return;
+        if (selectedRef.current !== world || request !== requestId.current) return;
+        setStack(next);
+        await refreshListing();
+      } catch (err) {
+        if (!mounted.current) return;
+        if (selectedRef.current !== world || request !== requestId.current) return;
+        setActionError(toAppError(err));
+        throw err;
+      } finally {
+        if (mounted.current && selectedRef.current === world && request === requestId.current) {
+          setBusy(false);
+        }
       }
     },
     [client, selectedName, refreshListing],
@@ -266,6 +336,7 @@ export function useWorlds(client: WorldsClient): WorldsState {
     reorderDatapacks,
     importDatapack,
     deleteDatapack,
+    removeDatapackReference,
     clearActionError,
   };
 }

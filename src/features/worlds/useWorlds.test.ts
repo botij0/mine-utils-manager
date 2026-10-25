@@ -72,9 +72,11 @@ function client(overrides: Partial<WorldsClient> = {}): WorldsClient {
     }),
     importDatapack: async () => ({ status: 'skipped' }),
     deleteDatapack: async () => ({ removed_references: true, stack: stack() }),
+    removeDatapackReference: async () => stack(),
     setDatapackEnabled: async () => stack(),
     reorderDatapacks: async () => stack(),
     listLevelBackups: async () => [],
+    listAllLevelBackups: async () => [],
     restoreLevelBackup: async () => stack(),
     ...overrides,
   };
@@ -168,5 +170,33 @@ describe('useWorlds', () => {
       await result.current.deleteDatapack('/saves/a.zip');
     });
     expect(remove).toHaveBeenCalled();
+  });
+
+  it('ignores a toggle response after the selection changes', async () => {
+    let resolveToggle!: (value: DataStack) => void;
+    const pending = new Promise<DataStack>((resolve) => {
+      resolveToggle = resolve;
+    });
+    const stale = stack({ enabled: [] });
+    const second = world({ dir_name: 'Creative Flat', path: '/saves/Creative Flat' });
+    const twoWorlds = client({
+      listWorlds: async () => [world(), second],
+      setDatapackEnabled: () => pending,
+    });
+    const { result } = renderHook(() => useWorlds(twoWorlds));
+    await act(async () => {});
+    const flight = result.current.toggleDatapack('a.zip', false);
+    await act(async () => {
+      result.current.select('Creative Flat');
+    });
+    await act(async () => {
+      resolveToggle(stale);
+      await flight;
+    });
+    await act(async () => {});
+    // The stale response for Survival 1_17 never touches the new selection.
+    expect(result.current.selected?.dir_name).toBe('Creative Flat');
+    expect(result.current.stack).not.toBe(stale);
+    expect(result.current.actionError).toBeNull();
   });
 });

@@ -1,10 +1,11 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { IpcClient } from '../../lib/ipc';
+import type { BackupsClient } from '../../lib/ipc';
 import type {
   BackupInfo,
   GameRunning,
+  LevelBackupInfo,
   ResourceStack,
 } from '../../lib/types';
 import { IpcError } from '../../lib/types';
@@ -48,45 +49,19 @@ function makeClient({
 } = {}) {
   const restores: string[] = [];
   const levelRestores: string[] = [];
-  const client: IpcClient & { restores: string[]; levelRestores: string[] } = {
+  const levelBackups: LevelBackupInfo[] = [
+    {
+      file_name: '20261025T101500.000000000-Survival 1_17-level.dat',
+      world: 'Survival 1_17',
+      bytes: 10258,
+      display: '2026-10-25 10:15:00 UTC',
+    },
+  ];
+  const client: BackupsClient & { restores: string[]; levelRestores: string[] } = {
     restores,
     levelRestores,
-    async listGameDirs() {
-      return [];
-    },
-    async addGameDir() {
-      throw new Error('not used');
-    },
-    async removeGameDir() {
-      throw new Error('not used');
-    },
-    async setActiveGameDir() {
-      throw new Error('not used');
-    },
-    async getConfig() {
-      throw new Error('not used');
-    },
-    async setTheme() {
-      throw new Error('not used');
-    },
-    async getStartupWarning() {
-      return null;
-    },
-    async listResourcePacks() {
-      return { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 };
-    },
-    async importResourcePack(): Promise<never> {
-      throw new Error('not used');
-    },
-    async deleteResourcePack() {},
     async getResourceStack() {
       return { ...STACK, running };
-    },
-    async setResourcePackEnabled(): Promise<ResourceStack> {
-      throw new Error('not used');
-    },
-    async reorderResourceStack(): Promise<ResourceStack> {
-      throw new Error('not used');
     },
     async listOptionsBackups() {
       if (error) throw error;
@@ -96,49 +71,11 @@ function makeClient({
       restores.push(backup);
       return restored;
     },
-    async listWorlds() {
-      return [
-        {
-          dir_name: 'Survival 1_17',
-          path: '/home/demo/.minecraft/saves/Survival 1_17',
-          level_name: 'Survival 1.17',
-          version: { name: '1.21.10', data_format: { major: 88, minor: 0 } },
-          icon: null,
-          running: null,
-          world_locked: null,
-          stale_lock: false,
-          detection_supported: true,
-          issue: null,
-        },
-      ];
-    },
-    async listDatapacks(): Promise<never> {
-      return unusedWorlds();
-    },
-    async importDatapack(): Promise<never> {
-      return unusedWorlds();
-    },
-    async deleteDatapack(): Promise<never> {
-      return unusedWorlds();
-    },
-    async setDatapackEnabled(): Promise<import('../../lib/types').DataStack> {
-      return unusedWorlds();
-    },
-    async reorderDatapacks(): Promise<import('../../lib/types').DataStack> {
-      return unusedWorlds();
-    },
     async listLevelBackups(world: string) {
-      if (world === 'Survival 1_17') {
-        return [
-          {
-            file_name: '20261025T101500.000000000-Survival 1_17-level.dat',
-            world: 'Survival 1_17',
-            bytes: 10258,
-            display: '2026-10-25 10:15:00 UTC',
-          },
-        ];
-      }
-      return [];
+      return levelBackups.filter((entry) => entry.world === world);
+    },
+    async listAllLevelBackups() {
+      return [...levelBackups];
     },
     async restoreLevelBackup(world: string, backup: string) {
       levelRestores.push(`${world}/${backup}`);
@@ -153,10 +90,6 @@ function makeClient({
     },
   };
   return client;
-}
-
-function unusedWorlds(): never {
-  throw new Error('not used');
 }
 
 describe('BackupsPanel', () => {
@@ -248,12 +181,12 @@ describe('BackupsPanel', () => {
     render(<BackupsPanel client={client} />);
 
     expect(await screen.findByText('World level.dat')).toBeInTheDocument();
-    expect(await screen.findByText('Survival 1.17')).toBeInTheDocument();
+    expect(await screen.findByText('Survival 1_17')).toBeInTheDocument();
     expect(
       screen.getByText('20261025T101500.000000000-Survival 1_17-level.dat'),
     ).toBeInTheDocument();
 
-    const region = screen.getByRole('region', { name: 'Survival 1.17 backups' });
+    const region = screen.getByRole('region', { name: 'Survival 1_17 backups' });
     const { getByRole } = within(region);
     await user.click(getByRole('button', { name: 'Restore' }));
 
@@ -264,6 +197,33 @@ describe('BackupsPanel', () => {
     );
   });
 
+  it('shows backups for corrupt and missing worlds without the world list', async () => {
+    const client = makeClient();
+    const original = client.listAllLevelBackups;
+    client.listAllLevelBackups = async () => [
+      ...(await original()),
+      {
+        file_name: '20261025T101500.000000000-Broken World-level.dat',
+        world: 'Broken World',
+        bytes: 512,
+        display: '2026-10-25 10:15:00 UTC',
+      },
+      {
+        file_name: '20261025T101500.000000000-Deleted World-level.dat',
+        world: 'Deleted World',
+        bytes: 512,
+        display: '2026-10-25 10:15:00 UTC',
+      },
+    ];
+    render(<BackupsPanel client={client} />);
+
+    expect(await screen.findByText('Broken World')).toBeInTheDocument();
+    expect(await screen.findByText('Deleted World')).toBeInTheDocument();
+    expect(
+      screen.getByText('20261025T101500.000000000-Broken World-level.dat'),
+    ).toBeInTheDocument();
+  });
+
   it('surfaces the backend game_running error and asks the app guard to re-check', async () => {
     const user = userEvent.setup();
     const client = makeClient();
@@ -271,7 +231,7 @@ describe('BackupsPanel', () => {
     client.restoreOptionsBackup = async () => {
       throw new IpcError(
         'game_running',
-        'Minecraft is running (pid 4242 runs java); close it before Mine Utils writes options.txt',
+        'Minecraft is running (pid 4242 runs java); close it before Mine Utils writes game files',
       );
     };
     render(

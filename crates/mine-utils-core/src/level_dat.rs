@@ -19,6 +19,8 @@ use fastnbt::Value;
 pub enum LevelDatError {
     #[error("level.dat is not valid gzip: {reason}")]
     CorruptGzip { reason: String },
+    #[error("level.dat holds malformed NBT: {reason}")]
+    MalformedNbt { reason: String },
     #[error("level.dat does not hold an NBT compound at its root")]
     NotCompound,
     #[error("level.dat has no Data.Version.Name; launch Minecraft once so it writes the file")]
@@ -72,8 +74,12 @@ pub fn gzip(raw: &[u8]) -> Vec<u8> {
 }
 
 /// Parse decompressed NBT bytes to a value tree. The root must be a compound.
+/// A truncated or otherwise unparseable payload is malformed NBT; only a
+/// parsed non-compound root is `NotCompound`.
 pub fn parse_nbt(raw: &[u8]) -> Result<Value, LevelDatError> {
-    let value: Value = fastnbt::from_bytes(raw).map_err(|_| LevelDatError::NotCompound)?;
+    let value: Value = fastnbt::from_bytes(raw).map_err(|err| LevelDatError::MalformedNbt {
+        reason: err.to_string(),
+    })?;
     match &value {
         Value::Compound(_) => Ok(value),
         _ => Err(LevelDatError::NotCompound),
@@ -212,29 +218,11 @@ fn replace_lists(
     Ok(())
 }
 
-/// Move one datapack between the two lists and re-encode. Enabling removes
-/// `file/<filename>` from `Disabled` and appends it to `Enabled`; disabling
-/// does the reverse. Duplicates are removed on disable; enabling is
-/// idempotent.
-pub fn set_enabled(bytes: &[u8], filename: &str, enabled: bool) -> Result<Vec<u8>, LevelDatError> {
-    let view = parse(bytes)?;
-    let value = format!("file/{filename}");
-    let (mut next_enabled, mut next_disabled) = (view.enabled, view.disabled);
-    if enabled {
-        next_disabled.retain(|entry| entry != &value);
-        if !next_enabled.contains(&value) {
-            next_enabled.push(value);
-        }
-    } else {
-        next_enabled.retain(|entry| entry != &value);
-        next_disabled.retain(|entry| entry != &value);
-        next_disabled.push(value);
-    }
-    render_with(bytes, &next_enabled, &next_disabled)
-}
-
-/// Fail when any tag outside `Data.DataPacks` differs between two files. The
-/// comparison runs on the parsed value tree, so gzip bytes may differ.
+/// Fail when any tag outside `Data.DataPacks.Enabled`/`Disabled` differs
+/// between two files. Only the two lists are masked (each replaced with a
+/// placeholder); every other tag, including any third key inside `DataPacks`,
+/// is compared. The comparison runs on the parsed value tree, so gzip bytes
+/// may differ.
 pub fn assert_outside_datapacks_unchanged(
     before: &[u8],
     after: &[u8],
@@ -243,18 +231,18 @@ pub fn assert_outside_datapacks_unchanged(
     let after_raw = gunzip(after)?;
     let mut before_value = parse_nbt(&before_raw)?;
     let mut after_value = parse_nbt(&after_raw)?;
-    strip_datapacks(&mut before_value)?;
-    strip_datapacks(&mut after_value)?;
+    mask_datapack_lists(&mut before_value)?;
+    mask_datapack_lists(&mut after_value)?;
     if before_value == after_value {
         Ok(())
     } else {
         Err(LevelDatError::MalformedArrays {
-            reason: "a tag outside Data.DataPacks changed".to_string(),
+            reason: "a tag outside Data.DataPacks.Enabled/Disabled changed".to_string(),
         })
     }
 }
 
-fn strip_datapacks(value: &mut Value) -> Result<(), LevelDatError> {
+fn mask_datapack_lists(value: &mut Value) -> Result<(), LevelDatError> {
     let Value::Compound(root) = value else {
         return Err(LevelDatError::NotCompound);
     };
@@ -263,41 +251,86 @@ fn strip_datapacks(value: &mut Value) -> Result<(), LevelDatError> {
             reason: "Data is not a compound".to_string(),
         });
     };
-    data.remove("DataPacks");
+    let Some(Value::Compound(packs)) = data.get_mut("DataPacks") else {
+        return Err(LevelDatError::MissingDataPacks {
+            reason: "Data.DataPacks is not a compound".to_string(),
+        });
+    };
+    for key in ["Enabled", "Disabled"] {
+        if packs.contains_key(key) {
+            packs.insert(key.to_string(), Value::String("<masked>".to_string()));
+        }
+    }
     Ok(())
-}
-
-/// Read `saves/<world>/level.dat` into the UI view.
-pub fn read_level_dat(world_dir: &Path) -> Result<LevelDatView, LevelDatError> {
-    let path = world_dir.join("level.dat");
-    let bytes = std::fs::read(&path).map_err(corrupt)?;
-    parse(&bytes)
 }
 
 /// Write `level.dat` atomically: temp file in the world dir, `sync_all`,
 /// rename, directory `fsync`. A failed write leaves the previous file intact,
 /// and `level.dat_old` is never touched.
+///
+/// The temp name carries the pid, a nanosecond timestamp, and a per-process
+/// counter, so a crashed write plus pid reuse can never wedge a later write:
+/// a leftover temp never collides with a fresh name, and `create_new`
+/// collisions are retried with a fresh stamp.
 pub fn write_level_dat(world_dir: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let mut last_err: Option<std::io::Error> = None;
     let target = world_dir.join("level.dat");
-    let tmp = world_dir.join(format!(".level.dat.{}.tmp", std::process::id()));
-    let written = (|| -> std::io::Result<()> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&tmp, &target)?;
-        Ok(())
-    })();
-    if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    for _ in 0..64 {
+        let tmp = unique_tmp(world_dir);
+        let written = (|| -> std::io::Result<()> {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&tmp, &target)?;
+            Ok(())
+        })();
+        match written {
+            Ok(()) => {
+                if let Ok(handle) = std::fs::File::open(world_dir) {
+                    let _ = handle.sync_all();
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                let _ = std::fs::remove_file(&tmp);
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    last_err = Some(err);
+                    continue;
+                }
+                if let Ok(handle) = std::fs::File::open(world_dir) {
+                    let _ = handle.sync_all();
+                }
+                return Err(err);
+            }
+        }
     }
-    if let Ok(handle) = std::fs::File::open(world_dir) {
-        let _ = handle.sync_all();
-    }
-    written
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not find a free level.dat temp name",
+        )
+    }))
+}
+
+fn unique_tmp(world_dir: &Path) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    let count = COUNTER.fetch_add(1, Ordering::SeqCst);
+    world_dir.join(format!(
+        ".level.dat.{}.{}.{}.tmp",
+        std::process::id(),
+        nanos,
+        count
+    ))
 }
 
 #[cfg(test)]
@@ -357,35 +390,107 @@ mod tests {
     }
 
     #[test]
-    fn toggle_moves_between_lists() {
+    fn render_with_replaces_only_the_lists() {
         let bytes = fixture_lists(&["vanilla", "file/a.zip"], &[]);
-        let off = set_enabled(&bytes, "a.zip", false).unwrap();
+        let off = render_with(
+            &bytes,
+            &["vanilla".to_string()],
+            &["file/a.zip".to_string()],
+        )
+        .unwrap();
         let view = parse(&off).unwrap();
         assert_eq!(view.enabled, vec!["vanilla"]);
         assert_eq!(view.disabled, vec!["file/a.zip"]);
-        let on = set_enabled(&off, "a.zip", true).unwrap();
-        let view = parse(&on).unwrap();
-        assert_eq!(view.enabled, vec!["vanilla", "file/a.zip"]);
-        assert!(view.disabled.is_empty());
+        assert_outside_datapacks_unchanged(&bytes, &off).unwrap();
     }
 
     #[test]
-    fn disable_removes_every_duplicate_and_enable_is_idempotent() {
-        let bytes = fixture_lists(&["file/a.zip", "vanilla", "file/a.zip"], &["file/a.zip"]);
-        let off = set_enabled(&bytes, "a.zip", false).unwrap();
-        let view = parse(&off).unwrap();
-        assert_eq!(view.enabled, vec!["vanilla"]);
-        assert_eq!(view.disabled, vec!["file/a.zip"]);
-        let on = set_enabled(&off, "a.zip", true).unwrap();
-        let again = set_enabled(&on, "a.zip", true).unwrap();
-        assert_eq!(parse(&again).unwrap().enabled.len(), 2);
-    }
-
-    #[test]
-    fn unknown_tags_survive_a_toggle() {
+    fn unknown_tags_survive_a_render() {
         let bytes = fixture_lists(&["vanilla"], &[]);
-        let toggled = set_enabled(&bytes, "a.zip", true).unwrap();
+        let toggled = render_with(
+            &bytes,
+            &["vanilla".to_string(), "file/a.zip".to_string()],
+            &[],
+        )
+        .unwrap();
         assert_outside_datapacks_unchanged(&bytes, &toggled).unwrap();
+    }
+
+    #[test]
+    fn third_datapack_key_is_compared_not_erased() {
+        let with_extra = |extra: i32| {
+            let value = compound(vec![(
+                "Data",
+                compound(vec![
+                    (
+                        "Version",
+                        compound(vec![("Name", Value::String("1.21.10".to_string()))]),
+                    ),
+                    (
+                        "DataPacks",
+                        compound(vec![
+                            ("Enabled", Value::List(vec![])),
+                            ("Disabled", Value::List(vec![])),
+                            ("Third", Value::Int(extra)),
+                        ]),
+                    ),
+                ]),
+            )]);
+            gzip(&fastnbt::to_bytes(&value).unwrap())
+        };
+        let before = with_extra(1);
+        let same = with_extra(1);
+        assert_outside_datapacks_unchanged(&before, &same).unwrap();
+        let changed = with_extra(2);
+        assert!(assert_outside_datapacks_unchanged(&before, &changed).is_err());
+    }
+
+    #[test]
+    fn truncated_nbt_is_malformed_not_not_compound() {
+        let bytes = fixture_lists(&["vanilla"], &[]);
+        let raw = gunzip(&bytes).unwrap();
+        let truncated = gzip(&raw[..raw.len() / 2]);
+        let err = parse(&truncated).unwrap_err();
+        assert!(
+            matches!(err, LevelDatError::MalformedNbt { .. }),
+            "truncated payload must be malformed NBT, got {err:?}"
+        );
+        // fastnbt refuses to encode a non-compound root, so the NotCompound
+        // arm stays defensive: a bare Byte tag decodes as malformed NBT.
+        let bare_tag = gzip(&[0x01, 0x00, 0x00, 0x2a]);
+        assert!(matches!(
+            parse(&bare_tag),
+            Err(LevelDatError::MalformedNbt { .. })
+        ));
+    }
+
+    #[test]
+    fn write_is_atomic_and_leaves_old_temp_files_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = dir.path().join("world");
+        std::fs::create_dir_all(&world).unwrap();
+        // A crashed write with pid reuse leaves this behind; it must not block.
+        std::fs::write(
+            world.join(format!(".level.dat.{}.tmp", std::process::id())),
+            b"stale",
+        )
+        .unwrap();
+        std::fs::write(world.join("level.dat_old"), b"old stays").unwrap();
+        let first = fixture_lists(&["vanilla"], &[]);
+        write_level_dat(&world, &first).unwrap();
+        assert_eq!(std::fs::read(world.join("level.dat")).unwrap(), first);
+        assert_eq!(
+            std::fs::read(world.join("level.dat_old")).unwrap(),
+            b"old stays"
+        );
+        let second = fixture_lists(&["vanilla", "file/a.zip"], &["x"]);
+        write_level_dat(&world, &second).unwrap();
+        assert_eq!(std::fs::read(world.join("level.dat")).unwrap(), second);
+        assert_eq!(
+            std::fs::read(world.join("level.dat_old")).unwrap(),
+            b"old stays"
+        );
+        assert_outside_datapacks_unchanged(&first, &second).unwrap();
     }
 
     #[test]
@@ -394,8 +499,11 @@ mod tests {
             parse(b"not gzip"),
             Err(LevelDatError::CorruptGzip { .. })
         ));
-        let not_compound = gzip(&[0x01, 0x00, 0x00, 0x2a]);
-        assert_eq!(parse(&not_compound), Err(LevelDatError::NotCompound));
+        let bare_tag = gzip(&[0x01, 0x00, 0x00, 0x2a]);
+        assert!(matches!(
+            parse(&bare_tag),
+            Err(LevelDatError::MalformedNbt { .. })
+        ));
         let no_version =
             gzip(&fastnbt::to_bytes(&compound(vec![("Data", compound(vec![]))])).unwrap());
         assert_eq!(parse(&no_version), Err(LevelDatError::MissingVersion));

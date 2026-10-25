@@ -8,6 +8,30 @@ fn real_level_path() -> Option<String> {
     std::env::var("MINE_UTILS_REAL_LEVEL").ok()
 }
 
+/// Toggle through the production write path: temp world, backup policy,
+/// atomic replace. The returned bytes are what `level.dat` holds on disk.
+fn toggle_on_disk(bytes: &[u8], filename: &str, enabled: bool) -> Vec<u8> {
+    let dir = tempfile::tempdir().unwrap();
+    let game = dir.path().join("game");
+    let world = game.join("saves").join("world");
+    std::fs::create_dir_all(&world).unwrap();
+    std::fs::write(world.join("level.dat"), bytes).unwrap();
+    let paths = mine_utils_core::DataPaths {
+        game_dir: game.clone(),
+        world_dir: world.clone(),
+        level_dat_path: world.join("level.dat"),
+        datapacks_dir: world.join("datapacks"),
+        backups_root: dir.path().join("backups"),
+        backups: mine_utils_core::BackupsConfig {
+            enabled: false,
+            keep: 5,
+        },
+    };
+    mine_utils_core::data_stack::set_enabled(&paths, filename, enabled)
+        .expect("production toggle must succeed");
+    std::fs::read(world.join("level.dat")).unwrap()
+}
+
 fn compound(pairs: Vec<(&str, Value)>) -> Value {
     Value::Compound(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
 }
@@ -81,7 +105,7 @@ fn lists(version: &str) -> Vec<u8> {
 fn toggle_preserves_every_tag_outside_datapacks() {
     for version in ["1.17.1", "1.21.10"] {
         let bytes = lists(version);
-        let off = level_dat::set_enabled(&bytes, "a.zip", false).unwrap();
+        let off = toggle_on_disk(&bytes, "a.zip", false);
         let view = level_dat::parse(&off).unwrap();
         assert_eq!(view.enabled, vec!["vanilla".to_string()]);
         assert_eq!(
@@ -90,7 +114,7 @@ fn toggle_preserves_every_tag_outside_datapacks() {
         );
         level_dat::assert_outside_datapacks_unchanged(&bytes, &off).unwrap();
 
-        let on = level_dat::set_enabled(&off, "a.zip", true).unwrap();
+        let on = toggle_on_disk(&off, "a.zip", true);
         let view = level_dat::parse(&on).unwrap();
         assert_eq!(
             view.enabled,
@@ -130,10 +154,10 @@ fn corrupt_gzip_is_refused() {
 #[test]
 fn non_compound_root_is_refused() {
     let bytes = level_dat::gzip(&[0x01, 0x00, 0x00, 0x2a]);
-    assert_eq!(
+    assert!(matches!(
         level_dat::parse(&bytes).unwrap_err(),
-        level_dat::LevelDatError::NotCompound
-    );
+        level_dat::LevelDatError::MalformedNbt { .. }
+    ));
 }
 
 #[test]
@@ -211,7 +235,7 @@ fn duplicates_are_preserved_on_read_and_removed_on_disable() {
     );
     let view = level_dat::parse(&bytes).unwrap();
     assert_eq!(view.enabled.len(), 3, "duplicates survive a read");
-    let off = level_dat::set_enabled(&bytes, "a.zip", false).unwrap();
+    let off = toggle_on_disk(&bytes, "a.zip", false);
     let view = level_dat::parse(&off).unwrap();
     assert_eq!(view.enabled, vec!["vanilla".to_string()]);
     level_dat::assert_outside_datapacks_unchanged(&bytes, &off).unwrap();
@@ -230,7 +254,7 @@ fn foreign_entries_keep_their_relative_order() {
         &["minecart_improvements"],
         Vec::new(),
     );
-    let on = level_dat::set_enabled(&bytes, "b.zip", true).unwrap();
+    let on = toggle_on_disk(&bytes, "b.zip", true);
     let view = level_dat::parse(&on).unwrap();
     assert_eq!(
         view.enabled,
@@ -289,8 +313,7 @@ fn real_copy_fail_first_opt_in() {
         .collect::<Vec<_>>()
     );
 
-    let toggled = level_dat::set_enabled(&bytes, "graves v2.8.5 (MC 1.17.x).zip", false)
-        .expect("toggle off must succeed");
+    let toggled = toggle_on_disk(&bytes, "graves v2.8.5 (MC 1.17.x).zip", false);
     let after = level_dat::parse(&toggled).expect("toggled bytes must parse");
     assert!(!after.enabled.iter().any(|e| e.contains("graves")));
     assert!(after
