@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { PackClient } from '../../lib/ipc';
 import { ipc, isTauriRuntime, pickPackPath, toAppError } from '../../lib/ipc';
-import type { ImportChoice, Pack, PackKind } from '../../lib/types';
+import type { GameRunning, ImportChoice, Pack, PackKind } from '../../lib/types';
 import {
   formatFilterOptions,
   matchesFormat,
   matchesKind,
   matchesSearch,
 } from '../../lib/format';
+import ActiveStack from './ActiveStack';
 import ImportSheet from './ImportSheet';
 import type { ImportPrompt } from './ImportSheet';
 import PackDetail from './PackDetail';
@@ -18,6 +19,13 @@ interface PacksPageProps {
   client?: PackClient;
   /** File and folder picker. Injected in tests. */
   pickPath?: (directory: boolean) => Promise<string | null>;
+  /** From the app-level game guard poll, if there is one. */
+  gameRunning?: GameRunning | null;
+}
+
+interface ToggleToast {
+  message: string;
+  undo: () => void;
 }
 
 /** Tauri adds a real path to dropped files; a browser drop has none. */
@@ -28,8 +36,30 @@ function droppedPaths(transfer: DataTransfer | null): string[] {
     .filter((path): path is string => typeof path === 'string' && path !== '');
 }
 
-export default function PacksPage({ client = ipc, pickPath = pickPackPath }: PacksPageProps) {
-  const { packs, stats, loading, busy, error, importPack, deletePack } = usePacks(client);
+/** The on-disk file name: `file/<filename>` in options.txt is this, never the
+ *  display name, which strips `.zip`. */
+function filenameOf(pack: Pack): string {
+  return pack.path.split('/').filter(Boolean).at(-1) ?? pack.path;
+}
+
+export default function PacksPage({
+  client = ipc,
+  pickPath = pickPackPath,
+  gameRunning = null,
+}: PacksPageProps) {
+  const {
+    packs,
+    stats,
+    loading,
+    busy,
+    error,
+    stack,
+    refreshStack,
+    importPack,
+    deletePack,
+    togglePack,
+    reorderStack,
+  } = usePacks(client);
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<PackKind | 'all'>('all');
   const [format, setFormat] = useState('all');
@@ -42,6 +72,44 @@ export default function PacksPage({ client = ipc, pickPath = pickPackPath }: Pac
   const [sheetError, setSheetError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [toast, setToast] = useState<ToggleToast | null>(null);
+
+  const running = gameRunning || stack?.running || null;
+  const writesBlocked = running !== null;
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = setTimeout(() => setToast(null), 8000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const handleToggle = async (filename: string, enabled: boolean): Promise<void> => {
+    setActionError(null);
+    try {
+      await togglePack(filename, enabled);
+      setToast({
+        message: `${filename} ${enabled ? 'enabled' : 'disabled'}`,
+        undo: () => {
+          setToast(null);
+          void handleToggle(filename, !enabled);
+        },
+      });
+    } catch (err) {
+      setActionError(toAppError(err).message);
+    }
+  };
+
+  const handleReorder = useCallback(
+    async (order: string[]) => {
+      setActionError(null);
+      try {
+        await reorderStack(order);
+      } catch (err) {
+        setActionError(toAppError(err).message);
+      }
+    },
+    [reorderStack],
+  );
 
   const formats = useMemo(() => formatFilterOptions(packs), [packs]);
   const filtered = useMemo(
@@ -252,6 +320,25 @@ export default function PacksPage({ client = ipc, pickPath = pickPackPath }: Pac
           }
         }}
       >
+        {stack ? (
+          <ActiveStack
+            stack={stack}
+            packs={packs}
+            busy={busy}
+            onToggle={(filename, enabled) => void handleToggle(filename, enabled)}
+            onReorder={(order) => void handleReorder(order)}
+            onRecheck={() => void refreshStack()}
+          />
+        ) : (
+          <section className="active-stack" aria-label="Active stack">
+            <div className="active-stack-head">
+              <h2>Active stack</h2>
+            </div>
+            <p className="active-stack-empty">
+              {noGameDir ? 'Pick a game dir in Settings first.' : 'Loading the stack…'}
+            </p>
+          </section>
+        )}
         <div className="packs-list">
           <PackGrid
             packs={filtered}
@@ -264,7 +351,22 @@ export default function PacksPage({ client = ipc, pickPath = pickPackPath }: Pac
           />
           {dragReadyHint(dragging)}
         </div>
-        <PackDetail pack={selected} busy={busy} onDelete={handleDelete} />
+        <PackDetail
+          pack={selected}
+          busy={busy}
+          writesBlocked={writesBlocked}
+          enabledInStack={
+            selected
+              ? stack?.entries.some(
+                  (entry) => entry.kind === 'file' && entry.filename === filenameOf(selected),
+                ) ?? false
+              : false
+          }
+          onSetEnabled={(enabled) =>
+            selected && void handleToggle(filenameOf(selected), enabled)
+          }
+          onDelete={handleDelete}
+        />
       </div>
 
       <footer className="packs-stats">
@@ -273,6 +375,23 @@ export default function PacksPage({ client = ipc, pickPath = pickPackPath }: Pac
           ? `, ${(stats.bytesRead / 1024).toFixed(1)} KB read, ${stats.elapsedMs.toFixed(0)} ms scan`
           : ''}
       </footer>
+
+      {toast ? (
+        <div className="toast" role="status" aria-label="Toggle result">
+          <span>{toast.message}</span>
+          <button type="button" className="button" onClick={toast.undo}>
+            Undo
+          </button>
+          <button
+            type="button"
+            className="button button-icon"
+            aria-label="Dismiss"
+            onClick={() => setToast(null)}
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
 
       <ImportSheet
         open={sheetOpen}

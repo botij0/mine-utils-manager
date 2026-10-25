@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ipc } from './lib/ipc';
 import type { IpcClient } from './lib/ipc';
-import type { AppError, Config, Theme } from './lib/types';
+import type { AppError, Config, GameRunning, Theme } from './lib/types';
 import { defaultConfig } from './lib/types';
 import { toAppError } from './lib/ipc';
 import DiscoverPage from './features/discover/DiscoverPage';
@@ -45,6 +45,7 @@ export default function App({ client = ipc }: AppProps) {
   const [config, setConfig] = useState<Config>(defaultConfig);
   const [error, setError] = useState<AppError | null>(null);
   const [startupWarning, setStartupWarning] = useState<string | null>(null);
+  const [gameRunning, setGameRunning] = useState<GameRunning | null>(null);
 
   useEffect(() => {
     window.location.hash = page;
@@ -55,6 +56,28 @@ export default function App({ client = ipc }: AppProps) {
       .getConfig()
       .then(setConfig)
       .catch((err: unknown) => setError(toAppError(err)));
+  }, [client]);
+
+  // The game guard is global state: writes on any page stop while Minecraft
+  // runs, so the state is polled here and handed to the pages.
+  useEffect(() => {
+    let cancelled = false;
+    const check = () => {
+      client
+        .getResourceStack()
+        .then((stack) => {
+          if (!cancelled) setGameRunning(stack.running);
+        })
+        .catch(() => {
+          if (!cancelled) setGameRunning(null);
+        });
+    };
+    check();
+    const timer = setInterval(check, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [client]);
 
   useEffect(() => {
@@ -117,13 +140,16 @@ export default function App({ client = ipc }: AppProps) {
               {error.message}
             </p>
           ) : null}
-          {page === 'packs' ? <PacksPage client={client} /> : null}
+          {page === 'packs' ? (
+            <PacksPage client={client} gameRunning={gameRunning} />
+          ) : null}
           {page === 'worlds' ? <WorldsPage /> : null}
           {page === 'discover' ? <DiscoverPage /> : null}
           {page === 'settings' ? (
             <SettingsPage
               client={client}
               config={config}
+              gameRunning={gameRunning}
               onConfigChanged={setConfig}
             />
           ) : null}

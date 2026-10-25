@@ -11,6 +11,9 @@ import {
 interface PackDetailProps {
   pack: Pack | null;
   busy: boolean;
+  writesBlocked: boolean;
+  enabledInStack: boolean;
+  onSetEnabled: (enabled: boolean) => void;
   onDelete: (pack: Pack) => Promise<void>;
 }
 
@@ -18,7 +21,14 @@ function versionOrDash(value: { major: number; minor: number } | null): string {
   return value ? formatVersionLabel(value) : 'Not declared';
 }
 
-export default function PackDetail({ pack, busy, onDelete }: PackDetailProps) {
+export default function PackDetail({
+  pack,
+  busy,
+  writesBlocked,
+  enabledInStack,
+  onSetEnabled,
+  onDelete,
+}: PackDetailProps) {
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
@@ -86,6 +96,18 @@ export default function PackDetail({ pack, busy, onDelete }: PackDetailProps) {
         </p>
       ) : null}
 
+      {pack.error ? null : (
+        <label className="stack-toggle pack-stack-toggle">
+          <input
+            type="checkbox"
+            checked={enabledInStack}
+            disabled={busy || writesBlocked}
+            onChange={(event) => onSetEnabled(event.target.checked)}
+          />
+          Enabled in the active stack
+        </label>
+      )}
+
       <div className="pack-danger-zone">
         {confirming ? (
           <div className="pack-confirm" role="alert">
@@ -94,7 +116,7 @@ export default function PackDetail({ pack, busy, onDelete }: PackDetailProps) {
               <button
                 type="button"
                 className="button button-danger"
-                disabled={busy}
+                disabled={busy || writesBlocked}
                 onClick={() => {
                   void onDelete(pack).finally(() => setConfirming(false));
                 }}
@@ -115,7 +137,8 @@ export default function PackDetail({ pack, busy, onDelete }: PackDetailProps) {
           <button
             type="button"
             className="button button-danger"
-            disabled={busy}
+            disabled={busy || writesBlocked}
+            title={writesBlocked ? 'Close Minecraft before deleting packs' : undefined}
             onClick={() => setConfirming(true)}
           >
             Delete pack

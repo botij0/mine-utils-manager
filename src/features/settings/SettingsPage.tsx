@@ -1,9 +1,10 @@
-import type { Config, Theme } from '../../lib/types';
+import type { Config, GameRunning, Theme } from '../../lib/types';
 import type { IpcClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import { useState } from 'react';
 import type { AppError } from '../../lib/types';
 import GameDirSettings from '../game-dirs/GameDirSettings';
+import BackupsPanel from './BackupsPanel';
 
 const THEMES: { value: Theme; label: string }[] = [
   { value: 'system', label: 'System' },
@@ -15,12 +16,15 @@ interface SettingsPageProps {
   client: IpcClient;
   config: Config;
   onConfigChanged: (config: Config) => void;
+  /** From the app-level game guard poll, if there is one. */
+  gameRunning?: GameRunning | null;
 }
 
 export default function SettingsPage({
   client,
   config,
   onConfigChanged,
+  gameRunning = null,
 }: SettingsPageProps) {
   const [error, setError] = useState<AppError | null>(null);
 
@@ -62,6 +66,7 @@ export default function SettingsPage({
         activePath={config.active_game_dir}
         onConfigChanged={onConfigChanged}
       />
+      <BackupsPanel client={client} gameRunning={gameRunning} />
     </div>
   );
 }

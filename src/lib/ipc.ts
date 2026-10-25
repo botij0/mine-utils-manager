@@ -2,6 +2,7 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { mockClient } from './ipc.mock';
 import { IpcError } from './types';
 import type {
+  BackupInfo,
   Config,
   GameDirEntry,
   GameDirState,
@@ -10,6 +11,8 @@ import type {
   Pack,
   PackListing,
   PackMeta,
+  ResourceStack,
+  StackSnapshot,
   Theme,
 } from './types';
 
@@ -18,6 +21,11 @@ export interface PackClient {
   listResourcePacks(): Promise<PackListing>;
   importResourcePack(path: string, choice?: ImportChoice): Promise<ImportOutcome>;
   deleteResourcePack(path: string): Promise<void>;
+  getResourceStack(): Promise<ResourceStack>;
+  setResourcePackEnabled(filename: string, enabled: boolean): Promise<ResourceStack>;
+  reorderResourceStack(order: string[], expected: StackSnapshot): Promise<ResourceStack>;
+  listOptionsBackups(): Promise<BackupInfo[]>;
+  restoreOptionsBackup(backup: string): Promise<ResourceStack>;
 }
 
 export interface IpcClient extends PackClient {
@@ -109,6 +117,14 @@ const tauriClient: IpcClient = {
     return outcomeWithIconUrl(outcome);
   },
   deleteResourcePack: (path) => call<void>('delete_resource_pack', { path }),
+  getResourceStack: () => call<ResourceStack>('get_resource_stack'),
+  setResourcePackEnabled: (filename, enabled) =>
+    call<ResourceStack>('set_resource_pack_enabled', { filename, enabled }),
+  reorderResourceStack: (order, expected) =>
+    call<ResourceStack>('reorder_resource_stack', { order, expected }),
+  listOptionsBackups: () => call<BackupInfo[]>('list_options_backups'),
+  restoreOptionsBackup: (backup) =>
+    call<ResourceStack>('restore_options_backup', { backup }),
 };
 
 /**
@@ -126,6 +142,13 @@ export const ipc: IpcClient = {
   listResourcePacks: () => pick().listResourcePacks(),
   importResourcePack: (path, choice) => pick().importResourcePack(path, choice),
   deleteResourcePack: (path) => pick().deleteResourcePack(path),
+  getResourceStack: () => pick().getResourceStack(),
+  setResourcePackEnabled: (filename, enabled) =>
+    pick().setResourcePackEnabled(filename, enabled),
+  reorderResourceStack: (order, expected) =>
+    pick().reorderResourceStack(order, expected),
+  listOptionsBackups: () => pick().listOptionsBackups(),
+  restoreOptionsBackup: (backup) => pick().restoreOptionsBackup(backup),
 };
 
 function pick(): IpcClient {

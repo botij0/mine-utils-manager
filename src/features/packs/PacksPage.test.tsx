@@ -3,12 +3,14 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { PackClient } from '../../lib/ipc';
 import type {
+  BackupInfo,
   FormatRange,
   FormatVersion,
   ImportChoice,
   ImportOutcome,
   Pack,
   PackListing,
+  ResourceStack,
 } from '../../lib/types';
 import { IpcError } from '../../lib/types';
 import PacksPage from './PacksPage';
@@ -126,6 +128,30 @@ function makeFakeClient(initial: Pack[]): FakeClient {
     },
     async deleteResourcePack(path: string) {
       current = current.filter((item) => item.path !== path);
+    },
+    async getResourceStack(): Promise<ResourceStack> {
+      return {
+        entries: [
+          { kind: 'foreign', value: 'vanilla' },
+          { kind: 'foreign', value: 'fabric' },
+        ],
+        incompatible: [],
+        running: null,
+        stale_locks: [],
+        detection_supported: true,
+      };
+    },
+    async setResourcePackEnabled(): Promise<ResourceStack> {
+      return this.getResourceStack();
+    },
+    async reorderResourceStack(): Promise<ResourceStack> {
+      return this.getResourceStack();
+    },
+    async listOptionsBackups(): Promise<BackupInfo[]> {
+      return [];
+    },
+    async restoreOptionsBackup(): Promise<ResourceStack> {
+      return this.getResourceStack();
     },
   };
   return client;
@@ -343,6 +369,21 @@ describe('PacksPage', () => {
       },
       async deleteResourcePack() {
         throw new IpcError('pack_not_found', 'no packs');
+      },
+      async getResourceStack() {
+        throw new IpcError('no_active_game_dir', 'no active game dir');
+      },
+      async setResourcePackEnabled() {
+        throw new IpcError('no_active_game_dir', 'no active game dir');
+      },
+      async reorderResourceStack() {
+        throw new IpcError('no_active_game_dir', 'no active game dir');
+      },
+      async listOptionsBackups() {
+        throw new IpcError('no_active_game_dir', 'no active game dir');
+      },
+      async restoreOptionsBackup() {
+        throw new IpcError('no_active_game_dir', 'no active game dir');
       },
     };
     render(<PacksPage client={client} />);
