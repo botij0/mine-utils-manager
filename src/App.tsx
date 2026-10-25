@@ -52,6 +52,7 @@ export default function App({ client = ipc }: AppProps) {
   // running value stays and writes stay paused until a check succeeds.
   const [gameGuardUnknown, setGameGuardUnknown] = useState(false);
 
+
   useEffect(() => {
     window.location.hash = page;
   }, [page]);

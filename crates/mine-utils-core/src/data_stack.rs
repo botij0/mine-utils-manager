@@ -21,8 +21,7 @@ use crate::level_backup::{self, LevelBackupOutcome};
 use crate::level_dat::{self, LevelDatError};
 use crate::pack::{ImportChoice, PackError};
 use crate::pack_scan::{
-    self, HashCache, PackListing, SystemTrash, TrashService, MAX_ICON_BYTES, MAX_META_BYTES,
-    MAX_ZIP_ENTRIES,
+    self, HashCache, PackListing, SystemTrash, TrashService, MAX_META_BYTES, MAX_ZIP_ENTRIES,
 };
 use crate::resource_stack::{SystemGuard, WriteGuard};
 
@@ -627,8 +626,6 @@ fn zip_roots(source: &Path, name: &str) -> Result<(bool, bool), AppError> {
             } else {
                 has_data = true;
             }
-        } else if entry_name.starts_with("assets/") {
-            // Resource roots are allowed alongside data; they do not decide.
         }
         if has_data && has_meta {
             break;
@@ -641,7 +638,6 @@ fn zip_roots(source: &Path, name: &str) -> Result<(bool, bool), AppError> {
         }
         .into());
     }
-    let _ = MAX_ICON_BYTES;
     Ok((has_data, has_meta))
 }
 

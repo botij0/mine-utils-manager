@@ -10,6 +10,10 @@ export interface DatapackRow {
   locked: boolean;
   warning: string | null;
   filename: string;
+  /** False at the top of the enabled stack or under a locked entry. */
+  canMoveUp: boolean;
+  /** False at the bottom of the enabled stack or above a locked entry. */
+  canMoveDown: boolean;
 }
 
 interface DatapackGridProps {
@@ -84,7 +88,8 @@ export default function DatapackGrid({
                     <button
                       type="button"
                       className="button"
-                      disabled={writesBlocked}
+                      disabled={writesBlocked || !row.canMoveUp}
+                      title={row.canMoveUp ? undefined : 'Locked entries cannot move'}
                       aria-label={`Move ${name} up`}
                       onClick={() => onMove(name, -1)}
                     >
@@ -93,7 +98,8 @@ export default function DatapackGrid({
                     <button
                       type="button"
                       className="button"
-                      disabled={writesBlocked}
+                      disabled={writesBlocked || !row.canMoveDown}
+                      title={row.canMoveDown ? undefined : 'Locked entries cannot move'}
                       aria-label={`Move ${name} down`}
                       onClick={() => onMove(name, 1)}
                     >

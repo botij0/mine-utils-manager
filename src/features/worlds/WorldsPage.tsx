@@ -6,7 +6,7 @@ import DatapackDetail from './DatapackDetail';
 import DatapackGrid, { type DatapackRow } from './DatapackGrid';
 import WorldHeader from './WorldHeader';
 import WorldRail from './WorldRail';
-import { compatibilityWarning, isCompatible, useWorlds } from './useWorlds';
+import { compatibilityWarning, useWorlds } from './useWorlds';
 
 interface WorldsPageProps {
   client?: WorldsClient;
@@ -58,6 +58,17 @@ export default function WorldsPage({
   const rows = useMemo<DatapackRow[]>(() => {
     if (!stack) return [];
     const byFilename = new Map(packs.map((pack) => [filenameOf(pack.path), pack]));
+    const loadOrder = stack.enabled.map((entry) => entry.value);
+    // Moving up raises load priority (later in Enabled); moving down lowers
+    // it. A swap that touches a locked entry or the array edge is refused, so
+    // the button is disabled instead of failing on click.
+    const moveable = (value: string, delta: 1 | -1): boolean => {
+      const index = loadOrder.indexOf(value);
+      const target = index + delta;
+      return (
+        index >= 0 && target >= 0 && target < loadOrder.length && isFileValue(loadOrder[target])
+      );
+    };
     const topFirst = [...stack.enabled].reverse().map((entry) => {
       const filename = entry.kind === 'file' ? entry.filename : entry.value;
       const pack = entry.kind === 'file' ? (byFilename.get(entry.filename) ?? null) : null;
@@ -71,6 +82,8 @@ export default function WorldsPage({
             ? compatibilityWarning(pack, worldFormat, worldLabel)
             : null,
         filename,
+        canMoveUp: entry.kind === 'file' && moveable(entry.value, 1),
+        canMoveDown: entry.kind === 'file' && moveable(entry.value, -1),
       };
     });
     const disabled = stack.disabled.flatMap((entry) => {
@@ -83,6 +96,8 @@ export default function WorldsPage({
         locked: false,
         warning: pack ? compatibilityWarning(pack, worldFormat, worldLabel) : null,
         filename: entry.filename,
+        canMoveUp: false,
+        canMoveDown: false,
       };
       return [row];
     });
@@ -114,7 +129,9 @@ export default function WorldsPage({
     const order = stack.enabled.map((entry) => entry.value);
     const value = `file/${filename}`;
     const index = order.indexOf(value);
-    const target = index + direction;
+    // The grid is top-first (reverse load order), so moving a card up raises
+    // its load priority: one step later in the Enabled array.
+    const target = index - direction;
     if (index < 0 || target < 0 || target >= order.length) return;
     // Only file entries move; a swap that touches a foreign entry is refused.
     if (!isFileValue(order[index]) || !isFileValue(order[target])) return;
@@ -172,6 +189,7 @@ export default function WorldsPage({
     if (!path) return;
     await runImport(selected.dir_name, path);
   };
+
 
   return (
     <section className="worlds-page">
@@ -319,5 +337,3 @@ function filenameOf(path: string): string {
 function isFileValue(value: string): boolean {
   return value.startsWith('file/');
 }
-
-export { isCompatible };

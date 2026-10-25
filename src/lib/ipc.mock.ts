@@ -727,8 +727,7 @@ function mockDatapackListing(world: string): DatapackListing {
   if (entries === undefined && mockWorldStacks[world] === undefined) {
     throw new IpcError('world', `world ${world} does not exist`);
   }
-  const stacks = mockWorldStacks[world] ?? { enabled: ['vanilla'], disabled: [] };
-  if (world === 'Broken World' || (entries === undefined && world !== 'Creative Flat' && world !== 'Locked World' && world !== 'Survival 1_17')) {
+  if (world === 'Broken World') {
     throw new IpcError('level_dat', 'level.dat is not valid gzip: invalid gzip header');
   }
   const packs: Pack[] = (entries ?? []).map((item) => {
@@ -749,7 +748,6 @@ function mockDatapackListing(world: string): DatapackListing {
       id: `/home/demo/.minecraft/saves/${world}/datapacks/${item.filename}`,
     };
   });
-  void stacks;
   return {
     packs: {
       packs,
