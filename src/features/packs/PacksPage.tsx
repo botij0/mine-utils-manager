@@ -14,13 +14,16 @@ import type { ImportPrompt } from './ImportSheet';
 import PackDetail from './PackDetail';
 import PackGrid from './PackGrid';
 import { usePacks } from './usePacks';
+import { packFilename } from '../../lib/packPath';
 
 interface PacksPageProps {
   client?: PackClient;
   /** File and folder picker. Injected in tests. */
   pickPath?: (directory: boolean) => Promise<string | null>;
-  /** From the app-level game guard poll, if there is one. */
+  /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
+  /** Force the app-level game guard to re-check now. */
+  refreshGameRunning?: () => void | Promise<void>;
 }
 
 interface ToggleToast {
@@ -36,16 +39,11 @@ function droppedPaths(transfer: DataTransfer | null): string[] {
     .filter((path): path is string => typeof path === 'string' && path !== '');
 }
 
-/** The on-disk file name: `file/<filename>` in options.txt is this, never the
- *  display name, which strips `.zip`. */
-function filenameOf(pack: Pack): string {
-  return pack.path.split('/').filter(Boolean).at(-1) ?? pack.path;
-}
-
 export default function PacksPage({
   client = ipc,
   pickPath = pickPackPath,
-  gameRunning = null,
+  gameRunning,
+  refreshGameRunning = () => {},
 }: PacksPageProps) {
   const {
     packs,
@@ -54,6 +52,8 @@ export default function PacksPage({
     busy,
     error,
     stack,
+    stackLoading,
+    stackError,
     refreshStack,
     importPack,
     deletePack,
@@ -74,7 +74,9 @@ export default function PacksPage({
   const [dragging, setDragging] = useState(false);
   const [toast, setToast] = useState<ToggleToast | null>(null);
 
-  const running = gameRunning || stack?.running || null;
+  // A fresh null from the app poll clears the banner; undefined means the
+  // first check has not landed yet, so fall back to the stack response.
+  const running = gameRunning !== undefined ? gameRunning : (stack?.running ?? null);
   const writesBlocked = running !== null;
 
   useEffect(() => {
@@ -82,6 +84,19 @@ export default function PacksPage({
     const timer = setTimeout(() => setToast(null), 8000);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  const refreshAfterGuard = useCallback(
+    (err: unknown) => {
+      const appError = toAppError(err);
+      setActionError(appError.message);
+      if (appError.code !== 'game_running') return;
+      // The backend just saw the game; refresh both sources so the banner and
+      // every disabled control appear now instead of at the next poll.
+      void refreshStack();
+      void refreshGameRunning();
+    },
+    [refreshStack, refreshGameRunning],
+  );
 
   const handleToggle = async (filename: string, enabled: boolean): Promise<void> => {
     setActionError(null);
@@ -95,7 +110,7 @@ export default function PacksPage({
         },
       });
     } catch (err) {
-      setActionError(toAppError(err).message);
+      refreshAfterGuard(err);
     }
   };
 
@@ -105,10 +120,10 @@ export default function PacksPage({
       try {
         await reorderStack(order);
       } catch (err) {
-        setActionError(toAppError(err).message);
+        refreshAfterGuard(err);
       }
     },
-    [reorderStack],
+    [reorderStack, refreshAfterGuard],
   );
 
   const formats = useMemo(() => formatFilterOptions(packs), [packs]);
@@ -124,7 +139,8 @@ export default function PacksPage({
   );
   const selected = packs.find((pack) => pack.id === selectedId) ?? null;
   const hasFilters = query.trim() !== '' || kind !== 'all' || format !== 'all';
-  const noGameDir = error?.code === 'no_active_game_dir';
+  const noGameDir =
+    error?.code === 'no_active_game_dir' || stackError?.code === 'no_active_game_dir';
 
   const clearFilters = () => {
     setQuery('');
@@ -328,16 +344,39 @@ export default function PacksPage({
             running={running}
             onToggle={(filename, enabled) => void handleToggle(filename, enabled)}
             onReorder={(order) => void handleReorder(order)}
-            onRecheck={() => void refreshStack()}
+            onRecheck={() => {
+              void refreshStack();
+              void refreshGameRunning();
+            }}
           />
         ) : (
           <section className="active-stack" aria-label="Active stack">
             <div className="active-stack-head">
               <h2>Active stack</h2>
             </div>
-            <p className="active-stack-empty">
-              {noGameDir ? 'Pick a game dir in Settings first.' : 'Loading the stack…'}
-            </p>
+            {stackError && !noGameDir ? (
+              <div className="stack-error" role="alert">
+                <p className="error">{stackError.message}</p>
+                <p className="active-stack-empty">
+                  Launch Minecraft once so it writes options.txt, then retry.
+                </p>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => void refreshStack()}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : (
+              <p className="active-stack-empty">
+                {noGameDir
+                  ? 'Pick a game dir in Settings first.'
+                  : stackLoading
+                    ? 'Loading the stack…'
+                    : 'The stack is unavailable.'}
+              </p>
+            )}
           </section>
         )}
         <div className="packs-list">
@@ -359,12 +398,12 @@ export default function PacksPage({
           enabledInStack={
             selected
               ? stack?.entries.some(
-                  (entry) => entry.kind === 'file' && entry.filename === filenameOf(selected),
+                  (entry) => entry.kind === 'file' && entry.filename === packFilename(selected),
                 ) ?? false
               : false
           }
           onSetEnabled={(enabled) =>
-            selected && void handleToggle(filenameOf(selected), enabled)
+            selected && void handleToggle(packFilename(selected), enabled)
           }
           onDelete={handleDelete}
         />

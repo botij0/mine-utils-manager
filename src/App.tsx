@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ipc } from './lib/ipc';
 import type { IpcClient } from './lib/ipc';
 import type { AppError, Config, GameRunning, Theme } from './lib/types';
@@ -45,7 +45,9 @@ export default function App({ client = ipc }: AppProps) {
   const [config, setConfig] = useState<Config>(defaultConfig);
   const [error, setError] = useState<AppError | null>(null);
   const [startupWarning, setStartupWarning] = useState<string | null>(null);
-  const [gameRunning, setGameRunning] = useState<GameRunning | null>(null);
+  // Undefined until the first check lands, so the pages can tell "not yet
+  // checked" apart from a fresh "not running" result.
+  const [gameRunning, setGameRunning] = useState<GameRunning | null | undefined>(undefined);
 
   useEffect(() => {
     window.location.hash = page;
@@ -58,26 +60,22 @@ export default function App({ client = ipc }: AppProps) {
       .catch((err: unknown) => setError(toAppError(err)));
   }, [client]);
 
-  // Writes on any page stop while Minecraft runs.
-  useEffect(() => {
-    let cancelled = false;
-    const check = () => {
-      client
-        .getResourceStack()
-        .then((stack) => {
-          if (!cancelled) setGameRunning(stack.running);
-        })
-        .catch(() => {
-          if (!cancelled) setGameRunning(null);
-        });
-    };
-    check();
-    const timer = setInterval(check, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
+  const refreshGameRunning = useCallback(async () => {
+    try {
+      const stack = await client.getResourceStack();
+      setGameRunning(stack.running);
+    } catch {
+      setGameRunning(null);
+    }
   }, [client]);
+
+  // Writes on any page stop while Minecraft runs. The callback is stable, so
+  // pages can force a fresh check without re-subscribing the poll.
+  useEffect(() => {
+    void refreshGameRunning();
+    const timer = setInterval(() => void refreshGameRunning(), 5000);
+    return () => clearInterval(timer);
+  }, [refreshGameRunning]);
 
   useEffect(() => {
     client
@@ -140,7 +138,11 @@ export default function App({ client = ipc }: AppProps) {
             </p>
           ) : null}
           {page === 'packs' ? (
-            <PacksPage client={client} gameRunning={gameRunning} />
+            <PacksPage
+              client={client}
+              gameRunning={gameRunning}
+              refreshGameRunning={refreshGameRunning}
+            />
           ) : null}
           {page === 'worlds' ? <WorldsPage /> : null}
           {page === 'discover' ? <DiscoverPage /> : null}
@@ -149,6 +151,7 @@ export default function App({ client = ipc }: AppProps) {
               client={client}
               config={config}
               gameRunning={gameRunning}
+              refreshGameRunning={refreshGameRunning}
               onConfigChanged={setConfig}
             />
           ) : null}

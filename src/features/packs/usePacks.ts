@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PackClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import type {
-  BackupInfo,
   ImportChoice,
   ImportOutcome,
   IpcError,
@@ -21,13 +20,14 @@ export interface PacksState {
   stats: PackStats | null;
   loading: boolean;
   busy: boolean;
+  /** The pack-list failure. A stack failure never lands here. */
   error: IpcError | null;
   stack: ResourceStack | null;
   stackLoading: boolean;
-  backups: BackupInfo[];
+  /** The stack-read failure. A pack-list failure never lands here. */
+  stackError: IpcError | null;
   reload: () => Promise<void>;
   refreshStack: () => Promise<void>;
-  refreshBackups: () => Promise<void>;
   importPack: (path: string, choice?: ImportChoice) => Promise<ImportOutcome>;
   deletePack: (path: string) => Promise<void>;
   togglePack: (filename: string, enabled: boolean) => Promise<void>;
@@ -56,7 +56,7 @@ export function usePacks(client: PackClient): PacksState {
   const [error, setError] = useState<IpcError | null>(null);
   const [stack, setStack] = useState<ResourceStack | null>(null);
   const [stackLoading, setStackLoading] = useState(true);
-  const [backups, setBackups] = useState<BackupInfo[]>([]);
+  const [stackError, setStackError] = useState<IpcError | null>(null);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -85,31 +85,26 @@ export function usePacks(client: PackClient): PacksState {
 
   const refreshStack = useCallback(async () => {
     setStackLoading(true);
+    setStackError(null);
     try {
       const next = await client.getResourceStack();
-      if (mounted.current) setStack(next);
+      if (mounted.current) {
+        setStack(next);
+        setStackError(null);
+      }
     } catch (err) {
       if (!mounted.current) return;
-      setError(toAppError(err));
       setStack(null);
+      setStackError(toAppError(err));
     } finally {
       if (mounted.current) setStackLoading(false);
-    }
-  }, [client]);
-
-  const refreshBackups = useCallback(async () => {
-    try {
-      setBackups(await client.listOptionsBackups());
-    } catch {
-      if (mounted.current) setBackups([]);
     }
   }, [client]);
 
   useEffect(() => {
     void reload();
     void refreshStack();
-    void refreshBackups();
-  }, [reload, refreshStack, refreshBackups]);
+  }, [reload, refreshStack]);
 
   const importPack = useCallback(
     async (path: string, choice: ImportChoice = 'default') => {
@@ -129,16 +124,16 @@ export function usePacks(client: PackClient): PacksState {
     async (path: string) => {
       setBusy(true);
       try {
-        await refreshStack();
+        // The backend handles a missing options.txt without a pre-read, so a
+        // delete still works when the stack cannot be read.
         await client.deleteResourcePack(path);
         await reload();
         await refreshStack();
-        await refreshBackups();
       } finally {
         if (mounted.current) setBusy(false);
       }
     },
-    [client, reload, refreshStack, refreshBackups],
+    [client, reload, refreshStack],
   );
 
   const togglePack = useCallback(
@@ -148,12 +143,11 @@ export function usePacks(client: PackClient): PacksState {
         await refreshStack();
         await client.setResourcePackEnabled(filename, enabled);
         await refreshStack();
-        await refreshBackups();
       } finally {
         if (mounted.current) setBusy(false);
       }
     },
-    [client, refreshStack, refreshBackups],
+    [client, refreshStack],
   );
 
   const reorderStack = useCallback(
@@ -164,12 +158,11 @@ export function usePacks(client: PackClient): PacksState {
         await refreshStack();
         await client.reorderResourceStack(order, expected);
         await refreshStack();
-        await refreshBackups();
       } finally {
         if (mounted.current) setBusy(false);
       }
     },
-    [client, stack, refreshStack, refreshBackups],
+    [client, stack, refreshStack],
   );
 
   return {
@@ -180,10 +173,9 @@ export function usePacks(client: PackClient): PacksState {
     error,
     stack,
     stackLoading,
-    backups,
+    stackError,
     reload,
     refreshStack,
-    refreshBackups,
     importPack,
     deletePack,
     togglePack,
