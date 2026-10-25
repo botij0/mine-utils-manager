@@ -95,6 +95,39 @@ pub fn ensure_writable(game_dir: &Path) -> Result<(), crate::error::AppError> {
     }
 }
 
+/// Probe one world's own `session.lock`. Returns the lock holder when the file
+/// is held or cannot be probed, and `None` when it is absent or stale. A stale
+/// lock is not locked.
+pub fn world_locked(world_dir: &Path) -> Option<GameRunning> {
+    world_locked_inner(world_dir)
+}
+
+#[cfg(unix)]
+fn world_locked_inner(world_dir: &Path) -> Option<GameRunning> {
+    let lock_path = world_dir.join("session.lock");
+    let file = match open_lock_file(&lock_path) {
+        Ok(Some(file)) => file,
+        Ok(None) => return None,
+        Err(reason) => return Some(lock_unknown(&lock_path, reason)),
+    };
+    match posix_lock_holder(&file) {
+        LockProbe::Held(pid) => Some(GameRunning {
+            kind: GameRunningKind::SessionLock,
+            detail: format!("{} is locked by pid {pid}", lock_path.display()),
+            lock_path: Some(lock_path),
+            pid: Some(pid),
+            command: None,
+        }),
+        LockProbe::Free => None,
+        LockProbe::Unknown(reason) => Some(lock_unknown(&lock_path, reason)),
+    }
+}
+
+#[cfg(not(unix))]
+fn world_locked_inner(_world_dir: &Path) -> Option<GameRunning> {
+    None
+}
+
 /// What `F_GETLK` reported. A probe failure is not evidence that the file is
 /// free, so it is carried as `Unknown` and blocks the write.
 #[cfg(unix)]

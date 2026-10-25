@@ -13,6 +13,8 @@ sha2 = "0.10"
 hex = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 trash = "5"
+fastnbt = "2.6.3"
+flate2 = "1.1.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
