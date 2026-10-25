@@ -238,9 +238,18 @@ fn append_line(lines: &mut Vec<Line>, key: &str, value: &[String]) {
         "{key}:{}",
         serde_json::to_string(value).expect("strings serialize")
     );
+    // The separator follows the last line that actually has one, so a CRLF
+    // file without a final newline stays CRLF. The inserted last line keeps
+    // `None`, preserving the missing final newline.
+    let separator = lines
+        .iter()
+        .rev()
+        .map(|line| line.ending)
+        .find(|ending| *ending != LineEnding::None)
+        .unwrap_or(LineEnding::Lf);
     if let Some(last) = lines.last_mut() {
         if last.ending == LineEnding::None {
-            last.ending = LineEnding::Lf;
+            last.ending = separator;
             lines.push(Line {
                 text,
                 ending: LineEnding::None,
@@ -248,14 +257,10 @@ fn append_line(lines: &mut Vec<Line>, key: &str, value: &[String]) {
             return;
         }
     }
-    let ending = lines
-        .last()
-        .map(|line| match line.ending {
-            LineEnding::CrLf => LineEnding::CrLf,
-            _ => LineEnding::Lf,
-        })
-        .unwrap_or(LineEnding::Lf);
-    lines.push(Line { text, ending });
+    lines.push(Line {
+        text,
+        ending: separator,
+    });
 }
 
 /// Read and parse `options.txt`. A missing file or invalid UTF-8 asks the user

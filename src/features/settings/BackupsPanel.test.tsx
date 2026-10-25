@@ -129,6 +129,21 @@ describe('BackupsPanel', () => {
     }
   });
 
+  it('disables restore when the guard check is unknown', async () => {
+    render(
+      <BackupsPanel client={makeClient()} gameRunning={null} gameGuardUnknown />,
+    );
+
+    const buttons = await screen.findAllByRole('button', { name: 'Restore' });
+    for (const button of buttons) {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute(
+        'title',
+        'Mine Utils could not check whether Minecraft is running',
+      );
+    }
+  });
+
   it('restores a backup and reports the refreshed stack', async () => {
     const user = userEvent.setup();
     const client = makeClient();

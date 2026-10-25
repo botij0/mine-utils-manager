@@ -9,6 +9,7 @@ import {
   matchesSearch,
 } from '../../lib/format';
 import ActiveStack from './ActiveStack';
+import GameRunningBanner from './GameRunningBanner';
 import ImportSheet from './ImportSheet';
 import type { ImportPrompt } from './ImportSheet';
 import PackDetail from './PackDetail';
@@ -22,6 +23,8 @@ interface PacksPageProps {
   pickPath?: (directory: boolean) => Promise<string | null>;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
+  /** A failed guard check: unknown, so writes stay paused. */
+  gameGuardUnknown?: boolean;
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
 }
@@ -43,6 +46,7 @@ export default function PacksPage({
   client = ipc,
   pickPath = pickPackPath,
   gameRunning,
+  gameGuardUnknown = false,
   refreshGameRunning = () => {},
 }: PacksPageProps) {
   const {
@@ -75,9 +79,10 @@ export default function PacksPage({
   const [toast, setToast] = useState<ToggleToast | null>(null);
 
   // A fresh null from the app poll clears the banner; undefined means the
-  // first check has not landed yet, so fall back to the stack response.
+  // first check has not landed yet, so fall back to the stack response. A
+  // failed check keeps the last known running value and blocks writes.
   const running = gameRunning !== undefined ? gameRunning : (stack?.running ?? null);
-  const writesBlocked = running !== null;
+  const writesBlocked = running !== null || gameGuardUnknown;
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -205,7 +210,7 @@ export default function PacksPage({
       await deletePack(pack.path);
       if (selectedId === pack.id) setSelectedId(null);
     } catch (err) {
-      setActionError(toAppError(err).message);
+      refreshAfterGuard(err);
     }
   };
 
@@ -342,6 +347,7 @@ export default function PacksPage({
             packs={packs}
             busy={busy}
             running={running}
+            guardUnknown={gameGuardUnknown}
             onToggle={(filename, enabled) => void handleToggle(filename, enabled)}
             onReorder={(order) => void handleReorder(order)}
             onRecheck={() => {
@@ -354,12 +360,19 @@ export default function PacksPage({
             <div className="active-stack-head">
               <h2>Active stack</h2>
             </div>
+            <GameRunningBanner
+              running={running}
+              guardUnknown={gameGuardUnknown}
+              staleLocks={[]}
+              supported
+              onRecheck={() => {
+                void refreshStack();
+                void refreshGameRunning();
+              }}
+            />
             {stackError && !noGameDir ? (
               <div className="stack-error" role="alert">
                 <p className="error">{stackError.message}</p>
-                <p className="active-stack-empty">
-                  Launch Minecraft once so it writes options.txt, then retry.
-                </p>
                 <button
                   type="button"
                   className="button"

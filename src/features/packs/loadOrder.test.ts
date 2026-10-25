@@ -20,7 +20,7 @@ function ui(values: string[]): StackEntry[] {
 describe('toLoadOrder', () => {
   it('keeps foreign entries at their indices with files interleaved', () => {
     const current = stack(['vanilla', 'file/a.zip', 'fabric', 'file/b.zip']);
-    // Drag b above a in the UI. Foreign slots stay put.
+    // Drag b below a in the UI. Foreign slots stay put.
     const moved = [...ui(['vanilla', 'file/a.zip', 'fabric', 'file/b.zip'])];
     const b = moved.findIndex((item) => item.value === 'file/b.zip');
     const a = moved.findIndex((item) => item.value === 'file/a.zip');

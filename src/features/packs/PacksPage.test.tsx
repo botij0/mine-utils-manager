@@ -73,6 +73,18 @@ const BROKEN = pack('Broken', {
     message: 'Broken is not a readable pack: invalid Zip archive',
   },
 });
+const SYMLINK = pack('Linked', {
+  path: '/home/demo/.minecraft/resourcepacks/Linked',
+  location: 'directory',
+  kind: 'unknown',
+  format_range: null,
+  format: null,
+  game_label: null,
+  error: {
+    code: 'pack_symlink',
+    message: 'Linked is a symlink; Mine Utils does not follow links',
+  },
+});
 
 interface FakeClient extends PackClient {
   current: Pack[];
@@ -288,6 +300,56 @@ describe('PacksPage', () => {
     expect(client.current).toHaveLength(1);
   });
 
+  it('refreshes the banner and disabled controls after a game_running delete', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient([VANILLA]);
+    const running: GameRunning = {
+      kind: 'process',
+      detail: 'pid 4242 runs java',
+      lock_path: null,
+      pid: 4242,
+      command: 'java -jar client.jar',
+    };
+    let nowRunning: GameRunning | null = null;
+    client.getResourceStack = async () => ({
+      entries: [{ kind: 'file', value: 'file/Vanilla.zip', filename: 'Vanilla.zip' }],
+      incompatible: [],
+      running: nowRunning,
+      stale_locks: [],
+      detection_supported: true,
+    });
+    client.deleteResourcePack = async () => {
+      nowRunning = running;
+      throw new IpcError('game_running', 'Minecraft is running; close it first');
+    };
+    renderPage(client);
+
+    await user.click(await screen.findByRole('button', { name: /^Vanilla,/ }));
+    const detail = screen.getByRole('complementary', { name: 'Pack details' });
+    await user.click(within(detail).getByRole('button', { name: 'Delete pack' }));
+    await user.click(within(detail).getByRole('button', { name: 'Move to trash' }));
+
+    expect(await screen.findByText('Minecraft is running.')).toBeInTheDocument();
+    const list = screen.getByRole('list', { name: 'Stack order' });
+    expect(within(list).getByRole('checkbox')).toBeDisabled();
+    expect(within(detail).getByRole('button', { name: 'Delete pack' })).toBeDisabled();
+  });
+
+  it('offers no delete for a symlink pack and says how to remove it', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient([SYMLINK]);
+    renderPage(client);
+
+    await user.click(await screen.findByRole('button', { name: /^Linked,/ }));
+    const detail = screen.getByRole('complementary', { name: 'Pack details' });
+    expect(
+      within(detail).queryByRole('button', { name: 'Delete pack' }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(detail).getByText(/Remove the link from resourcepacks in a file manager/),
+    ).toBeInTheDocument();
+  });
+
   it('shows an import failure inside the import sheet', async () => {
     const user = userEvent.setup();
     const client = makeFakeClient([VANILLA]);
@@ -381,11 +443,57 @@ describe('PacksPage', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/options.txt is missing/);
     expect(alert).toHaveTextContent(/launch Minecraft once/i);
+    expect(
+      screen.queryByText('Launch Minecraft once so it writes options.txt, then retry.'),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText('Loading the stack…')).not.toBeInTheDocument();
 
     failing = false;
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('list', { name: 'Stack order' })).toBeInTheDocument();
+  });
+
+  it('lets a malformed options.txt speak without a second launch hint', async () => {
+    const client = makeFakeClient([VANILLA]);
+    client.getResourceStack = async () => {
+      throw new IpcError(
+        'options_txt',
+        'options.txt is malformed: no resourcePacks line; Mine Utils never rewrites a malformed file',
+      );
+    };
+    renderPage(client);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/malformed/);
+    expect(alert).toHaveTextContent(/never rewrites a malformed file/);
+    expect(
+      screen.queryByText('Launch Minecraft once so it writes options.txt, then retry.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('pauses writes and explains an unknown guard', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient([VANILLA]);
+    client.getResourceStack = async () => ({
+      entries: [{ kind: 'file', value: 'file/Vanilla.zip', filename: 'Vanilla.zip' }],
+      incompatible: [],
+      running: null,
+      stale_locks: [],
+      detection_supported: true,
+    });
+    render(
+      <PacksPage client={client} gameRunning={null} gameGuardUnknown />,
+    );
+
+    const list = await screen.findByRole('list', { name: 'Stack order' });
+    expect(
+      screen.getByText(/could not check\s+whether Minecraft is running, so writes are paused/i),
+    ).toBeInTheDocument();
+    expect(within(list).getByRole('checkbox')).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /^Vanilla,/ }));
+    const detail = screen.getByRole('complementary', { name: 'Pack details' });
+    expect(within(detail).getByRole('button', { name: 'Delete pack' })).toBeDisabled();
   });
 
   it('refreshes the stack and shows the banner after a game_running toggle error', async () => {

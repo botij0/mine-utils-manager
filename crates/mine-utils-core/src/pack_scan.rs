@@ -673,10 +673,11 @@ pub fn delete_pack_with(
     Ok(())
 }
 
-/// Validate that `path` is an existing regular direct child of the resolved
-/// `resourcepacks`. A path outside the root, nested under it, missing, or a
-/// symlink is refused before any caller touches `options.txt`. The entry itself
-/// is never canonicalized, so the check cannot redirect a delete elsewhere.
+/// Validate that `path` is an existing direct child (file or folder, never a
+/// symlink) of the resolved `resourcepacks`. A path outside the root, nested
+/// under it, missing, or a symlink is refused before any caller touches
+/// `options.txt`. The entry itself is never canonicalized, so the check cannot
+/// redirect a delete elsewhere.
 pub fn validate_delete_target(path: &Path, resourcepacks: &Path) -> Result<(), AppError> {
     let root = std::fs::canonicalize(resourcepacks)?;
     let metadata = std::fs::symlink_metadata(path).map_err(|_| PackError::NotFound {

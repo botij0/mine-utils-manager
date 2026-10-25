@@ -32,6 +32,8 @@ interface ActiveStackProps {
   /** The live game guard state; the app polls it, so the banner can appear
    *  while the page is open. */
   running: GameRunning | null;
+  /** A failed guard check: unknown, so writes stay blocked. */
+  guardUnknown?: boolean;
   onToggle: (filename: string, enabled: boolean) => void;
   onReorder: (order: string[]) => void;
   onRecheck: () => void;
@@ -55,6 +57,7 @@ export default function ActiveStack({
   packs,
   busy,
   running,
+  guardUnknown = false,
   onToggle,
   onReorder,
   onRecheck,
@@ -71,7 +74,7 @@ export default function ActiveStack({
     [uiEntries],
   );
   const byFilename = useMemo(() => packByFilename(packs), [packs]);
-  const blocked = busy || running !== null;
+  const blocked = busy || running !== null || guardUnknown;
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -103,6 +106,7 @@ export default function ActiveStack({
 
       <GameRunningBanner
         running={running}
+        guardUnknown={guardUnknown}
         staleLocks={stack.stale_locks}
         supported={stack.detection_supported}
         onRecheck={onRecheck}

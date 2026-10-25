@@ -1,8 +1,19 @@
 /**
  * The on-disk file name of a pack. `file/<filename>` in options.txt is this,
- * never the display name, which strips `.zip`. Windows separators are split
- * too, so a path from another platform cannot leak into the stack filename.
+ * never the display name, which strips `.zip`.
+ *
+ * The separator depends on the path style: a path with `/` is Unix-style; a
+ * bare Windows drive path splits on `\`. Elsewhere a backslash is a legal
+ * Unix filename character, so `A\B.zip` stays one name instead of becoming
+ * `B.zip`.
  */
 export function packFilename(pack: { path: string }): string {
-  return pack.path.split(/[\\/]/).filter(Boolean).at(-1) ?? pack.path;
+  const path = pack.path;
+  if (path.includes('/')) {
+    return path.split('/').filter(Boolean).at(-1) ?? path;
+  }
+  if (/^[A-Za-z]:\\/.test(path)) {
+    return path.split('\\').filter(Boolean).at(-1) ?? path;
+  }
+  return path;
 }

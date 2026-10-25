@@ -229,6 +229,24 @@ fn crlf_file_keeps_crlf_when_the_incompatible_line_is_added() {
 }
 
 #[test]
+fn crlf_without_final_newline_keeps_crlf_when_a_line_is_added() {
+    let text = "version:4556\r\nresourcePacks:[\"vanilla\"]\r\nlang:en_us";
+    let (_dir, path) = temp_options(text);
+
+    let parsed = read_options(&path).unwrap();
+    let mut resource = parsed.resource_packs().to_vec();
+    resource.push("file/a.zip".to_string());
+    let incompatible = vec!["file/a.zip".to_string()];
+    let rendered = parsed.render(&resource, &incompatible);
+
+    assert_eq!(
+        rendered,
+        "version:4556\r\nresourcePacks:[\"vanilla\",\"file/a.zip\"]\r\nlang:en_us\r\nincompatibleResourcePacks:[\"file/a.zip\"]",
+        "the inserted separator stays CRLF and the final newline stays missing"
+    );
+}
+
+#[test]
 fn a_missing_final_newline_stays_missing_when_a_line_is_added() {
     let text = "resourcePacks:[\"vanilla\"]";
     let (_dir, path) = temp_options(text);

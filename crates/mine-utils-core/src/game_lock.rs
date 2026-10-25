@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 const CLIENT_MAIN_CLASSES: &[&str] = &[
     "net.minecraft.client.main.Main",
     "net.fabricmc.loader.impl.launch.knot.KnotClient",
-    "net.fabricmc.loader.impl.launch.knot.Knot",
     "cpw.mods.bootstraplauncher.BootstrapLauncher",
 ];
 
@@ -118,7 +117,19 @@ fn session_lock_check(game_dir: &Path, stale: &mut Vec<PathBuf>) -> Option<GameR
             .map(|entry| entry.path())
             .filter(|path| path.is_dir())
             .collect(),
-        Err(_) => return None,
+        // A missing saves directory is normal: no world has ever locked a file.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        // Any other failure means the locks cannot be inspected, which is
+        // unknown, not evidence that the game is closed.
+        Err(err) => {
+            return Some(GameRunning {
+                kind: GameRunningKind::SessionLock,
+                detail: format!("{} could not be read: {err}", saves.display()),
+                lock_path: Some(saves),
+                pid: None,
+                command: None,
+            });
+        }
     };
     worlds.sort();
 
@@ -266,9 +277,13 @@ fn process_check(game_dir: &Path, proc_root: &Path) -> Option<GameRunning> {
             continue;
         }
         let command = cmdline_text(&args);
-        let named_main_class = CLIENT_MAIN_CLASSES
-            .iter()
-            .any(|main_class| command.contains(main_class));
+        // Match every argument, untruncated: a real launcher puts a multi-KB
+        // classpath before the main class, so the display string is too short.
+        let named_main_class = args.iter().any(|arg| {
+            CLIENT_MAIN_CLASSES
+                .iter()
+                .any(|main_class| arg.contains(main_class))
+        });
         let cwd = std::fs::read_link(proc_dir.join("cwd")).ok();
         if !(named_main_class
             || game_dir_matches(
@@ -300,6 +315,8 @@ fn process_check(game_dir: &Path, proc_root: &Path) -> Option<GameRunning> {
     None
 }
 
+/// A short display form for the banner. Guard decisions must inspect `args`
+/// themselves; real launchers put a multi-KB classpath before the main class.
 fn cmdline_text(args: &[String]) -> String {
     let mut command = args.join(" ");
     if command.len() > 240 {

@@ -6,9 +6,12 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use mine_utils_core::backup;
-use mine_utils_core::game_lock::{check_in, lock_detection_supported, GameRunningKind};
+use mine_utils_core::game_lock::{
+    check_in, lock_detection_supported, GameRunning, GameRunningKind,
+};
 use mine_utils_core::pack_scan::TrashService;
-use mine_utils_core::resource_stack::{self, StackPaths};
+use mine_utils_core::resource_stack::{self, StackPaths, WriteGuard};
+use mine_utils_core::AppError;
 use mine_utils_core::BackupsConfig;
 
 /// Spawned helper: takes a POSIX write lock on `$MINE_UTILS_LOCK_HOLDER` and
@@ -236,6 +239,36 @@ fn missing_saves_and_proc_roots_report_nothing() {
     assert!(status.stale_locks.is_empty());
 }
 
+#[test]
+fn an_unreadable_saves_path_blocks_as_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let game_dir = dir.path().join("game");
+    std::fs::create_dir_all(&game_dir).unwrap();
+    // A file named `saves` makes read_dir fail with NotADirectory on Unix; it
+    // is not the normal "no saves directory" case, so it must block.
+    let saves = game_dir.join("saves");
+    std::fs::write(&saves, b"not a directory").unwrap();
+    let proc_root = empty_proc_root(dir.path());
+
+    let status = check_in(&game_dir, &proc_root);
+    let running = status
+        .running
+        .expect("an unreadable saves path blocks as unknown");
+    assert_eq!(running.kind, GameRunningKind::SessionLock);
+    assert_eq!(running.lock_path.as_deref(), Some(saves.as_path()));
+    assert!(
+        running.detail.contains("saves") && running.detail.contains("could not be read"),
+        "the detail names the path and the failure: {}",
+        running.detail
+    );
+    assert_eq!(
+        mine_utils_core::game_lock::ensure_writable(&game_dir)
+            .unwrap_err()
+            .code(),
+        "game_running"
+    );
+}
+
 fn write_proc_entry(proc_root: &Path, pid: i32, argv: &[String]) {
     let entry = proc_root.join(pid.to_string());
     std::fs::create_dir_all(&entry).unwrap();
@@ -279,7 +312,6 @@ fn process_scan_finds_a_client_by_cwd_only() {
 fn process_scan_finds_fabric_and_forge_wrappers() {
     for (pid, main_class) in [
         (6200, "net.fabricmc.loader.impl.launch.knot.KnotClient"),
-        (6201, "net.fabricmc.loader.impl.launch.knot.Knot"),
         (6202, "cpw.mods.bootstraplauncher.BootstrapLauncher"),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -303,6 +335,70 @@ fn process_scan_finds_fabric_and_forge_wrappers() {
         assert_eq!(running.pid, Some(pid));
         assert!(running.command.unwrap().contains(main_class));
     }
+}
+
+#[test]
+fn process_scan_matches_the_main_class_after_a_long_classpath() {
+    let dir = tempfile::tempdir().unwrap();
+    let game_dir = dir.path().join("game");
+    std::fs::create_dir_all(&game_dir).unwrap();
+    let proc_root = empty_proc_root(dir.path());
+
+    // Real launchers put a multi-KB classpath before the main class. The
+    // banner's command text truncates at 240 bytes, so the guard must match
+    // the arguments themselves.
+    let classpath = (0..120)
+        .map(|index| format!("/lib/loader-{index}.jar"))
+        .collect::<Vec<_>>()
+        .join(":");
+    assert!(classpath.len() > 2048, "the classpath is 2 KB or more");
+    write_proc_entry(
+        &proc_root,
+        6250,
+        &[
+            "/usr/lib/jvm/java/bin/java".to_string(),
+            "-cp".to_string(),
+            classpath,
+            "net.fabricmc.loader.impl.launch.knot.KnotClient".to_string(),
+        ],
+    );
+
+    let running = check_in(&game_dir, &proc_root)
+        .running
+        .expect("the main class after a 2 KB classpath is detected");
+    assert_eq!(running.pid, Some(6250));
+    let command = running.command.expect("command text");
+    assert!(
+        command.ends_with('…'),
+        "the display command is truncated: {command}"
+    );
+    assert!(
+        !command.contains("KnotClient"),
+        "the truncated display never shows the main class, proving the match used the args"
+    );
+}
+
+#[test]
+fn process_scan_ignores_a_bare_knot_wrapper() {
+    let dir = tempfile::tempdir().unwrap();
+    let game_dir = dir.path().join("game");
+    std::fs::create_dir_all(&game_dir).unwrap();
+    let proc_root = empty_proc_root(dir.path());
+
+    // `Knot` is a substring of `KnotClient`; only the client entry point is a
+    // running game, so a bare loader class must not block writes.
+    write_proc_entry(
+        &proc_root,
+        6251,
+        &[
+            "/usr/bin/java".to_string(),
+            "-cp".to_string(),
+            "launcher.jar".to_string(),
+            "net.fabricmc.loader.impl.launch.knot.Knot".to_string(),
+        ],
+    );
+
+    assert!(check_in(&game_dir, &proc_root).running.is_none());
 }
 
 #[test]
@@ -356,16 +452,18 @@ fn process_scan_resolves_a_relative_game_dir_against_proc_cwd() {
     std::fs::create_dir_all(&game_dir).unwrap();
     let proc_root = empty_proc_root(dir.path());
 
+    // The process cwd is the parent and the argument is just `game`, so only
+    // the relative resolution can match; the cwd check on its own cannot.
     write_proc_entry(
         &proc_root,
         6400,
         &[
             "/usr/bin/java".to_string(),
             "--gameDir".to_string(),
-            ".".to_string(),
+            "game".to_string(),
         ],
     );
-    set_proc_cwd(&proc_root, 6400, &game_dir);
+    set_proc_cwd(&proc_root, 6400, dir.path());
 
     let running = check_in(&game_dir, &proc_root)
         .running
@@ -512,6 +610,107 @@ impl TrashService for RecordingTrash {
 fn stack_paths(game_dir: &Path, data_dir: &Path) -> StackPaths {
     std::fs::create_dir_all(game_dir.join("resourcepacks")).unwrap();
     StackPaths::for_game_dir(game_dir, data_dir, BackupsConfig::default())
+}
+
+/// A guard that returns `Ok` for every call except `fail_at`, so a test can
+/// fail exactly the post-backup or pre-trash re-check.
+struct ScriptedGuard {
+    calls: std::cell::Cell<usize>,
+    fail_at: usize,
+}
+
+impl ScriptedGuard {
+    fn failing_at(fail_at: usize) -> Self {
+        ScriptedGuard {
+            calls: std::cell::Cell::new(0),
+            fail_at,
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.get()
+    }
+}
+
+impl WriteGuard for ScriptedGuard {
+    fn ensure_writable(&self, _game_dir: &Path) -> Result<(), AppError> {
+        let calls = self.calls.get() + 1;
+        self.calls.set(calls);
+        if calls == self.fail_at {
+            return Err(AppError::GameRunning {
+                running: GameRunning {
+                    kind: GameRunningKind::Process,
+                    detail: "the game started mid-write".to_string(),
+                    lock_path: None,
+                    pid: Some(4242),
+                    command: None,
+                },
+            });
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_guard_failure_after_the_backup_keeps_the_old_bytes_and_the_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let game_dir = game_dir_with_world(dir.path());
+    let paths = stack_paths(&game_dir, &dir.path().join("data"));
+    let original = b"resourcePacks:[\"vanilla\"]\n";
+    std::fs::write(&paths.options_path, original).unwrap();
+
+    // First check passes; the re-check after the backup fails.
+    let guard = ScriptedGuard::failing_at(2);
+    let err = resource_stack::set_enabled_with_guard(&paths, "a.zip", true, &guard).unwrap_err();
+
+    assert_eq!(err.code(), "game_running");
+    assert_eq!(guard.calls(), 2, "the post-backup guard ran");
+    assert_eq!(
+        std::fs::read(&paths.options_path).unwrap(),
+        original,
+        "the old bytes survive a guard failure before the replace"
+    );
+    let backups = backup::list(&paths.backups_root).unwrap();
+    assert_eq!(backups.len(), 1, "the previous bytes became a backup");
+    assert_eq!(
+        std::fs::read(paths.backups_root.join(&backups[0].file_name)).unwrap(),
+        original
+    );
+}
+
+#[test]
+fn a_guard_failure_before_the_trash_cleans_references_but_keeps_the_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let game_dir = game_dir_with_world(dir.path());
+    let paths = stack_paths(&game_dir, &dir.path().join("data"));
+    let original = b"resourcePacks:[\"vanilla\",\"file/Gone.zip\"]\n";
+    std::fs::write(&paths.options_path, original).unwrap();
+    let pack = game_dir.join("resourcepacks/Gone.zip");
+    std::fs::write(&pack, b"zip").unwrap();
+
+    // The first outer check passes; the second, immediately before the trash,
+    // fails. The cleanup write uses the real guard, which passes in this idle
+    // test directory, so the references are already cleaned.
+    let guard = ScriptedGuard::failing_at(2);
+    let trash = RecordingTrash::new();
+    let err =
+        resource_stack::delete_pack_safely_with_guard(&paths, &pack, &trash, &guard).unwrap_err();
+
+    assert_eq!(err.code(), "game_running");
+    assert_eq!(guard.calls(), 2, "the pre-trash guard ran");
+    assert!(pack.is_file(), "the pack is untouched");
+    assert!(trash.calls().is_empty(), "nothing was trashed");
+    let text = std::fs::read_to_string(&paths.options_path).unwrap();
+    assert!(
+        !text.contains("file/Gone.zip"),
+        "the references were cleaned before the final check: {text}"
+    );
+    assert!(text.contains("vanilla"));
+    assert_eq!(
+        backup::list(&paths.backups_root).unwrap().len(),
+        1,
+        "the cleanup write left a backup"
+    );
 }
 
 #[test]

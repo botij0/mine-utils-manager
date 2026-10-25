@@ -21,6 +21,22 @@ use crate::game_lock;
 use crate::options_txt::{self, OptionsTxt};
 use crate::pack_scan::{delete_pack_with, validate_delete_target, TrashService};
 
+/// The game-running check a write performs before touching disk. Production
+/// uses the real process and session-lock probe; tests inject a scripted guard
+/// to prove that the re-checks after the backup and before the trash still run.
+pub trait WriteGuard {
+    fn ensure_writable(&self, game_dir: &Path) -> Result<(), AppError>;
+}
+
+/// The real guard: both independent checks in [`game_lock`].
+pub struct SystemGuard;
+
+impl WriteGuard for SystemGuard {
+    fn ensure_writable(&self, game_dir: &Path) -> Result<(), AppError> {
+        game_lock::ensure_writable(game_dir)
+    }
+}
+
 /// Everything that can go wrong with a stack change request.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StackError {
@@ -266,11 +282,23 @@ pub fn set_enabled(
     filename: &str,
     enabled: bool,
 ) -> Result<ResourceStack, AppError> {
+    set_enabled_with_guard(paths, filename, enabled, &SystemGuard)
+}
+
+/// [`set_enabled`] with an injected guard, so tests can fail the check that
+/// runs after the backup and prove the old bytes survive.
+#[doc(hidden)]
+pub fn set_enabled_with_guard(
+    paths: &StackPaths,
+    filename: &str,
+    enabled: bool,
+    guard: &dyn WriteGuard,
+) -> Result<ResourceStack, AppError> {
     let change = Change::Toggle {
         filename: filename.to_string(),
         enabled,
     };
-    let write = commit(paths, None, &change)?;
+    let write = commit(paths, None, &change, guard)?;
     if write.wrote {
         load(paths)
     } else {
@@ -289,7 +317,7 @@ pub fn reorder_stack(
     let change = Change::Reorder {
         order: order.to_vec(),
     };
-    let write = commit(paths, Some(expected), &change)?;
+    let write = commit(paths, Some(expected), &change, &SystemGuard)?;
     if write.wrote {
         load(paths)
     } else {
@@ -308,7 +336,7 @@ pub fn remove_references(paths: &StackPaths, filename: &str) -> Result<bool, App
     let change = Change::Remove {
         filename: filename.to_string(),
     };
-    Ok(commit(paths, None, &change)?.wrote)
+    Ok(commit(paths, None, &change, &SystemGuard)?.wrote)
 }
 
 /// Restore one backup over `options.txt` and refresh the stack.
@@ -343,12 +371,26 @@ pub fn delete_pack_safely(
     path: &Path,
     trash: &dyn TrashService,
 ) -> Result<DeleteOutcome, AppError> {
+    delete_pack_safely_with_guard(paths, path, trash, &SystemGuard)
+}
+
+/// [`delete_pack_safely`] with an injected guard, so tests can fail the last
+/// check and prove the references are cleaned but the pack is not trashed.
+#[doc(hidden)]
+pub fn delete_pack_safely_with_guard(
+    paths: &StackPaths,
+    path: &Path,
+    trash: &dyn TrashService,
+    guard: &dyn WriteGuard,
+) -> Result<DeleteOutcome, AppError> {
     let resourcepacks = paths.game_dir.join("resourcepacks");
     validate_delete_target(path, &resourcepacks)?;
-    game_lock::ensure_writable(&paths.game_dir)?;
+    guard.ensure_writable(&paths.game_dir)?;
     let filename = filename_for(path)?;
+    // The cleanup write keeps its own real guard; the injected guard controls
+    // the two outer checks that bracket it.
     let removed_references = remove_references(paths, &filename)?;
-    game_lock::ensure_writable(&paths.game_dir)?;
+    guard.ensure_writable(&paths.game_dir)?;
     delete_pack_with(path, &resourcepacks, trash)?;
     Ok(DeleteOutcome { removed_references })
 }
@@ -414,8 +456,9 @@ fn commit(
     paths: &StackPaths,
     expected: Option<&StackSnapshot>,
     change: &Change,
+    guard: &dyn WriteGuard,
 ) -> Result<StackWrite, AppError> {
-    game_lock::ensure_writable(&paths.game_dir)?;
+    guard.ensure_writable(&paths.game_dir)?;
 
     for attempt in 0..2 {
         let txt = options_txt::read_options(&paths.options_path)?;
@@ -460,7 +503,7 @@ fn commit(
         let backup_outcome = backup::create(&paths.backups_root, base, &paths.backups)?;
         // Re-check after the backup and immediately before the replace. A game
         // that started during the backup leaves the old bytes in place.
-        game_lock::ensure_writable(&paths.game_dir)?;
+        guard.ensure_writable(&paths.game_dir)?;
         options_txt::write_options(&paths.options_path, &rendered)?;
         return Ok(StackWrite {
             resource,

@@ -48,6 +48,9 @@ export default function App({ client = ipc }: AppProps) {
   // Undefined until the first check lands, so the pages can tell "not yet
   // checked" apart from a fresh "not running" result.
   const [gameRunning, setGameRunning] = useState<GameRunning | null | undefined>(undefined);
+  // A failed check is unknown, not evidence the game stopped. The last known
+  // running value stays and writes stay paused until a check succeeds.
+  const [gameGuardUnknown, setGameGuardUnknown] = useState(false);
 
   useEffect(() => {
     window.location.hash = page;
@@ -64,8 +67,10 @@ export default function App({ client = ipc }: AppProps) {
     try {
       const stack = await client.getResourceStack();
       setGameRunning(stack.running);
+      setGameGuardUnknown(false);
     } catch {
-      setGameRunning(null);
+      // Keep the last known value: only a successful check may clear it.
+      setGameGuardUnknown(true);
     }
   }, [client]);
 
@@ -141,6 +146,7 @@ export default function App({ client = ipc }: AppProps) {
             <PacksPage
               client={client}
               gameRunning={gameRunning}
+              gameGuardUnknown={gameGuardUnknown}
               refreshGameRunning={refreshGameRunning}
             />
           ) : null}
@@ -151,6 +157,7 @@ export default function App({ client = ipc }: AppProps) {
               client={client}
               config={config}
               gameRunning={gameRunning}
+              gameGuardUnknown={gameGuardUnknown}
               refreshGameRunning={refreshGameRunning}
               onConfigChanged={setConfig}
             />

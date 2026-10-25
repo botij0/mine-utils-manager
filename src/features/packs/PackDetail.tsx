@@ -47,6 +47,7 @@ export default function PackDetail({
 
   const range = pack.format_range;
   const stackEligible = pack.kind === 'resource' || pack.kind === 'both';
+  const symlinkPack = pack.error?.code === 'pack_symlink';
   return (
     <aside className="pack-detail" aria-label="Pack details">
       <div className="pack-detail-head">
@@ -115,43 +116,54 @@ export default function PackDetail({
         </p>
       )}
 
-      <div className="pack-danger-zone">
-        {confirming ? (
-          <div className="pack-confirm" role="alert">
-            <p>Move this pack to the system trash?</p>
-            <div className="pack-confirm-actions">
-              <button
-                type="button"
-                className="button button-danger"
-                disabled={busy || writesBlocked}
-                onClick={() => {
-                  void onDelete(pack).finally(() => setConfirming(false));
-                }}
-              >
-                Move to trash
-              </button>
-              <button
-                type="button"
-                className="button"
-                disabled={busy}
-                onClick={() => setConfirming(false)}
-              >
-                Cancel
-              </button>
+      {symlinkPack ? (
+        <p className="pack-range-note">
+          This entry is a symlink. Remove the link from resourcepacks in a file
+          manager; Mine Utils does not delete links.
+        </p>
+      ) : (
+        <div className="pack-danger-zone">
+          {confirming ? (
+            <div className="pack-confirm" role="alert">
+              <p>Move this pack to the system trash?</p>
+              <div className="pack-confirm-actions">
+                <button
+                  type="button"
+                  className="button button-danger"
+                  disabled={busy || writesBlocked}
+                  onClick={() => {
+                    void onDelete(pack).finally(() => setConfirming(false));
+                  }}
+                >
+                  Move to trash
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy}
+                  onClick={() => setConfirming(false)}
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            className="button button-danger"
-            disabled={busy || writesBlocked}
-            title={writesBlocked ? 'Close Minecraft before deleting packs' : undefined}
-            onClick={() => setConfirming(true)}
-          >
-            Delete pack
-          </button>
-        )}
-      </div>
+          ) : (
+            <button
+              type="button"
+              className="button button-danger"
+              disabled={busy || writesBlocked}
+              title={
+                writesBlocked
+                  ? 'Writes are paused until the game is confirmed closed'
+                  : undefined
+              }
+              onClick={() => setConfirming(true)}
+            >
+              Delete pack
+            </button>
+          )}
+        </div>
+      )}
     </aside>
   );
 }

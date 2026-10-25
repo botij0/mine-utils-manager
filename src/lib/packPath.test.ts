@@ -14,6 +14,11 @@ describe('packFilename', () => {
     );
   });
 
+  it('keeps a backslash inside a Unix file name', () => {
+    expect(packFilename({ path: '/packs/A\\B.zip' })).toBe('A\\B.zip');
+    expect(packFilename({ path: 'A\\B.zip' })).toBe('A\\B.zip');
+  });
+
   it('handles a bare name and trailing separators', () => {
     expect(packFilename({ path: 'Autumn.zip' })).toBe('Autumn.zip');
     expect(packFilename({ path: '/packs/Autumn/' })).toBe('Autumn');

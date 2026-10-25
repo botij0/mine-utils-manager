@@ -9,6 +9,8 @@ interface BackupsPanelProps {
   activeGameDir?: string | null;
   /** When the parent already tracks the game guard, it decides the block. */
   gameRunning?: GameRunning | null;
+  /** A failed app-level guard check: unknown, so restores stay disabled. */
+  gameGuardUnknown?: boolean;
   /** Ask the app-level poll to re-check after a `game_running` error. */
   refreshGameRunning?: () => void | Promise<void>;
   onRestored?: (stack: ResourceStack) => void;
@@ -26,6 +28,7 @@ export default function BackupsPanel({
   client,
   activeGameDir,
   gameRunning,
+  gameGuardUnknown = false,
   refreshGameRunning = () => {},
   onRestored,
 }: BackupsPanelProps) {
@@ -33,10 +36,14 @@ export default function BackupsPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<IpcError | null>(null);
   const [ownRunning, setOwnRunning] = useState<GameRunning | null>(null);
+  const [ownUnknown, setOwnUnknown] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
   const running = gameRunning !== undefined ? gameRunning : ownRunning;
+  const guardUnknown =
+    gameGuardUnknown || (gameRunning === undefined && ownUnknown);
+  const blocked = running !== null || guardUnknown;
 
   // A changed game dir replaces the whole table. The five-second running poll
   // object identity is deliberately not a dependency: it would flash the list.
@@ -70,10 +77,14 @@ export default function BackupsPanel({
     client
       .getResourceStack()
       .then((stack) => {
-        if (!cancelled) setOwnRunning(stack.running);
+        if (cancelled) return;
+        setOwnRunning(stack.running);
+        setOwnUnknown(false);
       })
       .catch(() => {
-        if (!cancelled) setOwnRunning(null);
+        if (cancelled) return;
+        // Keep the last known running value; a failed check is unknown.
+        setOwnUnknown(true);
       });
     return () => {
       cancelled = true;
@@ -149,8 +160,14 @@ export default function BackupsPanel({
                   <button
                     type="button"
                     className="button"
-                    disabled={running !== null || restoring !== null}
-                    title={running ? 'Close Minecraft before restoring' : undefined}
+                    disabled={blocked || restoring !== null}
+                    title={
+                      running
+                        ? 'Close Minecraft before restoring'
+                        : guardUnknown
+                          ? 'Mine Utils could not check whether Minecraft is running'
+                          : undefined
+                    }
                     onClick={() => void handleRestore(backup.file_name)}
                   >
                     {restoring === backup.file_name ? 'Restoring…' : 'Restore'}

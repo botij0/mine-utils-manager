@@ -234,8 +234,11 @@ fn unique_nanos() -> u64 {
     }
 }
 
-/// Write to a hidden temp file, fsync it, then rename it to the timestamped
-/// name and fsync the directory. A crash can leave a temp file, but it can never
+/// Write to a hidden temp file, fsync it, then publish it with `hard_link` to
+/// the timestamped name and fsync the directory. `hard_link` fails with
+/// `AlreadyExists` instead of replacing a file another process published, so a
+/// backup name is never clobbered; on a collision the temp is removed and the
+/// next timestamp is tried. A crash can leave a temp file, but it can never
 /// publish a truncated `*-options.txt`.
 fn write_unique(root: &Path, previous: &[u8]) -> Result<BackupInfo, AppError> {
     for _ in 0..64 {
@@ -243,9 +246,6 @@ fn write_unique(root: &Path, previous: &[u8]) -> Result<BackupInfo, AppError> {
         let stamp = timestamp(nanos);
         let file_name = format!("{stamp}{SUFFIX}");
         let path = root.join(&file_name);
-        if path.exists() {
-            continue;
-        }
         let tmp = root.join(format!(".{stamp}.{}.tmp", std::process::id()));
         let opened = std::fs::OpenOptions::new()
             .write(true)
@@ -265,16 +265,25 @@ fn write_unique(root: &Path, previous: &[u8]) -> Result<BackupInfo, AppError> {
             let _ = std::fs::remove_file(&tmp);
             return Err(backup_error(format!("{}: {err}", tmp.display())));
         }
-        if let Err(err) = std::fs::rename(&tmp, &path) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(backup_error(format!("{}: {err}", path.display())));
+        match std::fs::hard_link(&tmp, &path) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&tmp);
+                sync_dir(root);
+                return Ok(BackupInfo {
+                    display: display_timestamp(&file_name),
+                    file_name,
+                    bytes: previous.len() as u64,
+                });
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = std::fs::remove_file(&tmp);
+                continue;
+            }
+            Err(err) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(backup_error(format!("{}: {err}", path.display())));
+            }
         }
-        sync_dir(root);
-        return Ok(BackupInfo {
-            display: display_timestamp(&file_name),
-            file_name,
-            bytes: previous.len() as u64,
-        });
     }
     Err(backup_error(
         "could not find a free backup name after 64 tries",
@@ -643,6 +652,38 @@ mod tests {
         // A crash-shaped leftover must not be listed as a backup.
         std::fs::write(root.path().join(".20260101T000000.000000000.1.tmp"), b"x").unwrap();
         assert_eq!(list(root.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rapid_backups_get_distinct_names_and_leave_no_temp_files() {
+        let root = tempfile::tempdir().unwrap();
+        let first = create(root.path(), b"resourcePacks:[\"one\"]\n", &config(10))
+            .unwrap()
+            .created
+            .unwrap();
+        let second = create(root.path(), b"resourcePacks:[\"two\"]\n", &config(10))
+            .unwrap()
+            .created
+            .unwrap();
+
+        assert_ne!(
+            first.file_name, second.file_name,
+            "a rapid second write publishes under its own name"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join(&first.file_name)).unwrap(),
+            b"resourcePacks:[\"one\"]\n"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join(&second.file_name)).unwrap(),
+            b"resourcePacks:[\"two\"]\n"
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "no temp file survives: {leftovers:?}");
     }
 
     #[test]
