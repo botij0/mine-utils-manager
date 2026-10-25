@@ -16,15 +16,18 @@ interface SettingsPageProps {
   client: IpcClient;
   config: Config;
   onConfigChanged: (config: Config) => void;
-  /** From the app-level game guard poll, if there is one. */
+  /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
+  /** Force the app-level game guard to re-check now. */
+  refreshGameRunning?: () => void | Promise<void>;
 }
 
 export default function SettingsPage({
   client,
   config,
   onConfigChanged,
-  gameRunning = null,
+  gameRunning,
+  refreshGameRunning = () => {},
 }: SettingsPageProps) {
   const [error, setError] = useState<AppError | null>(null);
 
@@ -66,7 +69,12 @@ export default function SettingsPage({
         activePath={config.active_game_dir}
         onConfigChanged={onConfigChanged}
       />
-      <BackupsPanel client={client} gameRunning={gameRunning} />
+      <BackupsPanel
+        client={client}
+        activeGameDir={config.active_game_dir}
+        gameRunning={gameRunning}
+        refreshGameRunning={refreshGameRunning}
+      />
     </div>
   );
 }

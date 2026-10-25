@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { PackClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import type { BackupInfo, GameRunning, IpcError, ResourceStack } from '../../lib/types';
 
 interface BackupsPanelProps {
   client: PackClient;
+  /** Changes here must reload the list; a game-running change must not. */
+  activeGameDir?: string | null;
   /** When the parent already tracks the game guard, it decides the block. */
   gameRunning?: GameRunning | null;
+  /** Ask the app-level poll to re-check after a `game_running` error. */
+  refreshGameRunning?: () => void | Promise<void>;
   onRestored?: (stack: ResourceStack) => void;
 }
 
@@ -16,8 +20,15 @@ function formatBytes(bytes: number): string {
 }
 
 /** Every `options.txt` write leaves a timestamped backup; this lists them and
- *  restores one. Restore is blocked while the game is running. */
-export default function BackupsPanel({ client, gameRunning, onRestored }: BackupsPanelProps) {
+ *  restores one. The backend blocks restore while the game is running; this
+ *  panel only mirrors that state so the button explains itself. */
+export default function BackupsPanel({
+  client,
+  activeGameDir,
+  gameRunning,
+  refreshGameRunning = () => {},
+  onRestored,
+}: BackupsPanelProps) {
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<IpcError | null>(null);
@@ -27,43 +38,63 @@ export default function BackupsPanel({ client, gameRunning, onRestored }: Backup
 
   const running = gameRunning !== undefined ? gameRunning : ownRunning;
 
-  const load = useCallback(async () => {
+  // A changed game dir replaces the whole table. The five-second running poll
+  // object identity is deliberately not a dependency: it would flash the list.
+  useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
-    try {
-      if (gameRunning === undefined) {
-        const stack = await client.getResourceStack();
-        setOwnRunning(stack.running);
-      }
-      setBackups(await client.listOptionsBackups());
-    } catch (err) {
-      setBackups([]);
-      setError(toAppError(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [client, gameRunning]);
+    setStatus(null);
+    client
+      .listOptionsBackups()
+      .then((next) => {
+        if (!cancelled) setBackups(next);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setBackups([]);
+        setError(toAppError(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, activeGameDir]);
 
+  // Only used when the parent does not track the guard at all.
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (gameRunning !== undefined) return undefined;
+    let cancelled = false;
+    client
+      .getResourceStack()
+      .then((stack) => {
+        if (!cancelled) setOwnRunning(stack.running);
+      })
+      .catch(() => {
+        if (!cancelled) setOwnRunning(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, activeGameDir, gameRunning]);
 
   const handleRestore = async (file: string) => {
     setRestoring(file);
     setStatus(null);
     setError(null);
     try {
-      const before = await client.getResourceStack();
-      if (before.running) {
-        setOwnRunning(before.running);
-        throw new Error('Minecraft is running; close it before restoring a backup');
-      }
+      // The backend guards the game and can recreate a missing options.txt, so
+      // there is no client-side pre-check to block the exact recovery path.
       const refreshed = await client.restoreOptionsBackup(file);
       onRestored?.(refreshed);
       setStatus(`Restored ${file}. The active stack now has ${refreshed.entries.length} entries.`);
       setBackups(await client.listOptionsBackups());
     } catch (err) {
-      setError(toAppError(err));
+      const appError = toAppError(err);
+      setError(appError);
+      if (appError.code === 'game_running') void refreshGameRunning();
     } finally {
       setRestoring(null);
     }
