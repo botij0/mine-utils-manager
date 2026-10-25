@@ -82,14 +82,25 @@ pub async fn import_resource_pack(
     .map_err(join_error)?
 }
 
+/// Move a pack to the trash. Its `options.txt` references are removed first,
+/// under the same write mutex every stack write uses, so the arrays can never
+/// keep pointing at a trashed pack. When that write fails the file stays.
 #[tauri::command]
 pub async fn delete_resource_pack(
     state: State<'_, AppState>,
+    stack: State<'_, super::resource_stack::StackState>,
     path: String,
 ) -> Result<(), AppError> {
     state.note_ipc();
     let root = resourcepacks(&state)?;
-    tauri::async_runtime::spawn_blocking(move || delete_pack(Path::new(&path), &root))
-        .await
-        .map_err(join_error)?
+    let stack_paths = state.stack_paths()?;
+    let guard = stack.lock_for(&stack_paths.game_dir);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
+        let filename = mine_utils_core::resource_stack::filename_for(Path::new(&path))?;
+        mine_utils_core::resource_stack::remove_references(&stack_paths, &filename)?;
+        delete_pack(Path::new(&path), &root)
+    })
+    .await
+    .map_err(join_error)?
 }
