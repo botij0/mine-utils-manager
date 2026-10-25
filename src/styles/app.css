@@ -244,8 +244,13 @@ button {
   cursor: pointer;
 }
 
-.button:hover {
+.button:hover:not(:disabled) {
   background: var(--color-surface-raised);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .button.primary {
@@ -741,8 +746,20 @@ button {
   font-size: 13px;
 }
 
+.stack-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.stack-error p {
+  margin: 0;
+}
+
 .active-stack .banner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -750,6 +767,18 @@ button {
   border: 1px solid var(--color-border);
   border-left: 3px solid var(--color-muted);
   border-radius: var(--radius-sm);
+}
+
+/* The running detail can be a long command or path. Let it wrap instead of
+   covering the pack grid, and give Recheck its own row when space is tight. */
+.active-stack .banner > div {
+  flex: 1 1 260px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.active-stack .banner .button {
+  flex: 0 0 auto;
 }
 
 .active-stack .banner-danger {
@@ -763,6 +792,10 @@ button {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+.stack-list.is-blocked {
+  opacity: 0.6;
 }
 
 .stack-entry {

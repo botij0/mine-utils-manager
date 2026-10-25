@@ -20,7 +20,9 @@ import type {
   ResourceStack,
   StackEntry as StackEntryData,
 } from '../../lib/types';
+import { packFilename } from '../../lib/packPath';
 import GameRunningBanner from './GameRunningBanner';
+import { toLoadOrder } from './loadOrder';
 import StackEntryCard from './StackEntry';
 
 interface ActiveStackProps {
@@ -39,33 +41,10 @@ function fileKey(entry: StackEntryData): string {
   return entry.kind === 'file' ? entry.filename : entry.value;
 }
 
-/**
- * Turn a dragged UI list back into load order. Foreign entries keep their
- * indices; the file entries take the remaining slots in their new order.
- */
-function toLoadOrder(
-  movedUi: StackEntryData[],
-  current: StackEntryData[],
-): string[] {
-  const slots = current
-    .map((entry, index) => (entry.kind === 'file' ? index : -1))
-    .filter((index) => index >= 0);
-  const filesInLoadOrder = movedUi
-    .slice()
-    .reverse()
-    .filter((entry) => entry.kind === 'file');
-  const order = current.map((entry) => entry.value);
-  slots.forEach((slot, index) => {
-    order[slot] = filesInLoadOrder[index].value;
-  });
-  return order;
-}
-
 function packByFilename(packs: Pack[]): Map<string, Pack> {
   const byName = new Map<string, Pack>();
   for (const pack of packs) {
-    const filename = pack.path.split('/').filter(Boolean).at(-1) ?? pack.path;
-    byName.set(filename, pack);
+    byName.set(packFilename(pack), pack);
   }
   return byName;
 }
@@ -138,7 +117,10 @@ export default function ActiveStack({
           onDragEnd={handleDragEnd}
         >
           <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-            <ul className="stack-list" aria-label="Stack order">
+            <ul
+              className={`stack-list${blocked ? ' is-blocked' : ''}`}
+              aria-label="Stack order"
+            >
               {uiEntries.map((entry, index) => (
                 <StackEntryCard
                   key={ids[index]}

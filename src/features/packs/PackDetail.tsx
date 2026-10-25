@@ -46,6 +46,7 @@ export default function PackDetail({
   }
 
   const range = pack.format_range;
+  const stackEligible = pack.kind === 'resource' || pack.kind === 'both';
   return (
     <aside className="pack-detail" aria-label="Pack details">
       <div className="pack-detail-head">
@@ -91,12 +92,12 @@ export default function PackDetail({
 
       {range ? (
         <p className="pack-range-note">
-          This build is read-only. Format {formatRangeLabel(range)} is not changed by
-          Mine Utils.
+          Mine Utils does not change this pack's declared format range
+          ({formatRangeLabel(range)}).
         </p>
       ) : null}
 
-      {pack.error ? null : (
+      {pack.error ? null : stackEligible ? (
         <label className="stack-toggle pack-stack-toggle">
           <input
             type="checkbox"
@@ -106,6 +107,12 @@ export default function PackDetail({
           />
           Enabled in the active stack
         </label>
+      ) : (
+        <p className="pack-range-note">
+          {pack.kind === 'data'
+            ? 'Data packs are not part of the resource pack stack.'
+            : 'The pack kind is unknown, so the stack toggle is unavailable.'}
+        </p>
       )}
 
       <div className="pack-danger-zone">
