@@ -26,8 +26,7 @@ fn join_error(err: impl std::error::Error + Send + Sync + 'static) -> AppError {
     AppError::Io(std::io::Error::other(err))
 }
 
-/// The whole stack: entries in load order low to high, the incompatible set,
-/// and the running-game state. Reads never block.
+/// The whole stack. Reads never block, even while the game runs.
 #[tauri::command]
 pub async fn get_resource_stack(state: State<'_, AppState>) -> Result<ResourceStack, AppError> {
     state.note_ipc();

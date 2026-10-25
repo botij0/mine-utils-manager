@@ -41,8 +41,7 @@ function fileKey(entry: StackEntryData): string {
 
 /**
  * Turn a dragged UI list back into load order. Foreign entries keep their
- * indices; the file entries take the remaining slots in their new order. The
- * UI shows the reverse of the array, so the top card is the highest priority.
+ * indices; the file entries take the remaining slots in their new order.
  */
 function toLoadOrder(
   movedUi: StackEntryData[],
@@ -86,7 +85,7 @@ export default function ActiveStack({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  // Top first: the reverse of the load order array.
+  // Top first.
   const uiEntries = useMemo(() => [...stack.entries].reverse(), [stack.entries]);
   const ids = useMemo(
     () => uiEntries.map((entry, index) => `entry-${index}-${fileKey(entry)}`),

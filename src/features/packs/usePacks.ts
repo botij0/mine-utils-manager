@@ -160,8 +160,6 @@ export function usePacks(client: PackClient): PacksState {
     async (order: string[]) => {
       setBusy(true);
       try {
-        // The snapshot the user acted on, so the backend can refuse a write
-        // against a file set that changed since the screen was drawn.
         const expected = snapshotOf(stack ?? (await client.getResourceStack()));
         await refreshStack();
         await client.reorderResourceStack(order, expected);

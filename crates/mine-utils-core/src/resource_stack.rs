@@ -44,9 +44,6 @@ impl StackError {
 
 /// One `resourcePacks` entry. The wire tags each entry with `kind`, and the
 /// frontend mirrors this shape in `src/lib/types.ts`.
-///
-/// `entries` on [`ResourceStack`] is load order, low to high. The UI shows the
-/// reverse, so the top card is the highest priority and loads last.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StackEntry {

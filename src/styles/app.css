@@ -956,3 +956,14 @@ button {
   overflow: hidden;
   clip: rect(0 0 0 0);
 }
+
+.stack-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.stack-remove {
+  flex: none;
+  padding: 2px 8px;
+}

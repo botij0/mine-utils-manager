@@ -73,6 +73,7 @@ export default function StackEntry({
     <li
       className={`stack-entry${isDragging ? ' is-dragging' : ''}${missing ? ' is-missing' : ''}`}
       aria-label={label}
+      title={entry.value}
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
     >
@@ -102,7 +103,7 @@ export default function StackEntry({
       {missing ? (
         <button
           type="button"
-          className="button button-danger"
+          className="button button-danger stack-remove"
           disabled={disabled}
           onClick={() => onToggle(false)}
         >
@@ -113,11 +114,11 @@ export default function StackEntry({
           <input
             type="checkbox"
             aria-label={`Enabled: ${label}`}
+            title={`Enabled: ${label}`}
             checked
             disabled={disabled}
             onChange={(event) => onToggle(event.target.checked)}
           />
-          Enabled
         </label>
       )}
       <span className="stack-moves">

@@ -58,8 +58,7 @@ export default function App({ client = ipc }: AppProps) {
       .catch((err: unknown) => setError(toAppError(err)));
   }, [client]);
 
-  // The game guard is global state: writes on any page stop while Minecraft
-  // runs, so the state is polled here and handed to the pages.
+  // Writes on any page stop while Minecraft runs.
   useEffect(() => {
     let cancelled = false;
     const check = () => {
