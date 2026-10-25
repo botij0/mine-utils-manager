@@ -31,10 +31,10 @@ pub use pack::{
 };
 pub use pack_scan::{
     delete_pack, delete_pack_with, import_pack, import_pack_with, pack_names, scan_packs,
-    HashCache, PackListing, SystemTrash, TrashService, MAX_ICON_BYTES, MAX_META_BYTES,
-    MAX_ZIP_ENTRIES,
+    validate_delete_target, HashCache, PackListing, SystemTrash, TrashService, MAX_ICON_BYTES,
+    MAX_META_BYTES, MAX_ZIP_ENTRIES,
 };
 pub use paths::{home_dir, AppPaths};
 pub use resource_stack::{
-    ResourceStack, StackEntry, StackError, StackPaths, StackSnapshot, StackWrite,
+    DeleteOutcome, ResourceStack, StackEntry, StackError, StackPaths, StackSnapshot, StackWrite,
 };

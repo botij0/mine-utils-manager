@@ -19,6 +19,7 @@ use crate::config::BackupsConfig;
 use crate::error::AppError;
 use crate::game_lock;
 use crate::options_txt::{self, OptionsTxt};
+use crate::pack_scan::{delete_pack_with, validate_delete_target, TrashService};
 
 /// Everything that can go wrong with a stack change request.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -146,12 +147,13 @@ pub struct StackWrite {
     pub wrote: bool,
 }
 
-/// A pack filename must be a plain direct child of `resourcepacks`.
+/// A pack filename must be a plain direct child of `resourcepacks`. Only path
+/// separators, NUL, and the two directory names are rejected; dots inside a
+/// name are ordinary characters, so `Epic..Pack.zip` is valid.
 pub fn validate_filename(filename: &str) -> Result<(), StackError> {
     let unsafe_name = filename.is_empty()
         || filename == "."
         || filename == ".."
-        || filename.contains("..")
         || filename.contains('/')
         || filename.contains('\\')
         || filename.contains('\0');
@@ -312,13 +314,43 @@ pub fn remove_references(paths: &StackPaths, filename: &str) -> Result<bool, App
 /// Restore one backup over `options.txt` and refresh the stack.
 pub fn restore_backup(paths: &StackPaths, file_name: &str) -> Result<ResourceStack, AppError> {
     game_lock::ensure_writable(&paths.game_dir)?;
-    backup::restore(
+    backup::restore_guarded(
         &paths.backups_root,
         &paths.options_path,
         file_name,
         &paths.backups,
+        // Re-check after the pre-restore backup exists and immediately before
+        // the current file is replaced.
+        || game_lock::ensure_writable(&paths.game_dir),
     )?;
     load(paths)
+}
+
+/// What a guarded delete did before moving the pack to the trash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteOutcome {
+    pub removed_references: bool,
+}
+
+/// Delete one pack safely. The target is validated as a direct child of the
+/// resolved `resourcepacks` before anything else; the game guard runs before
+/// the `options.txt` cleanup and again immediately before the trash move, so a
+/// client that starts in between leaves the pack installed but disabled rather
+/// than pointing at a trashed file. The injectable trash makes the ordering
+/// testable.
+pub fn delete_pack_safely(
+    paths: &StackPaths,
+    path: &Path,
+    trash: &dyn TrashService,
+) -> Result<DeleteOutcome, AppError> {
+    let resourcepacks = paths.game_dir.join("resourcepacks");
+    validate_delete_target(path, &resourcepacks)?;
+    game_lock::ensure_writable(&paths.game_dir)?;
+    let filename = filename_for(path)?;
+    let removed_references = remove_references(paths, &filename)?;
+    game_lock::ensure_writable(&paths.game_dir)?;
+    delete_pack_with(path, &resourcepacks, trash)?;
+    Ok(DeleteOutcome { removed_references })
 }
 
 fn resource_stack_of(paths: &StackPaths, write: &StackWrite) -> Result<ResourceStack, AppError> {
@@ -360,6 +392,9 @@ impl Change {
             Change::Remove { filename } => Ok(disable(resource, incompatible, filename)),
             Change::Reorder { order } => {
                 reorder(resource, order)?;
+                if resource.as_slice() == order.as_slice() {
+                    return Ok(false);
+                }
                 *resource = order.clone();
                 Ok(true)
             }
@@ -423,6 +458,9 @@ fn commit(
 
         // A failed backup aborts the write; the previous bytes stay intact.
         let backup_outcome = backup::create(&paths.backups_root, base, &paths.backups)?;
+        // Re-check after the backup and immediately before the replace. A game
+        // that started during the backup leaves the old bytes in place.
+        game_lock::ensure_writable(&paths.game_dir)?;
         options_txt::write_options(&paths.options_path, &rendered)?;
         return Ok(StackWrite {
             resource,
@@ -526,7 +564,7 @@ mod tests {
 
     #[test]
     fn filenames_are_validated() {
-        for name in ["", ".", "..", "a..b", "sub/a.zip", "sub\\a.zip", "a\0b"] {
+        for name in ["", ".", "..", "sub/a.zip", "sub\\a.zip", "a\0b"] {
             assert_eq!(
                 enable(&mut Vec::new(), name).unwrap_err(),
                 StackError::InvalidFilename {
@@ -536,6 +574,7 @@ mod tests {
             );
         }
         assert!(enable(&mut Vec::new(), "Cool Pack.zip").is_ok());
+        assert!(enable(&mut Vec::new(), "Epic..Pack.zip").is_ok());
     }
 
     #[test]
@@ -728,6 +767,184 @@ mod tests {
         assert!(
             after.contains("lang:de_de"),
             "the external edit survives: {after}"
+        );
+    }
+
+    struct OrderedTrash {
+        trash_dir: PathBuf,
+        options_path: PathBuf,
+        observed: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl OrderedTrash {
+        fn new(root: &Path, options_path: &Path) -> Self {
+            let trash_dir = root.join("trash");
+            std::fs::create_dir_all(&trash_dir).unwrap();
+            OrderedTrash {
+                trash_dir,
+                options_path: options_path.to_path_buf(),
+                observed: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn observed(&self) -> Vec<String> {
+            self.observed.lock().unwrap().clone()
+        }
+    }
+
+    impl TrashService for OrderedTrash {
+        fn move_to_trash(&self, path: &Path) -> Result<(), crate::pack::PackError> {
+            // Capture options.txt at the exact moment the trash is called.
+            let content = std::fs::read_to_string(&self.options_path).unwrap_or_default();
+            self.observed.lock().unwrap().push(content);
+            let target = self.trash_dir.join(path.file_name().unwrap());
+            std::fs::rename(path, target).map_err(|err| crate::pack::PackError::Trash {
+                path: path.to_path_buf(),
+                reason: err.to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn delete_removes_both_references_before_trashing() {
+        let (dir, paths) = fixture_stack();
+        write_fixture(
+            &paths,
+            "resourcePacks:[\"vanilla\",\"file/Pack.zip\"]\nincompatibleResourcePacks:[\"file/Pack.zip\"]\n",
+        );
+        let pack = paths.game_dir.join("resourcepacks/Pack.zip");
+        std::fs::write(&pack, b"zip").unwrap();
+        let trash = OrderedTrash::new(dir.path(), &paths.options_path);
+
+        let outcome = delete_pack_safely(&paths, &pack, &trash).unwrap();
+
+        assert!(outcome.removed_references);
+        assert_eq!(
+            std::fs::read_to_string(&paths.options_path).unwrap(),
+            "resourcePacks:[\"vanilla\"]\nincompatibleResourcePacks:[]\n"
+        );
+        let observed = trash.observed();
+        assert_eq!(observed.len(), 1);
+        assert!(
+            observed[0].contains("resourcePacks:[\"vanilla\"]"),
+            "references are gone before the trash call: {}",
+            observed[0]
+        );
+        assert!(
+            observed[0].contains("incompatibleResourcePacks:[]"),
+            "both arrays are cleaned before the trash call: {}",
+            observed[0]
+        );
+        assert!(!pack.exists(), "the pack moved to the trash");
+        assert_eq!(backup::list(&paths.backups_root).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn delete_of_an_out_of_root_path_changes_nothing() {
+        let (dir, paths) = fixture_stack();
+        let original = "resourcePacks:[\"vanilla\",\"file/Pack.zip\"]\n";
+        write_fixture(&paths, original);
+        let outside = dir.path().join("outside.zip");
+        std::fs::write(&outside, b"zip").unwrap();
+        let trash = OrderedTrash::new(dir.path(), &paths.options_path);
+
+        let err = delete_pack_safely(&paths, &outside, &trash).unwrap_err();
+
+        assert_eq!(err.code(), "pack_outside_root");
+        assert_eq!(
+            std::fs::read_to_string(&paths.options_path).unwrap(),
+            original
+        );
+        assert!(backup::list(&paths.backups_root).unwrap().is_empty());
+        assert!(trash.observed().is_empty());
+    }
+
+    #[test]
+    fn delete_of_a_nested_path_changes_nothing() {
+        let (dir, paths) = fixture_stack();
+        let original = "resourcePacks:[\"vanilla\",\"file/Pack.zip\"]\n";
+        write_fixture(&paths, original);
+        let nested_dir = paths.game_dir.join("resourcepacks/sub");
+        std::fs::create_dir_all(&nested_dir).unwrap();
+        let nested = nested_dir.join("Pack.zip");
+        std::fs::write(&nested, b"zip").unwrap();
+        let trash = OrderedTrash::new(dir.path(), &paths.options_path);
+
+        let err = delete_pack_safely(&paths, &nested, &trash).unwrap_err();
+
+        assert_eq!(err.code(), "pack_outside_root");
+        assert_eq!(
+            std::fs::read_to_string(&paths.options_path).unwrap(),
+            original
+        );
+        assert!(backup::list(&paths.backups_root).unwrap().is_empty());
+        assert!(trash.observed().is_empty());
+    }
+
+    #[test]
+    fn delete_of_a_missing_path_changes_nothing() {
+        let (dir, paths) = fixture_stack();
+        let original = "resourcePacks:[\"vanilla\",\"file/Pack.zip\"]\n";
+        write_fixture(&paths, original);
+        let missing = paths.game_dir.join("resourcepacks/Pack.zip");
+        let trash = OrderedTrash::new(dir.path(), &paths.options_path);
+
+        let err = delete_pack_safely(&paths, &missing, &trash).unwrap_err();
+
+        assert_eq!(err.code(), "pack_not_found");
+        assert_eq!(
+            std::fs::read_to_string(&paths.options_path).unwrap(),
+            original
+        );
+        assert!(backup::list(&paths.backups_root).unwrap().is_empty());
+        assert!(trash.observed().is_empty());
+    }
+
+    #[test]
+    fn delete_of_a_symlinked_pack_changes_nothing() {
+        let (dir, paths) = fixture_stack();
+        let original = "resourcePacks:[\"vanilla\",\"file/Link.zip\"]\n";
+        write_fixture(&paths, original);
+        let target = paths.game_dir.join("resourcepacks/Real.zip");
+        std::fs::write(&target, b"zip").unwrap();
+        let link = paths.game_dir.join("resourcepacks/Link.zip");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let trash = OrderedTrash::new(dir.path(), &paths.options_path);
+
+        let err = delete_pack_safely(&paths, &link, &trash).unwrap_err();
+
+        assert_eq!(err.code(), "pack_symlink");
+        assert_eq!(
+            std::fs::read_to_string(&paths.options_path).unwrap(),
+            original
+        );
+        assert!(backup::list(&paths.backups_root).unwrap().is_empty());
+        assert!(trash.observed().is_empty());
+    }
+
+    #[test]
+    fn filenames_with_inner_dots_are_valid() {
+        let mut resource = Vec::new();
+        assert!(enable(&mut resource, "my..pack.zip").unwrap());
+        assert_eq!(resource, arrays(&["file/my..pack.zip"]));
+        assert!(file_value("Epic..Pack.zip").is_ok());
+    }
+
+    #[test]
+    fn a_noop_reorder_writes_no_backup() {
+        let (_dir, paths) = fixture_stack();
+        let text = "resourcePacks:[\"vanilla\",\"file/a.zip\",\"file/b.zip\"]\n";
+        write_fixture(&paths, text);
+        let order = arrays(&["vanilla", "file/a.zip", "file/b.zip"]);
+        let expected = snapshot(&["vanilla", "file/a.zip", "file/b.zip"], &[]);
+
+        let stack = reorder_stack(&paths, &order, &expected).unwrap();
+
+        assert_eq!(stack.snapshot().resource, order);
+        assert_eq!(std::fs::read_to_string(&paths.options_path).unwrap(), text);
+        assert!(
+            backup::list(&paths.backups_root).unwrap().is_empty(),
+            "a reorder that changes nothing must not create a backup"
         );
     }
 

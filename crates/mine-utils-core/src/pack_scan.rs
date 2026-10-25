@@ -668,7 +668,32 @@ pub fn delete_pack_with(
     resourcepacks: &Path,
     trash: &dyn TrashService,
 ) -> Result<(), AppError> {
+    validate_delete_target(path, resourcepacks)?;
+    trash.move_to_trash(path)?;
+    Ok(())
+}
+
+/// Validate that `path` is an existing regular direct child of the resolved
+/// `resourcepacks`. A path outside the root, nested under it, missing, or a
+/// symlink is refused before any caller touches `options.txt`. The entry itself
+/// is never canonicalized, so the check cannot redirect a delete elsewhere.
+pub fn validate_delete_target(path: &Path, resourcepacks: &Path) -> Result<(), AppError> {
     let root = std::fs::canonicalize(resourcepacks)?;
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| PackError::NotFound {
+        path: path.to_path_buf(),
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(PackError::Symlink {
+            path: path.to_path_buf(),
+        }
+        .into());
+    }
+    if path.file_name().is_none() {
+        return Err(PackError::OutsideRoot {
+            path: path.to_path_buf(),
+        }
+        .into());
+    }
     let parent = path.parent().ok_or_else(|| PackError::OutsideRoot {
         path: path.to_path_buf(),
     })?;
@@ -681,10 +706,6 @@ pub fn delete_pack_with(
         }
         .into());
     }
-    std::fs::symlink_metadata(path).map_err(|_| PackError::NotFound {
-        path: path.to_path_buf(),
-    })?;
-    trash.move_to_trash(path)?;
     Ok(())
 }
 
@@ -1787,7 +1808,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_trashes_a_symlink_itself_not_its_target() {
+    fn delete_refuses_a_symlinked_pack() {
         let (root, _cache_root, _icons, _hashes, trash) = setup();
         let resourcepacks = root.path().join("resourcepacks");
         let target = resourcepacks.join("Target");
@@ -1796,12 +1817,13 @@ mod tests {
         let link = resourcepacks.join("Link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
-        delete_pack_with(&link, &resourcepacks, &trash).unwrap();
-        assert_eq!(trash.calls(), vec![link.clone()], "the call names the link");
-        assert!(!link.exists(), "the link is gone");
+        let err = delete_pack_with(&link, &resourcepacks, &trash).unwrap_err();
+        assert_eq!(err.code(), "pack_symlink");
+        assert!(trash.calls().is_empty(), "nothing is trashed");
+        assert!(link.exists(), "the link is untouched");
         assert!(
             target.join("pack.mcmeta").is_file(),
-            "a link into the root never trashes its target"
+            "the target is untouched"
         );
     }
 

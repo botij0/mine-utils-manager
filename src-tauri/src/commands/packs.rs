@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mine_utils_core::{
-    delete_pack, import_pack, scan_packs, AppError, HashCache, IconCache, ImportChoice,
-    ImportOutcome, PackListing,
+    import_pack, resource_stack, scan_packs, AppError, HashCache, IconCache, ImportChoice,
+    ImportOutcome, PackListing, SystemTrash,
 };
 use tauri::State;
 
@@ -82,9 +82,11 @@ pub async fn import_resource_pack(
     .map_err(join_error)?
 }
 
-/// Move a pack to the trash. Its `options.txt` references are removed first,
-/// under the same write mutex every stack write uses, so the arrays can never
-/// keep pointing at a trashed pack. When that write fails the file stays.
+/// Move a pack to the trash. `delete_pack_safely` validates the target, takes
+/// the game guard, removes the `options.txt` references, re-checks the guard,
+/// then trashes the file. The whole sequence runs under the same write mutex
+/// every stack write uses. A trash failure can leave the pack installed but
+/// disabled; that is the safe direction.
 #[tauri::command]
 pub async fn delete_resource_pack(
     state: State<'_, AppState>,
@@ -92,14 +94,13 @@ pub async fn delete_resource_pack(
     path: String,
 ) -> Result<(), AppError> {
     state.note_ipc();
-    let root = resourcepacks(&state)?;
+    // One config read decides the root and the stack paths, so a concurrent
+    // active-dir change cannot split the delete across two game dirs.
     let stack_paths = state.stack_paths()?;
     let guard = stack.lock_for(&stack_paths.game_dir);
     tauri::async_runtime::spawn_blocking(move || {
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
-        let filename = mine_utils_core::resource_stack::filename_for(Path::new(&path))?;
-        mine_utils_core::resource_stack::remove_references(&stack_paths, &filename)?;
-        delete_pack(Path::new(&path), &root)
+        resource_stack::delete_pack_safely(&stack_paths, Path::new(&path), &SystemTrash).map(|_| ())
     })
     .await
     .map_err(join_error)?

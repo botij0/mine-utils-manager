@@ -2,13 +2,23 @@
 //!
 //! Two independent checks: every `saves/*/session.lock` is probed with a POSIX
 //! record lock (`fcntl(F_GETLK)`), because that is what Java takes, and
-//! `/proc/*/cmdline` is scanned for a `java` process that runs the Minecraft
-//! client or points at the active game dir. Either check blocks writes. A
-//! `session.lock` file nobody holds is stale and is reported without blocking.
+//! `/proc/*/cmdline` plus `/proc/*/cwd` are scanned for a `java` process that
+//! runs a known client main class or points at the active game dir. Either
+//! check blocks writes. A `session.lock` nobody holds is stale and is reported
+//! without blocking; one that cannot be probed is unknown and blocks.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+/// Main classes that mean a Minecraft client is running. Modded launchers wrap
+/// the vanilla class, so the wrapper name is what their command line carries.
+const CLIENT_MAIN_CLASSES: &[&str] = &[
+    "net.minecraft.client.main.Main",
+    "net.fabricmc.loader.impl.launch.knot.KnotClient",
+    "net.fabricmc.loader.impl.launch.knot.Knot",
+    "cpw.mods.bootstraplauncher.BootstrapLauncher",
+];
 
 /// How the running client was found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,9 +96,19 @@ pub fn ensure_writable(game_dir: &Path) -> Result<(), crate::error::AppError> {
     }
 }
 
-/// Probe every `saves/*/session.lock`. Minecraft's SessionLock takes a POSIX
-/// write lock over the whole file, so `F_GETLK` names the holder. A lock file
-/// with no active lock is stale and does not block.
+/// What `F_GETLK` reported. A probe failure is not evidence that the file is
+/// free, so it is carried as `Unknown` and blocks the write.
+#[cfg(unix)]
+enum LockProbe {
+    Free,
+    Held(i32),
+    Unknown(String),
+}
+
+/// Probe every `saves/*/session.lock` before deciding. Minecraft's SessionLock
+/// takes a POSIX write lock over the whole file, so `F_GETLK` names the holder.
+/// A lock file with no active lock is stale. An unprobeable file is unknown and
+/// blocks, because treating it as stale could overwrite a live game's options.
 #[cfg(unix)]
 fn session_lock_check(game_dir: &Path, stale: &mut Vec<PathBuf>) -> Option<GameRunning> {
     let saves = game_dir.join("saves");
@@ -102,15 +122,21 @@ fn session_lock_check(game_dir: &Path, stale: &mut Vec<PathBuf>) -> Option<GameR
     };
     worlds.sort();
 
+    let mut held = None;
+    let mut unknown = None;
     for world in worlds {
         let lock_path = world.join("session.lock");
         let file = match open_lock_file(&lock_path) {
-            Some(file) => file,
-            None => continue,
+            Ok(Some(file)) => file,
+            Ok(None) => continue,
+            Err(reason) => {
+                unknown.get_or_insert_with(|| lock_unknown(&lock_path, reason));
+                continue;
+            }
         };
         match posix_lock_holder(&file) {
-            Some(pid) => {
-                return Some(GameRunning {
+            LockProbe::Held(pid) => {
+                held.get_or_insert_with(|| GameRunning {
                     kind: GameRunningKind::SessionLock,
                     detail: format!("{} is locked by pid {pid}", lock_path.display()),
                     lock_path: Some(lock_path),
@@ -118,18 +144,40 @@ fn session_lock_check(game_dir: &Path, stale: &mut Vec<PathBuf>) -> Option<GameR
                     command: None,
                 });
             }
-            None => stale.push(lock_path),
+            LockProbe::Free => stale.push(lock_path),
+            LockProbe::Unknown(reason) => {
+                unknown.get_or_insert_with(|| lock_unknown(&lock_path, reason));
+            }
         }
     }
-    None
+    // Every lock is probed before this choice, so a held lock never hides an
+    // unknown one and the stale list is always complete.
+    held.or(unknown)
 }
 
 #[cfg(unix)]
-fn open_lock_file(path: &Path) -> Option<std::fs::File> {
+fn lock_unknown(path: &Path, reason: String) -> GameRunning {
+    GameRunning {
+        kind: GameRunningKind::SessionLock,
+        detail: format!("{} could not be probed: {reason}", path.display()),
+        lock_path: Some(path.to_path_buf()),
+        pid: None,
+        command: None,
+    }
+}
+
+/// Open a lock file for probing. `Ok(None)` means the path is absent, which is
+/// normal. An existing but unopenable path is an error, never silently stale.
+#[cfg(unix)]
+fn open_lock_file(path: &Path) -> Result<Option<std::fs::File>, String> {
     use std::os::unix::fs::OpenOptionsExt;
-    let metadata = std::fs::symlink_metadata(path).ok()?;
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(format!("could not read metadata: {err}")),
+    };
     if !metadata.is_file() {
-        return None;
+        return Err("session.lock is not a regular file".to_string());
     }
     std::fs::OpenOptions::new()
         .read(true)
@@ -137,14 +185,14 @@ fn open_lock_file(path: &Path) -> Option<std::fs::File> {
         .mode(0o644)
         .open(path)
         .or_else(|_| std::fs::File::open(path))
-        .ok()
+        .map(Some)
+        .map_err(|err| format!("could not open the lock file: {err}"))
 }
 
-/// Ask the kernel who holds a write lock on this file. Returns the holder's
-/// pid, or None when the file is free (or the probe itself failed). Locks are
-/// per process, so the caller must probe from outside the holder.
+/// Ask the kernel who holds a write lock on this file. Locks are per process,
+/// so the caller must probe from outside the holder.
 #[cfg(unix)]
-fn posix_lock_holder(file: &std::fs::File) -> Option<i32> {
+fn posix_lock_holder(file: &std::fs::File) -> LockProbe {
     use std::os::unix::io::AsRawFd;
 
     let mut request = libc::flock {
@@ -156,12 +204,18 @@ fn posix_lock_holder(file: &std::fs::File) -> Option<i32> {
     };
     let result = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETLK, &mut request) };
     if result == -1 {
-        return None;
+        return LockProbe::Unknown(format!(
+            "fcntl(F_GETLK) failed: {}",
+            std::io::Error::last_os_error()
+        ));
     }
     if request.l_type == libc::F_UNLCK as libc::c_short {
-        None
+        return LockProbe::Free;
+    }
+    if request.l_pid > 0 {
+        LockProbe::Held(request.l_pid)
     } else {
-        Some(request.l_pid)
+        LockProbe::Unknown("the kernel reported a lock without a holder pid".to_string())
     }
 }
 
@@ -170,10 +224,12 @@ fn session_lock_check(_game_dir: &Path, _stale: &mut Vec<PathBuf>) -> Option<Gam
     None
 }
 
-/// Scan `/proc/*/cmdline` for a `java` process whose command line contains the
-/// Minecraft client main class or a `--gameDir` pointing at the active game
-/// dir, in either `--gameDir <path>` or `--gameDir=<path>` form.
+/// Scan `/proc/*/cmdline` for a `java` process whose command line contains a
+/// known client main class, a `--gameDir` pointing at the active game dir, or a
+/// working directory equal to the active game dir. The cwd check covers
+/// launchers that set the process directory instead of passing `--gameDir`.
 fn process_check(game_dir: &Path, proc_root: &Path) -> Option<GameRunning> {
+    let canonical_game_dir = std::fs::canonicalize(game_dir).ok();
     let mut pids: Vec<PathBuf> = match std::fs::read_dir(proc_root) {
         Ok(entries) => entries
             .filter_map(|entry| entry.ok())
@@ -210,8 +266,19 @@ fn process_check(game_dir: &Path, proc_root: &Path) -> Option<GameRunning> {
             continue;
         }
         let command = cmdline_text(&args);
-        let named_main_class = command.contains("net.minecraft.client.main.Main");
-        if !(named_main_class || game_dir_matches(&args, game_dir)) {
+        let named_main_class = CLIENT_MAIN_CLASSES
+            .iter()
+            .any(|main_class| command.contains(main_class));
+        let cwd = std::fs::read_link(proc_dir.join("cwd")).ok();
+        if !(named_main_class
+            || game_dir_matches(
+                &args,
+                game_dir,
+                canonical_game_dir.as_deref(),
+                cwd.as_deref(),
+            )
+            || cwd_matches(cwd.as_deref(), game_dir, canonical_game_dir.as_deref()))
+        {
             continue;
         }
 
@@ -236,26 +303,74 @@ fn process_check(game_dir: &Path, proc_root: &Path) -> Option<GameRunning> {
 fn cmdline_text(args: &[String]) -> String {
     let mut command = args.join(" ");
     if command.len() > 240 {
-        command.truncate(240);
+        // Truncate on a char boundary so a non-ASCII argument cannot panic.
+        let mut end = 240;
+        while end > 0 && !command.is_char_boundary(end) {
+            end -= 1;
+        }
+        command.truncate(end);
         command.push('…');
     }
     command
 }
 
-fn game_dir_matches(args: &[String], game_dir: &Path) -> bool {
-    let target = game_dir.to_string_lossy();
-    let canonical = std::fs::canonicalize(game_dir)
-        .map(|path| path.to_string_lossy().into_owned())
-        .ok();
+fn game_dir_matches(
+    args: &[String],
+    game_dir: &Path,
+    canonical_game_dir: Option<&Path>,
+    cwd: Option<&Path>,
+) -> bool {
     args.iter().enumerate().any(|(index, arg)| {
-        if arg == "--gameDir" {
-            return args
-                .get(index + 1)
-                .is_some_and(|value| value == &target || canonical.as_deref() == Some(value));
-        }
-        if let Some(value) = arg.strip_prefix("--gameDir=") {
-            return value == target || canonical.as_deref() == Some(value);
-        }
-        false
+        let value = if arg == "--gameDir" {
+            args.get(index + 1).map(String::as_str)
+        } else {
+            arg.strip_prefix("--gameDir=")
+        };
+        value.is_some_and(|value| game_dir_value_matches(value, game_dir, canonical_game_dir, cwd))
     })
+}
+
+/// `--gameDir` values may be absolute, relative, or carry trailing separators.
+/// Relative values are resolved against the process cwd when `/proc` exposes it.
+fn game_dir_value_matches(
+    value: &str,
+    game_dir: &Path,
+    canonical_game_dir: Option<&Path>,
+    cwd: Option<&Path>,
+) -> bool {
+    let trimmed = value.trim_end_matches(['/', '\\']);
+    let trimmed = if trimmed.is_empty() { value } else { trimmed };
+    let candidate = Path::new(trimmed);
+    let resolved = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else if let Some(cwd) = cwd {
+        cwd.join(candidate)
+    } else {
+        candidate.to_path_buf()
+    };
+    if resolved == game_dir {
+        return true;
+    }
+    // A relative value without a proc cwd cannot be resolved against the
+    // client's directory; do not resolve it against Mine Utils' own cwd.
+    if !candidate.is_absolute() && cwd.is_none() {
+        return false;
+    }
+    match (std::fs::canonicalize(&resolved), canonical_game_dir) {
+        (Ok(resolved), Some(target)) => resolved == target,
+        _ => false,
+    }
+}
+
+fn cwd_matches(cwd: Option<&Path>, game_dir: &Path, canonical_game_dir: Option<&Path>) -> bool {
+    let Some(cwd) = cwd else {
+        return false;
+    };
+    if cwd == game_dir {
+        return true;
+    }
+    match (std::fs::canonicalize(cwd), canonical_game_dir) {
+        (Ok(cwd), Some(target)) => cwd == target,
+        _ => false,
+    }
 }

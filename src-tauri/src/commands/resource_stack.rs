@@ -10,6 +10,10 @@ use super::game_dirs::AppState;
 /// One write mutex per active game dir. Every `options.txt` write, restore,
 /// and delete cleanup takes the mutex for its game dir, so no two writes ever
 /// race inside the app. Reads do not take it.
+///
+/// Keys are canonicalized so two spellings of the same dir share one mutex.
+/// The map grows with each distinct dir seen; this app edits one active dir at
+/// a time, so the entry count stays tiny and no eviction is warranted.
 #[derive(Default)]
 pub struct StackState {
     locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
@@ -17,8 +21,9 @@ pub struct StackState {
 
 impl StackState {
     pub fn lock_for(&self, game_dir: &Path) -> Arc<Mutex<()>> {
+        let key = std::fs::canonicalize(game_dir).unwrap_or_else(|_| game_dir.to_path_buf());
         let mut locks = self.locks.lock().unwrap_or_else(|err| err.into_inner());
-        Arc::clone(locks.entry(game_dir.to_path_buf()).or_default())
+        Arc::clone(locks.entry(key).or_default())
     }
 }
 
