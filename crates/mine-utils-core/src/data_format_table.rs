@@ -209,10 +209,14 @@ mod tests {
     fn every_embedded_data_row_resolves() {
         let table = FormatTable::embedded();
         for row in table.data_rows() {
+            // Named endpoints always count, even a future high patch: only
+            // over-generated interior patches above every real release are
+            // exempt, so a future high-patch row stays covered.
+            let endpoints = row_endpoints(&row.label);
             for version in expand_label(&row.label) {
-                // Skip synthetic over-generated patches; every named endpoint
-                // and every real version must resolve to this row's format.
-                if version_patch_above_known(version.as_str()) {
+                let is_endpoint =
+                    version_parts(version.as_str()).is_some_and(|parts| endpoints.contains(&parts));
+                if !is_endpoint && version_patch_above_known(version.as_str()) {
                     continue;
                 }
                 assert_eq!(
@@ -227,6 +231,16 @@ mod tests {
             !table.data_rows().is_empty(),
             "the data table must carry rows"
         );
+    }
+
+    /// The parsed endpoints of one row label: a single version, or both ends
+    /// of a span. Compared numerically, so `1.21` and `1.21.0` are the same.
+    fn row_endpoints(label: &str) -> Vec<(u32, u32)> {
+        let (start, end) = match label.split_once(" to ") {
+            Some((start, end)) => (start.trim(), end.trim()),
+            None => return version_parts(label.trim()).into_iter().collect(),
+        };
+        [start, end].into_iter().filter_map(version_parts).collect()
     }
 
     /// Over-generated patches (no real release) are exempt from coverage;

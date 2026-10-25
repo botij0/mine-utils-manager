@@ -42,13 +42,30 @@ export default function DatapackDetail({
     );
   }
   if (pack?.error) {
+    const symlink = pack.error.code === 'pack_symlink';
     return (
       <section className="datapack-detail" aria-label="Datapack details">
         <h3>{filename}</h3>
         <p className="error" role="alert">
           This datapack cannot be read: {pack.error.message}
         </p>
+        {symlink ? (
+          <p className="panel-note">
+            This entry is a link, not a real pack. Deleting it removes only the link; the folder
+            it points at is never touched.
+          </p>
+        ) : null}
         <div className="datapack-detail-actions">
+          {!locked ? (
+            <button
+              type="button"
+              className="button"
+              disabled={writesBlocked || busy}
+              onClick={() => onToggle(filename, !enabled)}
+            >
+              {enabled ? 'Disable' : 'Enable'}
+            </button>
+          ) : null}
           <button
             type="button"
             className="button button-danger"

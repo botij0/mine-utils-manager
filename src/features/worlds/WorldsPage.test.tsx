@@ -1,8 +1,8 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorldsClient } from '../../lib/ipc';
-import type { World } from '../../lib/types';
+import { IpcError, type World } from '../../lib/types';
 import WorldsPage from './WorldsPage';
 
 function world(overrides: Partial<World> = {}): World {
@@ -413,5 +413,253 @@ describe('WorldsPage', () => {
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     expect(within(grid).getByText('Broken datapack')).toBeInTheDocument();
     expect(within(grid).getByText('broken.zip is not readable')).toBeInTheDocument();
+  });
+
+  it('keeps Disable on an enabled broken pack', async () => {
+    const user = userEvent.setup();
+    const setEnabled = vi.fn(async () => ({
+      enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
+      disabled: [{ kind: 'file' as const, value: 'file/broken.zip', filename: 'broken.zip' }],
+      running: null,
+      world_locked: null,
+      stale_locks: [],
+      detection_supported: true,
+    }));
+    const brokenPack = {
+      id: '/saves/Survival/broken.zip',
+      name: 'broken',
+      path: '/saves/Survival/datapacks/broken.zip',
+      location: 'zip' as const,
+      kind: 'data' as const,
+      description: '',
+      meta: {
+        pack_format: null,
+        min_format: null,
+        max_format: null,
+        supported_formats: null,
+        description: '',
+      },
+      format: null,
+      format_range: null,
+      game_label: null,
+      icon: null,
+      error: { code: 'pack_broken_archive', message: 'broken.zip is not readable' },
+      bytes_read: 8,
+    };
+    const actionable = baseClient({
+      setDatapackEnabled: setEnabled,
+      listDatapacks: async () => ({
+        packs: { packs: [brokenPack], count: 1, bytes_read: 8, elapsed_ms: 1 },
+        stack: {
+          enabled: [{ kind: 'file' as const, value: 'file/broken.zip', filename: 'broken.zip' }],
+          disabled: [],
+          running: null,
+          world_locked: null,
+          stale_locks: [],
+          detection_supported: true,
+        },
+      }),
+    });
+    render(<WorldsPage client={actionable} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    // An enabled corrupt pack is still a live entry: it keeps Disable.
+    expect(within(grid).getByRole('button', { name: 'Disable' })).toBeEnabled();
+    // The detail offers the same Disable for the selected broken pack.
+    await user.click(within(grid).getByRole('button', { name: 'broken.zip, broken' }));
+    const detail = await screen.findByRole('region', { name: 'Datapack details' });
+    expect(within(detail).getByRole('button', { name: 'Disable' })).toBeEnabled();
+    await user.click(within(grid).getByRole('button', { name: 'Disable' }));
+    await waitFor(() =>
+      expect(setEnabled).toHaveBeenCalledWith('Survival 1_17', 'broken.zip', false),
+    );
+  });
+
+  it('leaves a disabled broken pack as an error badge with no actions', async () => {
+    const badgeClient = baseClient({
+      listDatapacks: async () => ({
+        packs: {
+          packs: [
+            {
+              id: '/saves/Survival/broken.zip',
+              name: 'broken',
+              path: '/saves/Survival/datapacks/broken.zip',
+              location: 'zip' as const,
+              kind: 'data' as const,
+              description: '',
+              meta: {
+                pack_format: null,
+                min_format: null,
+                max_format: null,
+                supported_formats: null,
+                description: '',
+              },
+              format: null,
+              format_range: null,
+              game_label: null,
+              icon: null,
+              error: { code: 'pack_broken_archive', message: 'broken.zip is not readable' },
+              bytes_read: 8,
+            },
+          ],
+          count: 1,
+          bytes_read: 8,
+          elapsed_ms: 1,
+        },
+        stack: {
+          enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
+          disabled: [{ kind: 'file' as const, value: 'file/broken.zip', filename: 'broken.zip' }],
+          running: null,
+          world_locked: null,
+          stale_locks: [],
+          detection_supported: true,
+        },
+      }),
+    });
+    render(<WorldsPage client={badgeClient} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    expect(within(grid).getByText('Broken datapack')).toBeInTheDocument();
+    expect(within(grid).queryByRole('button', { name: 'Enable' })).not.toBeInTheDocument();
+    expect(within(grid).queryByRole('button', { name: 'Disable' })).not.toBeInTheDocument();
+  });
+
+  it('explains the removal step for a symlinked pack', async () => {
+    const user = userEvent.setup();
+    const linkClient = baseClient({
+      listDatapacks: async () => ({
+        packs: {
+          packs: [
+            {
+              id: '/saves/Survival/linked.zip',
+              name: 'linked',
+              path: '/saves/Survival/datapacks/linked.zip',
+              location: 'zip' as const,
+              kind: 'data' as const,
+              description: '',
+              meta: {
+                pack_format: null,
+                min_format: null,
+                max_format: null,
+                supported_formats: null,
+                description: '',
+              },
+              format: null,
+              format_range: null,
+              game_label: null,
+              icon: null,
+              error: { code: 'pack_symlink', message: 'linked.zip is a symlink and is never followed' },
+              bytes_read: 8,
+            },
+          ],
+          count: 1,
+          bytes_read: 8,
+          elapsed_ms: 1,
+        },
+        stack: {
+          enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
+          disabled: [{ kind: 'file' as const, value: 'file/linked.zip', filename: 'linked.zip' }],
+          running: null,
+          world_locked: null,
+          stale_locks: [],
+          detection_supported: true,
+        },
+      }),
+    });
+    render(<WorldsPage client={linkClient} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    await user.click(within(grid).getByRole('button', { name: 'linked.zip, broken' }));
+    expect(await screen.findByText(/removes only the link/)).toBeInTheDocument();
+  });
+
+  it('hides the stale-lock note while writes are paused', async () => {
+    const lockedWorld = world({
+      world_locked: {
+        kind: 'session_lock',
+        detail: 'saves/Survival 1_17/session.lock is locked by pid 7',
+        lock_path: 'session.lock',
+        pid: 7,
+        command: null,
+      },
+    });
+    const staleWhileLocked = baseClient({
+      listWorlds: async () => [lockedWorld],
+      listDatapacks: async () => ({
+        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        stack: {
+          enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
+          disabled: [],
+          running: null,
+          world_locked: lockedWorld.world_locked,
+          stale_locks: ['/home/demo/.minecraft/saves/Survival 1_17/session.lock'],
+          detection_supported: true,
+        },
+      }),
+    });
+    render(<WorldsPage client={staleWhileLocked} />);
+    expect(await screen.findByText(/is locked/)).toBeInTheDocument();
+    // The stale note claims writes are allowed; it must not show while the
+    // world lock pauses every write.
+    expect(screen.queryByText(/Writes are allowed/)).not.toBeInTheDocument();
+  });
+
+  it('offers a Retry that refreshes after a stale stack error', async () => {
+    const user = userEvent.setup();
+    const inner = baseClient();
+    const listSpy = vi.fn((name: string) => inner.listDatapacks(name));
+    const staleClient = baseClient({
+      listDatapacks: listSpy,
+      setDatapackEnabled: async () => {
+        throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+      },
+    });
+    render(<WorldsPage client={staleClient} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    await user.click(within(grid).getByRole('button', { name: 'Disable' }));
+    expect(await screen.findByText(/the stack changed on disk/)).toBeInTheDocument();
+    const callsBefore = listSpy.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(listSpy.mock.calls.length).toBeGreaterThan(callsBefore));
+    expect(await screen.findByRole('list', { name: 'Datapack stack' })).toBeInTheDocument();
+  });
+
+  it('shows the new loading state with no stale cards after a world switch', async () => {
+    const user = userEvent.setup();
+    const inner = baseClient();
+    let resolveCreative!: (value: Awaited<ReturnType<WorldsClient['listDatapacks']>>) => void;
+    const creativeListing = new Promise<Awaited<ReturnType<WorldsClient['listDatapacks']>>>(
+      (resolve) => {
+        resolveCreative = resolve;
+      },
+    );
+    const switching = baseClient({
+      listDatapacks: (name: string) =>
+        name === 'Creative Flat' ? creativeListing : inner.listDatapacks(name),
+    });
+    render(<WorldsPage client={switching} />);
+    // The old world's card is actionable before the switch.
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    expect(within(grid).getByRole('button', { name: 'a.zip, enabled' })).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: /Creative Flat/ }));
+    // The switch drops the old rows synchronously: no stale filename can be
+    // clicked while the new world's listing is in flight.
+    await waitFor(() => expect(screen.getByText('Loading datapacks…')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'a.zip, enabled' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Disable' })).not.toBeInTheDocument();
+    await act(async () => {
+      resolveCreative({
+        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        stack: {
+          enabled: [],
+          disabled: [],
+          running: null,
+          world_locked: null,
+          stale_locks: [],
+          detection_supported: true,
+        },
+      });
+      await creativeListing;
+    });
+    await waitFor(() =>
+      expect(screen.getByText('No datapacks yet. Import a zip or a folder to add one.')).toBeInTheDocument(),
+    );
   });
 });

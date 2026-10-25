@@ -199,4 +199,131 @@ describe('useWorlds', () => {
     expect(result.current.stack).not.toBe(stale);
     expect(result.current.actionError).toBeNull();
   });
+
+  it('drops the old rows and releases busy when the selection changes mid-listing', async () => {
+    const second = world({ dir_name: 'Creative Flat', path: '/saves/Creative Flat' });
+    let resolveCreative!: (value: { packs: { packs: Pack[]; count: number; bytes_read: number; elapsed_ms: number }; stack: DataStack }) => void;
+    const creativeListing = new Promise<{
+      packs: { packs: Pack[]; count: number; bytes_read: number; elapsed_ms: number };
+      stack: DataStack;
+    }>((resolve) => {
+      resolveCreative = resolve;
+    });
+    const switching = client({
+      listWorlds: async () => [world(), second],
+      listDatapacks: async (name: string) => {
+        if (name === 'Creative Flat') return creativeListing;
+        return {
+          packs: { packs: [pack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
+          stack: stack(),
+        };
+      },
+    });
+    const { result } = renderHook(() => useWorlds(switching));
+    await act(async () => {});
+    expect(result.current.packs).toHaveLength(1);
+    // Switch while the new world's listing is still in flight.
+    act(() => {
+      result.current.select('Creative Flat');
+    });
+    // The old world's cards are gone synchronously: the grid shows the new
+    // world's loading state, so no stale filename is actionable.
+    expect(result.current.packs).toHaveLength(0);
+    expect(result.current.stack).toBeNull();
+    expect(result.current.listingWorld).toBeNull();
+    expect(result.current.packsLoading).toBe(true);
+    expect(result.current.busy).toBe(false);
+    await act(async () => {
+      resolveCreative({
+        packs: { packs: [pack('c.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
+        stack: stack({
+          enabled: [{ kind: 'foreign', value: 'vanilla' }],
+          disabled: [{ kind: 'file', value: 'file/c.zip', filename: 'c.zip' }],
+        }),
+      });
+      await creativeListing;
+    });
+    await act(async () => {});
+    expect(result.current.packs.map((entry) => entry.name)).toEqual(['c.zip']);
+    expect(result.current.listingWorld).toBe('Creative Flat');
+    expect(result.current.busy).toBe(false);
+  });
+
+  it('ignores a late listing for the previous world', async () => {
+    const second = world({ dir_name: 'Creative Flat', path: '/saves/Creative Flat' });
+    let resolveSurvival!: (value: { packs: { packs: Pack[]; count: number; bytes_read: number; elapsed_ms: number }; stack: DataStack }) => void;
+    const survivalListing = new Promise<{
+      packs: { packs: Pack[]; count: number; bytes_read: number; elapsed_ms: number };
+      stack: DataStack;
+    }>((resolve) => {
+      resolveSurvival = resolve;
+    });
+    const creativeStack = stack({
+      enabled: [{ kind: 'foreign', value: 'vanilla' }],
+      disabled: [],
+    });
+    const racing = client({
+      listWorlds: async () => [world(), second],
+      listDatapacks: async (name: string) => {
+        if (name === 'Survival 1_17') return survivalListing;
+        return {
+          packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+          stack: creativeStack,
+        };
+      },
+    });
+    const { result } = renderHook(() => useWorlds(racing));
+    await act(async () => {});
+    // The first world's listing is still pending; switch before it lands.
+    expect(result.current.packs).toHaveLength(0);
+    act(() => {
+      result.current.select('Creative Flat');
+    });
+    await act(async () => {
+      resolveSurvival({
+        packs: { packs: [pack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
+        stack: stack(),
+      });
+      await survivalListing;
+    });
+    await act(async () => {});
+    // The late Survival listing never repopulates the new selection.
+    expect(result.current.packs).toHaveLength(0);
+    expect(result.current.stack).toBe(creativeStack);
+    expect(result.current.listingWorld).toBe('Creative Flat');
+  });
+
+  it('releases busy when the selection changes mid-mutation', async () => {
+    let resolveToggle!: (value: DataStack) => void;
+    const pending = new Promise<DataStack>((resolve) => {
+      resolveToggle = resolve;
+    });
+    const second = world({ dir_name: 'Creative Flat', path: '/saves/Creative Flat' });
+    const setEnabled = vi.fn(() => pending);
+    const twoWorlds = client({
+      listWorlds: async () => [world(), second],
+      setDatapackEnabled: setEnabled,
+    });
+    const { result } = renderHook(() => useWorlds(twoWorlds));
+    await act(async () => {});
+    let flight!: Promise<void>;
+    act(() => {
+      flight = result.current.toggleDatapack('a.zip', false);
+    });
+    expect(result.current.busy).toBe(true);
+    act(() => {
+      result.current.select('Creative Flat');
+    });
+    // The new world is never stranded: select releases busy, and the guarded
+    // finally skips the stale request instead of clearing a newer one.
+    expect(result.current.busy).toBe(false);
+    await act(async () => {
+      resolveToggle(stack());
+      await flight;
+    });
+    await act(async () => {});
+    expect(result.current.busy).toBe(false);
+    expect(setEnabled).toHaveBeenCalledTimes(1);
+    expect(setEnabled).toHaveBeenCalledWith('Survival 1_17', 'a.zip', false);
+  });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { WorldsClient } from '../../lib/ipc';
 import { ipc, pickPackPath, toAppError } from '../../lib/ipc';
 import { formatVersionLabel } from '../../lib/format';
@@ -38,6 +38,7 @@ export default function WorldsPage({
     stack,
     stackLoading,
     busy,
+    listingWorld,
     actionError,
     reload,
     refreshListing,
@@ -55,6 +56,10 @@ export default function WorldsPage({
   >(null);
   const [importPath, setImportPath] = useState<string | null>(null);
   const [lockedNotice, setLockedNotice] = useState<string | null>(null);
+  // The selection at the time an import started: an outcome that lands after
+  // a world switch applies to the wrong world, so it is dropped.
+  const selectedDirRef = useRef<string | null>(null);
+  selectedDirRef.current = selected?.dir_name ?? null;
 
   // Re-check everything after a lock release: the app guard, the world's
   // listing, and the world list itself (a release is never blocked by issue).
@@ -139,12 +144,21 @@ export default function WorldsPage({
   const selectedRow = rows.find((row) => row.filename === selectedFilename) ?? null;
 
   // Writes stop while the game runs, while this world is locked, while the
-  // file is unreadable, or while the app-level guard check failed.
+  // file is unreadable, while the app-level guard check failed, or while the
+  // shown rows belong to a previous selection (a switch is still listing).
   const running = gameRunning !== undefined ? gameRunning : (stack?.running ?? null);
   const locked = stack?.world_locked ?? selected?.world_locked ?? null;
   const readOnly = selected?.issue !== null && selected?.issue !== undefined;
-  const writesBlocked = running !== null || locked !== null || readOnly || gameGuardUnknown;
+  const listingStale = listingWorld !== selected?.dir_name;
+  const writesBlocked = running !== null || locked !== null || readOnly || gameGuardUnknown || listingStale;
   const noGameDir = error?.code === 'no_active_game_dir' || packsError?.code === 'no_active_game_dir';
+
+  const refreshAfterWriteError = (err: unknown) => {
+    const code = toAppError(err).code;
+    // A stale stack or a lock release needs a fresh listing, guard, and
+    // world list; anything else keeps its error card without a refetch.
+    if (code === 'game_running' || code === 'stale_stack') void refreshAfterGuard();
+  };
 
   const handleToggle = async (filename: string, enabled: boolean) => {
     clearActionError();
@@ -152,7 +166,7 @@ export default function WorldsPage({
       await toggleDatapack(filename, enabled);
       void refreshGameRunning();
     } catch (err) {
-      if (toAppError(err).code === 'game_running') void refreshAfterGuard();
+      refreshAfterWriteError(err);
     }
   };
 
@@ -174,7 +188,7 @@ export default function WorldsPage({
     try {
       await reorderDatapacks(order);
     } catch (err) {
-      if (toAppError(err).code === 'game_running') void refreshAfterGuard();
+      refreshAfterWriteError(err);
     }
   };
 
@@ -184,7 +198,7 @@ export default function WorldsPage({
       await deleteDatapack(path);
       setSelectedFilename(null);
     } catch (err) {
-      if (toAppError(err).code === 'game_running') void refreshAfterGuard();
+      refreshAfterWriteError(err);
     }
   };
 
@@ -193,7 +207,7 @@ export default function WorldsPage({
     try {
       await removeDatapackReference(filename);
     } catch (err) {
-      if (toAppError(err).code === 'game_running') void refreshAfterGuard();
+      refreshAfterWriteError(err);
     }
   };
 
@@ -201,10 +215,13 @@ export default function WorldsPage({
     setImportError(null);
     try {
       const outcome = await importDatapack(world, path, choice);
+      // A switch mid-import leaves this outcome addressing the old world.
+      if (selectedDirRef.current !== world) return outcome;
       if (outcome.status === 'imported') {
         setSelectedFilename(outcome.filename);
         setImportPrompt(null);
         setImportPath(null);
+        void refreshAfterGuard();
       } else if (outcome.status === 'locked') {
         setLockedNotice(
           `Copied ${outcome.filename} but left it disabled: ${outcome.detail}. Enable it after the lock releases.`,
@@ -212,6 +229,7 @@ export default function WorldsPage({
         setSelectedFilename(outcome.filename);
         setImportPrompt(null);
         setImportPath(null);
+        void refreshAfterGuard();
       } else if (outcome.status === 'skipped') {
         setImportPrompt(null);
         setImportPath(null);
@@ -220,7 +238,9 @@ export default function WorldsPage({
         setImportPath(path);
       }
     } catch (err) {
+      if (selectedDirRef.current !== world) return;
       setImportError(toAppError(err).message);
+      refreshAfterWriteError(err);
     }
   };
 
@@ -262,7 +282,7 @@ export default function WorldsPage({
                   world={selected}
                   gameRunning={gameRunning}
                   gameGuardUnknown={gameGuardUnknown}
-                  staleLocks={stack?.stale_locks ?? []}
+                  staleLocks={locked || running ? [] : (stack?.stale_locks ?? [])}
                   refreshGameRunning={refreshGameRunning}
                   onRefresh={refreshAfterGuard}
                 />
@@ -273,7 +293,12 @@ export default function WorldsPage({
                 ) : null}
                 {actionError ? (
                   <p className="error" role="alert">
-                    {actionError.message}
+                    {actionError.message}{' '}
+                    {actionError.code === 'stale_stack' ? (
+                      <button type="button" className="button" onClick={() => void refreshAfterGuard()}>
+                        Retry
+                      </button>
+                    ) : null}
                   </p>
                 ) : null}
                 {packsError && !stack && !readOnly ? (

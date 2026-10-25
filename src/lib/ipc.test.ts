@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ipc, isTauriRuntime, toAppError } from './ipc';
+import { resetMockWorlds, setMockGameState, setMockLockedWorld } from './ipc.mock';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -71,5 +72,39 @@ describe('typed error mapping', () => {
     const mapped = toAppError(new Error('nope'));
     expect(mapped.code).toBe('unknown');
     expect(mapped.message).toBe('nope');
+  });
+});
+
+describe('mock world import guards', () => {
+  beforeEach(() => {
+    resetMockWorlds();
+    setMockGameState('none');
+    setMockLockedWorld(null);
+  });
+
+  it('copies but disables a new pack when the game runs and the world is locked', async () => {
+    setMockGameState('running');
+    setMockLockedWorld('Survival 1_17');
+    const outcome = await ipc.importDatapack('Survival 1_17', '/tmp/fresh-pack.zip', 'default');
+    expect(outcome).toMatchObject({ status: 'locked', filename: 'fresh-pack.zip' });
+  });
+
+  it('refuses any import while the game runs and the world is not locked', async () => {
+    setMockGameState('running');
+    await expect(ipc.importDatapack('Survival 1_17', '/tmp/fresh-pack.zip', 'default')).rejects.toMatchObject({
+      code: 'game_running',
+    });
+  });
+
+  it('refuses a locked Replace before anything is trashed', async () => {
+    setMockLockedWorld('Survival 1_17');
+    const existing = 'armored elytra v1.0.4 (MC 1.17.x).zip';
+    await expect(
+      ipc.importDatapack('Survival 1_17', `/tmp/${existing}`, 'replace'),
+    ).rejects.toMatchObject({ code: 'level_dat' });
+    const listing = await ipc.listDatapacks('Survival 1_17');
+    expect(listing.packs.packs.map((pack) => pack.path)).toContain(
+      `/home/demo/.minecraft/saves/Survival 1_17/datapacks/${existing}`,
+    );
   });
 });

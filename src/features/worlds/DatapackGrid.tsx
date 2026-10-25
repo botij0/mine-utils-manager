@@ -58,6 +58,11 @@ export default function DatapackGrid({
         const key = `${row.entry.value}#${index}`;
         const broken = row.pack?.error ?? null;
         if (broken) {
+          // A broken pack is an error card, but an *enabled* broken row is
+          // still a live `level.dat` entry: it keeps Disable (and any move
+          // that stays between `file/` entries) so a corrupt pack can be
+          // switched off. A disabled broken pack has nothing to act on.
+          const actionable = row.enabled && !row.locked;
           return (
             <li
               key={key}
@@ -75,9 +80,42 @@ export default function DatapackGrid({
                   {broken.message}
                 </span>
               </button>
-              <span className="datapack-lock" title={broken.message}>
-                Error
-              </span>
+              {actionable ? (
+                <span className="datapack-actions">
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={writesBlocked}
+                    onClick={() => onToggle(name, false)}
+                  >
+                    Disable
+                  </button>
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={writesBlocked || !row.canMoveUp}
+                    title={row.canMoveUp ? undefined : 'Locked entries cannot move'}
+                    aria-label={`Move ${name} up`}
+                    onClick={() => onMove(index, -1)}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={writesBlocked || !row.canMoveDown}
+                    title={row.canMoveDown ? undefined : 'Locked entries cannot move'}
+                    aria-label={`Move ${name} down`}
+                    onClick={() => onMove(index, 1)}
+                  >
+                    ↓
+                  </button>
+                </span>
+              ) : (
+                <span className="datapack-lock" title={broken.message}>
+                  Error
+                </span>
+              )}
             </li>
           );
         }

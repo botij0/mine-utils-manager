@@ -130,9 +130,11 @@ pub fn list_all(root: &Path) -> Result<Vec<LevelBackupInfo>, AppError> {
         .filter_map(|file_name| {
             let path = root.join(&file_name);
             let bytes = std::fs::symlink_metadata(&path).ok()?.len();
+            // Stray names with no world (a bare `-level.dat`) form no group,
+            // so they are skipped instead of surfacing as an empty row.
             Some(LevelBackupInfo {
                 display: display_timestamp(&file_name),
-                world: world_of(&file_name).unwrap_or("").to_string(),
+                world: world_of(&file_name)?.to_string(),
                 file_name,
                 bytes,
             })

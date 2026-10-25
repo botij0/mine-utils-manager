@@ -26,6 +26,10 @@ export interface WorldsState {
   stack: DataStack | null;
   stackLoading: boolean;
   stackError: IpcError | null;
+  /** The world the visible `packs`/`stack` were listed for, or null while a
+   *  fresh selection has no listing yet. While it differs from the selection,
+   *  every write control stays disabled. */
+  listingWorld: string | null;
   busy: boolean;
   actionError: IpcError | null;
   reload: () => Promise<void>;
@@ -94,9 +98,15 @@ export function useWorlds(client: WorldsClient): WorldsState {
   const [stackError, setStackError] = useState<IpcError | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<IpcError | null>(null);
+  // The world the visible `packs`/`stack` were listed for. While it differs
+  // from the selection (a switch is in flight), every write control stays
+  // disabled so no action can address a stale filename.
+  const [listingWorld, setListingWorld] = useState<string | null>(null);
   const mounted = useRef(true);
-  // Monotonic id of the latest mutation. A response from an older request,
-  // or for a world that is no longer selected, is ignored.
+  // Monotonic id of the latest selection or mutation. A response from an
+  // older request, or for a world that is no longer selected, is ignored.
+  // Listings share it but never bump it: a refresh must not cancel an
+  // in-flight write, it only has to lose to a newer selection or mutation.
   const requestId = useRef(0);
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedName;
@@ -141,26 +151,36 @@ export function useWorlds(client: WorldsClient): WorldsState {
     if (!selectedName) {
       setPacks([]);
       setStack(null);
+      setListingWorld(null);
       return;
     }
+    // Capture the selection and the latest request: a late listing for a
+    // previous world, or one overtaken by a mutation, never repopulates the
+    // new selection.
+    const world = selectedName;
+    const request = requestId.current;
     setPacksLoading(true);
     setStackLoading(true);
     setPacksError(null);
     setStackError(null);
     try {
-      const listing = await client.listDatapacks(selectedName);
+      const listing = await client.listDatapacks(world);
       if (!mounted.current) return;
+      if (selectedRef.current !== world || request !== requestId.current) return;
       setPacks(listing.packs.packs);
       setStack(listing.stack);
+      setListingWorld(world);
     } catch (err) {
       if (!mounted.current) return;
+      if (selectedRef.current !== world || request !== requestId.current) return;
       const appError = toAppError(err);
       setPacks([]);
       setStack(null);
+      setListingWorld(world);
       setPacksError(appError);
       setStackError(appError);
     } finally {
-      if (mounted.current) {
+      if (mounted.current && selectedRef.current === world && request === requestId.current) {
         setPacksLoading(false);
         setStackLoading(false);
       }
@@ -172,7 +192,21 @@ export function useWorlds(client: WorldsClient): WorldsState {
   }, [refreshListing]);
 
   const select = useCallback((dirName: string) => {
+    // Invalidate every in-flight request, drop the old world's rows so the
+    // grid shows the new world's loading state (never stale actionable
+    // cards), and release `busy`: the guarded `finally` blocks below skip a
+    // stale request, so without this a switch mid-mutation would strand the
+    // new world with every write control permanently disabled.
+    requestId.current += 1;
     setActionError(null);
+    setPacks([]);
+    setStack(null);
+    setListingWorld(null);
+    setPacksError(null);
+    setStackError(null);
+    setBusy(false);
+    setPacksLoading(true);
+    setStackLoading(true);
     setSelectedName(dirName);
   }, []);
 
@@ -241,15 +275,21 @@ export function useWorlds(client: WorldsClient): WorldsState {
 
   const importDatapack = useCallback(
     async (world: string, path: string, choice: ImportChoice = 'default') => {
+      const request = (requestId.current += 1);
       setBusy(true);
+      setActionError(null);
       try {
         const outcome = await client.importDatapack(world, path, choice);
+        if (!mounted.current) return outcome;
+        if (selectedRef.current !== world || request !== requestId.current) return outcome;
         if (outcome.status === 'imported' || outcome.status === 'locked') {
           await refreshListing();
         }
         return outcome;
       } finally {
-        if (mounted.current) setBusy(false);
+        if (mounted.current && request === requestId.current) {
+          setBusy(false);
+        }
       }
     },
     [client, refreshListing],
@@ -328,6 +368,7 @@ export function useWorlds(client: WorldsClient): WorldsState {
     stack,
     stackLoading,
     stackError,
+    listingWorld,
     busy,
     actionError,
     reload,

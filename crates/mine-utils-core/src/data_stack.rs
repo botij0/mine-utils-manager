@@ -38,6 +38,10 @@ pub enum DataStackError {
     StaleFile,
     #[error("{name} is a resource pack, not a datapack: it has no data root")]
     ResourceOnly { name: String },
+    #[error(
+        "cannot replace {name} while the world is locked; wait for the lock to release, then replace it"
+    )]
+    LockedReplace { name: String },
 }
 
 impl DataStackError {
@@ -283,8 +287,26 @@ fn writable(game_dir: &Path, world_dir: &Path, guard: &dyn WriteGuard) -> Result
     Ok(())
 }
 
+/// Fail closed when `<world>/level.dat` or `<world>/datapacks` is a symlink.
+/// A symlinked `level.dat` could point outside the world, and a symlinked
+/// `datapacks` directory would make list/import/delete follow the link out
+/// of the world. Missing targets are fine; only links are refused.
+fn reject_link_targets(paths: &DataPaths) -> Result<(), AppError> {
+    for target in [&paths.level_dat_path, &paths.datapacks_dir] {
+        if let Ok(meta) = std::fs::symlink_metadata(target) {
+            if meta.file_type().is_symlink() {
+                return Err(crate::error::AppError::World {
+                    reason: format!("{} is a symlink and is never followed", target.display()),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Read the stack. Reads never block, even while the game runs.
 pub fn load(paths: &DataPaths) -> Result<DataStack, AppError> {
+    reject_link_targets(paths)?;
     let bytes = std::fs::read(&paths.level_dat_path)?;
     let view = level_dat::parse(&bytes)?;
     Ok(stack_of(&view, paths))
@@ -374,6 +396,7 @@ pub fn restore_backup_with_guard(
     guard: &dyn WriteGuard,
 ) -> Result<DataStack, AppError> {
     writable(&paths.game_dir, &paths.world_dir, guard)?;
+    reject_link_targets(paths)?;
     level_backup::restore_guarded(
         &paths.backups_root,
         &paths.world_name(),
@@ -408,6 +431,7 @@ pub fn delete_datapack_safely_with_guard(
     trash: &dyn TrashService,
     guard: &dyn WriteGuard,
 ) -> Result<DatapackDeleteOutcome, AppError> {
+    reject_link_targets(paths)?;
     pack_scan::validate_delete_target(path, &paths.datapacks_dir)?;
     writable(&paths.game_dir, &paths.world_dir, guard)?;
     let filename = path
@@ -428,7 +452,10 @@ pub fn delete_datapack_safely_with_guard(
 
 /// Import a zip or directory datapack into `saves/<world>/datapacks`.
 /// Validates `pack.mcmeta` and a `data` root; rejects resource-only packs and
-/// symlinks. When the world is locked the file is copied but left disabled.
+/// symlinks. A running game is refused before anything is copied. When only
+/// the world itself is locked, a new pack is copied but left disabled; a
+/// `Replace` is refused instead, so the installed pack is never trashed
+/// while the game holds the world open.
 pub fn import_datapack(
     paths: &DataPaths,
     source: &Path,
@@ -457,8 +484,19 @@ pub fn import_datapack_with(
     trash: &dyn TrashService,
     guard: &dyn WriteGuard,
 ) -> Result<DatapackImportOutcome, AppError> {
+    reject_link_targets(paths)?;
     reject_symlink_source(source)?;
     let location = source_location(source)?;
+    let name = display_name(source);
+    // A locked world may still receive a *new* pack: it is copied but left
+    // disabled (the `Locked` outcome below). A `Replace`, however, would
+    // trash the installed pack while the game holds the world open, while
+    // the delete path refuses outright. Refuse before anything is copied.
+    if matches!(choice, ImportChoice::Replace)
+        && game_lock::world_locked(&paths.world_dir).is_some()
+    {
+        return Err(AppError::from(DataStackError::LockedReplace { name }));
+    }
     require_data_root(source, location)?;
     // A running game is refused before anything is copied. A world-level lock
     // still allows the copy; the pack is left disabled (Locked below).
@@ -637,11 +675,19 @@ fn zip_roots(source: &Path, name: &str) -> Result<(bool, bool), AppError> {
 
 /// List the installed datapacks of one world: a zip or a directory with
 /// `pack.mcmeta` directly under `datapacks`. Broken entries become error
-/// cards so one bad pack never hides the rest.
+/// cards so one bad pack never hides the rest. A symlinked `datapacks`
+/// directory fails closed instead of listing whatever the link points at.
 pub fn scan_datapacks(
     datapacks: &Path,
     icons: &crate::icon_cache::IconCache,
 ) -> Result<PackListing, AppError> {
+    if let Ok(meta) = std::fs::symlink_metadata(datapacks) {
+        if meta.file_type().is_symlink() {
+            return Err(crate::error::AppError::World {
+                reason: format!("{} is a symlink and is never followed", datapacks.display()),
+            });
+        }
+    }
     pack_scan::scan_packs(datapacks, icons)
 }
 
@@ -724,6 +770,7 @@ fn commit(
     guard: &dyn WriteGuard,
 ) -> Result<DataWrite, AppError> {
     writable(&paths.game_dir, &paths.world_dir, guard)?;
+    reject_link_targets(paths)?;
 
     for attempt in 0..2 {
         let before = std::fs::read(&paths.level_dat_path)?;
@@ -772,6 +819,10 @@ fn commit(
         // Re-check after the backup and immediately before the replace. A game
         // that started during the backup leaves the old bytes in place.
         writable(&paths.game_dir, &paths.world_dir, guard)?;
+        // The render depends only on `before`, so it sits directly against
+        // the final re-read and the replace: nothing else can interleave.
+        let rendered =
+            level_dat::render_with(&before, &enabled, &disabled).map_err(AppError::from)?;
         // Re-read immediately before the replace: an external writer that
         // landed during the backup is rebased once; a second race comes back
         // as stale instead of clobbering the new content.
@@ -781,8 +832,6 @@ fn commit(
             }
             continue;
         }
-        let rendered =
-            level_dat::render_with(&before, &enabled, &disabled).map_err(AppError::from)?;
         level_dat::write_level_dat(&paths.world_dir, &rendered)?;
         return Ok(DataWrite {
             enabled,

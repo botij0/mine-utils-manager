@@ -468,7 +468,7 @@ fn delete_cleans_references_before_the_trash() {
     assert_eq!(trash.calls(), vec![pack.clone()]);
     let (enabled, disabled) = view(&world.paths);
     assert!(!enabled.contains(&"file/gone.zip".to_string()));
-    assert!(!disabled.contains(&"file/old.zip".to_string()) || true);
+    assert!(disabled.contains(&"file/old.zip".to_string()));
 }
 
 #[test]
@@ -580,4 +580,250 @@ fn restore_guard_failure_leaves_current_file() {
         .unwrap_err();
     assert_eq!(err.code(), "game_running");
     assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), current);
+}
+
+/// Spawned helper: holds a POSIX write lock on `$MINE_UTILS_LOCK_HOLDER`
+/// until it is killed. POSIX locks are per process, so the holder must be
+/// its own process: `F_GETLK` reports our own locks as free.
+#[test]
+fn lock_holder_helper() {
+    let Ok(path) = std::env::var("MINE_UTILS_LOCK_HOLDER") else {
+        return;
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open the lock file");
+    let mut lock = libc::flock {
+        l_type: libc::F_WRLCK as libc::c_short,
+        l_whence: libc::SEEK_SET as libc::c_short,
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+    };
+    use std::os::unix::io::AsRawFd;
+    let result = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &mut lock) };
+    assert_eq!(result, 0, "the helper takes the write lock");
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+fn spawn_lock_holder(path: &Path) -> std::process::Child {
+    std::process::Command::new(std::env::current_exe().expect("current exe"))
+        .args(["--exact", "lock_holder_helper", "--nocapture"])
+        .env("MINE_UTILS_LOCK_HOLDER", path)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the lock holder")
+}
+
+fn wait_for_world_lock(world_dir: &Path) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if mine_utils_core::game_lock::world_locked(world_dir).is_some() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    false
+}
+
+/// Install `name` from a source dir, returning the source for a later Replace.
+fn install_pack(world: &World, name: &str) -> PathBuf {
+    let source = datapack_source(world._dir.path(), name);
+    let outcome = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Default,
+        &world.icons,
+        &world.hashes,
+        &RecordingTrash::new(),
+        &PassGuard,
+    )
+    .unwrap();
+    assert!(
+        matches!(outcome, data_stack::DatapackImportOutcome::Imported { .. }),
+        "setup import works, got {outcome:?}"
+    );
+    source
+}
+
+#[test]
+fn locked_world_replace_is_refused_before_any_trash() {
+    let world = temp_world(&["vanilla"], &[]);
+    let source = install_pack(&world, "cool-pack");
+    let installed = world.paths.datapacks_dir.join("cool-pack");
+    assert!(installed.is_dir(), "setup installed the pack");
+    let before = std::fs::read(&world.paths.level_dat_path).unwrap();
+
+    let lock_path = world.paths.world_dir.join("session.lock");
+    std::fs::write(&lock_path, b"\x00").unwrap();
+    let mut child = spawn_lock_holder(&lock_path);
+    assert!(
+        wait_for_world_lock(&world.paths.world_dir),
+        "a second process holds the world lock"
+    );
+
+    let trash = RecordingTrash::new();
+    let err = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &trash,
+        &PassGuard,
+    )
+    .unwrap_err();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        err.to_string().contains("locked"),
+        "a clear locked/replace error, got {err}"
+    );
+    assert!(
+        installed.is_dir(),
+        "the old pack survives the refused Replace"
+    );
+    assert!(trash.calls().is_empty(), "nothing was trashed");
+    assert_eq!(
+        std::fs::read(&world.paths.level_dat_path).unwrap(),
+        before,
+        "level.dat is untouched"
+    );
+}
+
+#[test]
+fn locked_world_collision_replace_is_refused() {
+    let world = temp_world(&["vanilla"], &[]);
+    install_pack(&world, "clash-pack");
+    let installed_pack = world.paths.datapacks_dir.join("clash-pack");
+    assert!(installed_pack.is_dir());
+    let installed_meta_before = std::fs::read(installed_pack.join("pack.mcmeta")).unwrap();
+    let level_before = std::fs::read(&world.paths.level_dat_path).unwrap();
+
+    let lock_path = world.paths.world_dir.join("session.lock");
+    std::fs::write(&lock_path, b"\x00").unwrap();
+    let mut child = spawn_lock_holder(&lock_path);
+    assert!(wait_for_world_lock(&world.paths.world_dir));
+
+    // A colliding source: same file name as the installed pack, different
+    // bytes, so `Replace` would trash the installed pack to install it.
+    let other_dir = world._dir.path().join("other");
+    std::fs::create_dir_all(&other_dir).unwrap();
+    let clash = other_dir.join("clash-pack");
+    std::fs::create_dir_all(clash.join("data")).unwrap();
+    std::fs::write(
+        clash.join("pack.mcmeta"),
+        r#"{"pack": {"pack_format": 48, "description": "other"}}"#,
+    )
+    .unwrap();
+    let trash = RecordingTrash::new();
+    let err = data_stack::import_datapack_with(
+        &world.paths,
+        &clash,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &trash,
+        &PassGuard,
+    )
+    .unwrap_err();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        err.to_string().contains("locked"),
+        "a clear locked/replace error, got {err}"
+    );
+    assert!(installed_pack.is_dir(), "the installed pack survives");
+    assert_eq!(
+        std::fs::read(installed_pack.join("pack.mcmeta")).unwrap(),
+        installed_meta_before,
+        "the installed bytes are untouched"
+    );
+    assert_eq!(
+        std::fs::read(&world.paths.level_dat_path).unwrap(),
+        level_before,
+        "level.dat is untouched"
+    );
+    assert!(trash.calls().is_empty(), "nothing was trashed");
+}
+
+#[test]
+#[cfg(unix)]
+fn symlinked_level_dat_is_never_written() {
+    let world = temp_world(&["vanilla"], &["file/a.zip"]);
+    let outside = world._dir.path().join("outside.dat");
+    std::fs::write(&outside, b"precious").unwrap();
+    std::fs::remove_file(&world.paths.level_dat_path).unwrap();
+    std::os::unix::fs::symlink(&outside, &world.paths.level_dat_path).unwrap();
+
+    let err =
+        data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard).unwrap_err();
+    assert_eq!(
+        err.code(),
+        "world",
+        "a symlinked level.dat fails closed, got {err}"
+    );
+    assert_eq!(
+        std::fs::read(&outside).unwrap(),
+        b"precious",
+        "nothing was written through the link"
+    );
+    assert!(
+        std::fs::symlink_metadata(&world.paths.level_dat_path)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link itself is untouched"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn symlinked_datapacks_dir_fails_closed() {
+    let world = temp_world(&["vanilla"], &[]);
+    let outside = world._dir.path().join("outside-packs");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("mine.txt"), b"precious").unwrap();
+    std::fs::remove_dir(&world.paths.datapacks_dir).unwrap();
+    std::os::unix::fs::symlink(&outside, &world.paths.datapacks_dir).unwrap();
+
+    let err = data_stack::scan_datapacks(&world.paths.datapacks_dir, &world.icons).unwrap_err();
+    assert_eq!(
+        err.code(),
+        "world",
+        "a symlinked datapacks dir is not listed, got {err}"
+    );
+
+    let source = datapack_source(world._dir.path(), "cool-pack");
+    let err = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Default,
+        &world.icons,
+        &world.hashes,
+        &RecordingTrash::new(),
+        &PassGuard,
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "world", "no import follows the link, got {err}");
+
+    let err =
+        data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard).unwrap_err();
+    assert_eq!(err.code(), "world", "no write follows the link, got {err}");
+
+    assert_eq!(
+        std::fs::read(outside.join("mine.txt")).unwrap(),
+        b"precious",
+        "nothing was written outside the world"
+    );
+    assert!(
+        std::fs::read_dir(&outside).unwrap().count() == 1,
+        "nothing was copied outside the world"
+    );
 }

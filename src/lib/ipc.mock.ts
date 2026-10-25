@@ -865,6 +865,22 @@ function mockImportDatapack(
     throw new IpcError('level_dat', `${base} is a resource pack, not a datapack: it has no data root`);
   }
   const packs = mockWorldPacks[world] ?? [];
+  // The guards run before duplicate/collision detection, like the backend:
+  // a running game refuses even a duplicate import, and a locked Replace is
+  // refused even when the pack already exists. Only the world lock lets a
+  // new-pack copy through (reported as `locked` below).
+  if (mockGameState === 'running' && mockLockedWorld !== world) {
+    throw new IpcError(
+      'game_running',
+      `Minecraft is running (/home/demo/.minecraft/saves/${world}/session.lock is locked by pid 4242); close it before Mine Utils writes game files`,
+    );
+  }
+  if (choice === 'replace' && mockLockedWorld === world) {
+    throw new IpcError(
+      'level_dat',
+      `cannot replace ${base} while the world is locked; wait for the lock to release, then replace it`,
+    );
+  }
   const existing = packs.find((item) => item.filename === base);
   if (existing) {
     if (choice === 'skip') return { status: 'skipped' };
@@ -880,14 +896,6 @@ function mockImportDatapack(
   }
   const taken = packs.some((item) => item.filename.toLowerCase() === lower);
   if (taken && choice !== 'replace') return { status: 'collision', name: base };
-  // A running game is refused before anything is copied. A world-level lock
-  // still allows the copy; the pack is left disabled (locked below).
-  if (mockGameState === 'running') {
-    throw new IpcError(
-      'game_running',
-      `Minecraft is running (/home/demo/.minecraft/saves/${world}/session.lock is locked by pid 4242); close it before Mine Utils writes game files`,
-    );
-  }
   mockWorldPacks[world] = [
     ...packs,
     { filename: base, kind: 'data', minFormat: 7, maxFormat: 7, gameLabel: '1.17 to 1.17.1' },
