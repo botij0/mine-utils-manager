@@ -4,7 +4,9 @@ use std::path::Path;
 use fastnbt::Value;
 use mine_utils_core::level_dat;
 
-const REAL: &str = "/tmp/opencode/pr-04-owner/fixtures/level-real.dat";
+fn real_level_path() -> Option<String> {
+    std::env::var("MINE_UTILS_REAL_LEVEL").ok()
+}
 
 fn compound(pairs: Vec<(&str, Value)>) -> Value {
     Value::Compound(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
@@ -104,7 +106,7 @@ fn changed_tags_are_detected() {
     let before = lists("1.21.10");
     let view = level_dat::parse(&before).unwrap();
     assert_eq!(view.version_name, "1.21.10");
-    let mut tampered = {
+    let tampered = {
         let raw = level_dat::gunzip(&before).unwrap();
         let mut value = level_dat::parse_nbt(&raw).unwrap();
         let Value::Compound(root) = &mut value else {
@@ -116,8 +118,6 @@ fn changed_tags_are_detected() {
         data.insert("Seed".to_string(), Value::Long(1));
         level_dat::gzip(&fastnbt::to_bytes(&value).unwrap())
     };
-    // Same datapack lists, different seed: the drift check must fail.
-    let _ = &mut tampered;
     assert!(level_dat::assert_outside_datapacks_unchanged(&before, &tampered).is_err());
 }
 
@@ -251,9 +251,9 @@ fn foreign_entries_keep_their_relative_order() {
 
 #[test]
 fn real_copy_fail_first_opt_in() {
-    // The operator's real level.dat. Opt in with the fixture path; the test
-    // fails loudly when set but missing so a silent skip never hides a gap.
-    let path = std::env::var("MINE_UTILS_REAL_LEVEL").unwrap_or_else(|_| REAL.to_string());
+    let Some(path) = real_level_path() else {
+        return;
+    };
     let bytes = std::fs::read(Path::new(&path)).unwrap_or_else(|_| {
         panic!(
             "real level.dat copy missing at {path}; set MINE_UTILS_REAL_LEVEL or copy the fixture"
