@@ -325,6 +325,7 @@ export default function PacksPage({
             stack={stack}
             packs={packs}
             busy={busy}
+            running={running}
             onToggle={(filename, enabled) => void handleToggle(filename, enabled)}
             onReorder={(order) => void handleReorder(order)}
             onRecheck={() => void refreshStack()}

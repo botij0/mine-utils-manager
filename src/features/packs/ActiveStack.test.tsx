@@ -281,6 +281,7 @@ describe('ActiveStack', () => {
               stack={stack}
               packs={[makePack('Alpha')]}
               busy={false}
+              running={stack.running}
               onToggle={() => {}}
               onReorder={() => {}}
               onRecheck={() => {}}

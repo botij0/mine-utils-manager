@@ -14,7 +14,12 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import type { Pack, ResourceStack, StackEntry as StackEntryData } from '../../lib/types';
+import type {
+  GameRunning,
+  Pack,
+  ResourceStack,
+  StackEntry as StackEntryData,
+} from '../../lib/types';
 import GameRunningBanner from './GameRunningBanner';
 import StackEntryCard from './StackEntry';
 
@@ -22,6 +27,9 @@ interface ActiveStackProps {
   stack: ResourceStack;
   packs: Pack[];
   busy: boolean;
+  /** The live game guard state; the app polls it, so the banner can appear
+   *  while the page is open. */
+  running: GameRunning | null;
   onToggle: (filename: string, enabled: boolean) => void;
   onReorder: (order: string[]) => void;
   onRecheck: () => void;
@@ -68,6 +76,7 @@ export default function ActiveStack({
   stack,
   packs,
   busy,
+  running,
   onToggle,
   onReorder,
   onRecheck,
@@ -84,7 +93,7 @@ export default function ActiveStack({
     [uiEntries],
   );
   const byFilename = useMemo(() => packByFilename(packs), [packs]);
-  const blocked = busy || stack.running !== null;
+  const blocked = busy || running !== null;
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -115,7 +124,7 @@ export default function ActiveStack({
       </div>
 
       <GameRunningBanner
-        running={stack.running}
+        running={running}
         staleLocks={stack.stale_locks}
         supported={stack.detection_supported}
         onRecheck={onRecheck}
