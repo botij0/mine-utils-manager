@@ -65,3 +65,68 @@ export function defaultConfig(): Config {
     backups: { enabled: true, keep: 10 },
   };
 }
+
+export type PackKind = 'resource' | 'data' | 'both' | 'unknown';
+
+export type PackLocation = 'zip' | 'directory';
+
+export interface FormatVersion {
+  major: number;
+  minor: number;
+}
+
+export interface FormatRange {
+  /** Absent when the pack only declares a max_format. */
+  min: FormatVersion | null;
+  /** Absent when the pack only declares a min_format. */
+  max: FormatVersion | null;
+}
+
+export interface PackMeta {
+  pack_format: FormatVersion | null;
+  min_format: FormatVersion | null;
+  max_format: FormatVersion | null;
+  supported_formats: FormatRange | null;
+  description: string;
+}
+
+export interface PackIcon {
+  sha256: string;
+  url: string;
+}
+
+export interface PackIssue {
+  code: string;
+  message: string;
+}
+
+export interface Pack {
+  id: string;
+  name: string;
+  path: string;
+  location: PackLocation;
+  kind: PackKind;
+  description: string;
+  meta: PackMeta;
+  format: FormatVersion | null;
+  format_range: FormatRange | null;
+  game_label: string | null;
+  icon: PackIcon | null;
+  error: PackIssue | null;
+  bytes_read: number;
+}
+
+export interface PackListing {
+  packs: Pack[];
+  count: number;
+  bytes_read: number;
+  elapsed_ms: number;
+}
+
+export type ImportChoice = 'default' | 'replace' | 'skip';
+
+export type ImportOutcome =
+  | { status: 'imported'; pack: Pack }
+  | { status: 'duplicate'; name: string; sha256: string; existing: string }
+  | { status: 'collision'; name: string }
+  | { status: 'skipped' };

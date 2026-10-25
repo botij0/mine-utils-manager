@@ -103,5 +103,14 @@ export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
     async getStartupWarning() {
       return null;
     },
+    async listResourcePacks() {
+      return { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 };
+    },
+    async importResourcePack() {
+      throw new IpcError('pack_unknown_kind', 'fake client has no pack importer');
+    },
+    async deleteResourcePack() {
+      throw new IpcError('pack_not_found', 'fake client has no pack store');
+    },
   };
 }

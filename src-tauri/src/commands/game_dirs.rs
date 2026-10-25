@@ -31,6 +31,16 @@ impl AppState {
     fn note_first_ipc(&self) {
         self.first_ipc.call_once(|| log::info!("first-ipc"));
     }
+
+    pub fn note_ipc(&self) {
+        self.note_first_ipc();
+    }
+
+    /// The selected game dir, if one is configured. Pack commands resolve
+    /// `resourcepacks` from it.
+    pub fn active_game_dir(&self) -> Option<PathBuf> {
+        self.lock().config().active_game_dir.clone()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
