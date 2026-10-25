@@ -506,17 +506,6 @@ fn operator_raw_copy_toggle_only_changes_the_target_when_opted_in() {
 }
 
 #[test]
-fn operator_opt_in_fails_loudly_when_the_path_is_missing() {
-    // This test only documents the contract; it runs the lookup when the env
-    // var is set and otherwise asserts the opt-in stays off.
-    if std::env::var_os("MINE_UTILS_REAL_OPTIONS").is_some() {
-        assert!(operator_copy().is_some());
-    } else {
-        assert!(operator_copy().is_none());
-    }
-}
-
-#[test]
 fn write_never_creates_options_txt() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("options.txt");

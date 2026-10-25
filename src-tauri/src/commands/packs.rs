@@ -82,11 +82,7 @@ pub async fn import_resource_pack(
     .map_err(join_error)?
 }
 
-/// Move a pack to the trash. `delete_pack_safely` validates the target, takes
-/// the game guard, removes the `options.txt` references, re-checks the guard,
-/// then trashes the file. The whole sequence runs under the same write mutex
-/// every stack write uses. A trash failure can leave the pack installed but
-/// disabled; that is the safe direction.
+/// Trash a pack and remove its `options.txt` references under the stack mutex.
 #[tauri::command]
 pub async fn delete_resource_pack(
     state: State<'_, AppState>,

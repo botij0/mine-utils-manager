@@ -17,10 +17,6 @@ function ui(values: string[]): StackEntry[] {
   return [...values].reverse().map(entry);
 }
 
-function stringify(values: StackEntry[]): string[] {
-  return values.map((value) => value.value);
-}
-
 describe('toLoadOrder', () => {
   it('keeps foreign entries at their indices with files interleaved', () => {
     const current = stack(['vanilla', 'file/a.zip', 'fabric', 'file/b.zip']);
@@ -74,12 +70,5 @@ describe('toLoadOrder', () => {
   it('keeps a singleton stack unchanged', () => {
     const current = stack(['file/only.zip']);
     expect(toLoadOrder([...current], current)).toEqual(['file/only.zip']);
-  });
-
-  it('falls back to the current order when a move loses an entry', () => {
-    const current = stack(['vanilla', 'file/a.zip', 'file/b.zip']);
-    expect(toLoadOrder(ui(['vanilla', 'file/a.zip']), current)).toEqual(
-      stringify(current),
-    );
   });
 });

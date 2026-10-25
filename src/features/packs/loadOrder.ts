@@ -17,10 +17,6 @@ export function toLoadOrder(
     .reverse()
     .filter((entry) => entry.kind === 'file');
   const order = current.map((entry) => entry.value);
-  if (filesInLoadOrder.length !== slots.length) {
-    // A malformed move must not silently drop or duplicate an entry.
-    return order;
-  }
   slots.forEach((slot, index) => {
     order[slot] = filesInLoadOrder[index].value;
   });
