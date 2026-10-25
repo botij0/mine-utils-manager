@@ -150,7 +150,14 @@ export default function App({ client = ipc }: AppProps) {
               refreshGameRunning={refreshGameRunning}
             />
           ) : null}
-          {page === 'worlds' ? <WorldsPage /> : null}
+          {page === 'worlds' ? (
+            <WorldsPage
+              client={client}
+              gameRunning={gameRunning}
+              gameGuardUnknown={gameGuardUnknown}
+              refreshGameRunning={refreshGameRunning}
+            />
+          ) : null}
           {page === 'discover' ? <DiscoverPage /> : null}
           {page === 'settings' ? (
             <SettingsPage

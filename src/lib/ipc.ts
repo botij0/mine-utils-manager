@@ -4,16 +4,23 @@ import { IpcError } from './types';
 import type {
   BackupInfo,
   Config,
+  DataSnapshot,
+  DataStack,
+  DatapackDeleteOutcome,
+  DatapackImportOutcome,
+  DatapackListing,
   GameDirEntry,
   GameDirState,
   ImportChoice,
   ImportOutcome,
+  LevelBackupInfo,
   Pack,
   PackListing,
   PackMeta,
   ResourceStack,
   StackSnapshot,
   Theme,
+  World,
 } from './types';
 
 /** The pack surface. The page is tested against this small interface. */
@@ -28,7 +35,19 @@ export interface PackClient {
   restoreOptionsBackup(backup: string): Promise<ResourceStack>;
 }
 
-export interface IpcClient extends PackClient {
+/** The world and datapack surface. The page is tested against this interface. */
+export interface WorldsClient {
+  listWorlds(): Promise<World[]>;
+  listDatapacks(world: string): Promise<DatapackListing>;
+  importDatapack(world: string, path: string, choice?: ImportChoice): Promise<DatapackImportOutcome>;
+  deleteDatapack(world: string, path: string): Promise<DatapackDeleteOutcome>;
+  setDatapackEnabled(world: string, filename: string, enabled: boolean): Promise<DataStack>;
+  reorderDatapacks(world: string, order: string[], expected: DataSnapshot): Promise<DataStack>;
+  listLevelBackups(world: string): Promise<LevelBackupInfo[]>;
+  restoreLevelBackup(world: string, backup: string): Promise<DataStack>;
+}
+
+export interface IpcClient extends PackClient, WorldsClient {
   listGameDirs(): Promise<GameDirEntry[]>;
   addGameDir(path: string): Promise<GameDirState>;
   removeGameDir(path: string): Promise<GameDirState>;
@@ -66,6 +85,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
  * turns them into URLs the webview may load.
  */
 export interface WirePack extends Omit<Pack, 'icon'> {
+  icon: { sha256: string; path: string } | null;
+}
+
+export interface WireWorld extends Omit<World, 'icon'> {
   icon: { sha256: string; path: string } | null;
 }
 
@@ -125,7 +148,47 @@ const tauriClient: IpcClient = {
   listOptionsBackups: () => call<BackupInfo[]>('list_options_backups'),
   restoreOptionsBackup: (backup) =>
     call<ResourceStack>('restore_options_backup', { backup }),
+  async listWorlds() {
+    const worlds = await call<WireWorld[]>('list_worlds');
+    return worlds.map(worldWithIconUrl);
+  },
+  async listDatapacks(world: string) {
+    const listing = await call<
+      Omit<DatapackListing, 'packs'> & {
+        packs: Omit<PackListing, 'packs'> & { packs: WirePack[] };
+      }
+    >('list_datapacks', { world });
+    return {
+      ...listing,
+      packs: listingWithIconUrls(listing.packs),
+      stack: listing.stack,
+    };
+  },
+  importDatapack: (world, path, choice) =>
+    call<DatapackImportOutcome>('import_datapack', {
+      world,
+      path,
+      choice: choice ?? 'default',
+    }),
+  deleteDatapack: (world, path) =>
+    call<DatapackDeleteOutcome>('delete_datapack', { world, path }),
+  setDatapackEnabled: (world, filename, enabled) =>
+    call<DataStack>('set_datapack_enabled', { world, filename, enabled }),
+  reorderDatapacks: (world, order, expected) =>
+    call<DataStack>('reorder_datapacks', { world, order, expected }),
+  listLevelBackups: (world) => call<LevelBackupInfo[]>('list_level_backups', { world }),
+  restoreLevelBackup: (world, backup) =>
+    call<DataStack>('restore_level_backup', { world, backup }),
 };
+
+export function worldWithIconUrl(world: WireWorld): World {
+  return {
+    ...world,
+    icon: world.icon
+      ? { sha256: world.icon.sha256, url: convertFileSrc(world.icon.path) }
+      : null,
+  };
+}
 
 /**
  * The one client the UI talks to. It picks the Tauri invoke transport when the
@@ -149,6 +212,16 @@ export const ipc: IpcClient = {
     pick().reorderResourceStack(order, expected),
   listOptionsBackups: () => pick().listOptionsBackups(),
   restoreOptionsBackup: (backup) => pick().restoreOptionsBackup(backup),
+  listWorlds: () => pick().listWorlds(),
+  listDatapacks: (world) => pick().listDatapacks(world),
+  importDatapack: (world, path, choice) => pick().importDatapack(world, path, choice),
+  deleteDatapack: (world, path) => pick().deleteDatapack(world, path),
+  setDatapackEnabled: (world, filename, enabled) =>
+    pick().setDatapackEnabled(world, filename, enabled),
+  reorderDatapacks: (world, order, expected) =>
+    pick().reorderDatapacks(world, order, expected),
+  listLevelBackups: (world) => pick().listLevelBackups(world),
+  restoreLevelBackup: (world, backup) => pick().restoreLevelBackup(world, backup),
 };
 
 function pick(): IpcClient {

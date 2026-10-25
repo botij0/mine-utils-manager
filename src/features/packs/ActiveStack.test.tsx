@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { PackClient } from '../../lib/ipc';
+import type { IpcClient } from '../../lib/ipc';
 import type {
   BackupInfo,
+  DataStack,
   GameRunning,
   Pack,
   PackListing,
@@ -47,7 +48,7 @@ function makePack(name: string): Pack {
   };
 }
 
-interface StackClient extends PackClient {
+interface StackClient extends IpcClient {
   resource: string[];
   running: GameRunning | null;
   staleLocks: string[];
@@ -122,6 +123,51 @@ function makeStackClient({
     async restoreOptionsBackup(backup: string) {
       client.restores.push(backup);
       return client.restoredStack ?? client.getResourceStack();
+    },
+    async listGameDirs() {
+      return [];
+    },
+    async addGameDir(): Promise<never> {
+      throw new Error('not used');
+    },
+    async removeGameDir(): Promise<never> {
+      throw new Error('not used');
+    },
+    async setActiveGameDir(): Promise<never> {
+      throw new Error('not used');
+    },
+    async getConfig(): Promise<never> {
+      throw new Error('not used');
+    },
+    async setTheme(): Promise<never> {
+      throw new Error('not used');
+    },
+    async getStartupWarning() {
+      return null;
+    },
+    async listWorlds() {
+      return [];
+    },
+    async listDatapacks(): Promise<never> {
+      throw new Error('not used');
+    },
+    async importDatapack(): Promise<never> {
+      throw new Error('not used');
+    },
+    async deleteDatapack(): Promise<never> {
+      throw new Error('not used');
+    },
+    async setDatapackEnabled(): Promise<DataStack> {
+      throw new Error('not used');
+    },
+    async reorderDatapacks(): Promise<DataStack> {
+      throw new Error('not used');
+    },
+    async listLevelBackups() {
+      return [];
+    },
+    async restoreLevelBackup(): Promise<DataStack> {
+      throw new Error('not used');
     },
   };
   return client;

@@ -14,8 +14,8 @@ use crate::data_format_table::data_format_for_version;
 use crate::game_lock::{self, GameRunning};
 use crate::icon_cache::IconCache;
 use crate::level_dat;
-use crate::pack::PackIcon;
 use crate::pack::FormatVersion;
+use crate::pack::PackIcon;
 
 /// A world's game version: the `Data.Version.Name` string plus the data pack
 /// format the world's datapacks must declare, when the table covers it.
@@ -97,7 +97,9 @@ pub fn scan_worlds(game_dir: &Path, icons: &IconCache) -> Vec<World> {
         Err(_) => return Vec::new(),
     };
     dirs.sort();
-    dirs.into_iter().filter_map(|dir| read_world(game_dir, &dir, icons)).collect()
+    dirs.into_iter()
+        .filter_map(|dir| read_world(game_dir, &dir, icons))
+        .collect()
 }
 
 fn read_world(game_dir: &Path, dir: &Path, icons: &IconCache) -> Option<World> {
@@ -154,11 +156,8 @@ fn read_world(game_dir: &Path, dir: &Path, icons: &IconCache) -> Option<World> {
             });
         }
     }
-    match std::fs::read(dir.join("icon.png")) {
-        Ok(bytes) => {
-            world.icon = icons.store(&bytes).ok();
-        }
-        Err(_) => {}
+    if let Ok(bytes) = std::fs::read(dir.join("icon.png")) {
+        world.icon = icons.store(&bytes).ok();
     }
     Some(world)
 }
@@ -276,9 +275,12 @@ mod tests {
         data.insert(
             "Version".to_string(),
             fastnbt::Value::Compound(
-                [("Name".to_string(), fastnbt::Value::String("1.21.10".to_string()))]
-                    .into_iter()
-                    .collect(),
+                [(
+                    "Name".to_string(),
+                    fastnbt::Value::String("1.21.10".to_string()),
+                )]
+                .into_iter()
+                .collect(),
             ),
         );
         data.insert(

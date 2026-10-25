@@ -1,10 +1,16 @@
 import { useEffect, useState } from 'react';
-import type { PackClient } from '../../lib/ipc';
+import type { IpcClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
-import type { BackupInfo, GameRunning, IpcError, ResourceStack } from '../../lib/types';
+import type {
+  BackupInfo,
+  GameRunning,
+  IpcError,
+  LevelBackupInfo,
+  ResourceStack,
+} from '../../lib/types';
 
 interface BackupsPanelProps {
-  client: PackClient;
+  client: IpcClient;
   /** Changes here must reload the list; a game-running change must not. */
   activeGameDir?: string | null;
   /** When the parent already tracks the game guard, it decides the block. */
@@ -39,6 +45,12 @@ export default function BackupsPanel({
   const [ownUnknown, setOwnUnknown] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [levelGroups, setLevelGroups] = useState<
+    { dirName: string; label: string; backups: LevelBackupInfo[] }[]
+  >([]);
+  const [levelLoading, setLevelLoading] = useState(true);
+  const [levelError, setLevelError] = useState<IpcError | null>(null);
+  const [levelRestoring, setLevelRestoring] = useState<string | null>(null);
 
   const running = gameRunning !== undefined ? gameRunning : ownRunning;
   const guardUnknown =
@@ -90,6 +102,65 @@ export default function BackupsPanel({
       cancelled = true;
     };
   }, [client, activeGameDir, gameRunning]);
+
+  // The level.dat backups of every world, grouped by world. Worlds without
+  // backups keep an empty group so the section names them.
+  useEffect(() => {
+    let cancelled = false;
+    setLevelLoading(true);
+    setLevelError(null);
+    client
+      .listWorlds()
+      .then(async (worlds) => {
+        const groups: { dirName: string; label: string; backups: LevelBackupInfo[] }[] = [];
+        for (const world of worlds) {
+          if (world.issue) continue;
+          try {
+            const backups = await client.listLevelBackups(world.dir_name);
+            if (cancelled) return;
+            groups.push({ dirName: world.dir_name, label: world.level_name, backups });
+          } catch {
+            if (cancelled) return;
+            groups.push({ dirName: world.dir_name, label: world.level_name, backups: [] });
+          }
+        }
+        if (!cancelled) setLevelGroups(groups);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLevelGroups([]);
+        setLevelError(toAppError(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLevelLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, activeGameDir]);
+
+  const handleLevelRestore = async (dirName: string, label: string, file: string) => {
+    const key = `${dirName}/${file}`;
+    setLevelRestoring(key);
+    setStatus(null);
+    setLevelError(null);
+    try {
+      // The backend guards the game and recreates a missing level.dat, so
+      // there is no client-side pre-check to block the recovery path.
+      await client.restoreLevelBackup(dirName, file);
+      setStatus(`Restored ${file} for ${label}.`);
+      const groups = [...levelGroups];
+      const group = groups.find((entry) => entry.dirName === dirName);
+      if (group) group.backups = await client.listLevelBackups(dirName);
+      setLevelGroups(groups);
+    } catch (err) {
+      const appError = toAppError(err);
+      setLevelError(appError);
+      if (appError.code === 'game_running') void refreshGameRunning();
+    } finally {
+      setLevelRestoring(null);
+    }
+  };
 
   const handleRestore = async (file: string) => {
     setRestoring(file);
@@ -178,6 +249,75 @@ export default function BackupsPanel({
           </tbody>
         </table>
       ) : null}
+
+      <h2>World level.dat</h2>
+      <p className="panel-note">
+        Every level.dat write leaves a timestamped copy here, grouped by world.
+        Restoring writes the copy back and keeps the current file as a new backup.
+      </p>
+
+      {levelError ? (
+        <p className="error" role="alert">
+          {levelError.message}
+        </p>
+      ) : null}
+
+      {levelLoading ? (
+        <p className="empty-note">Loading world backups…</p>
+      ) : levelGroups.length === 0 ? (
+        <p className="empty-note">No worlds with level.dat backups yet.</p>
+      ) : (
+        levelGroups.map((group) => (
+          <section key={group.dirName} className="level-backup-group" aria-label={`${group.label} backups`}>
+            <h3>{group.label}</h3>
+            {group.backups.length === 0 ? (
+              <p className="empty-note">No backups yet. They appear after the first write.</p>
+            ) : (
+              <table className="backups-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Date</th>
+                    <th scope="col">File</th>
+                    <th scope="col">Size</th>
+                    <th scope="col">
+                      <span className="visually-hidden">Restore</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.backups.map((backup) => {
+                    const key = `${group.dirName}/${backup.file_name}`;
+                    return (
+                      <tr key={backup.file_name}>
+                        <td>{backup.display}</td>
+                        <td className="backups-name">{backup.file_name}</td>
+                        <td>{formatBytes(backup.bytes)}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="button"
+                            disabled={blocked || levelRestoring !== null}
+                            title={
+                              running
+                                ? 'Close Minecraft before restoring'
+                                : guardUnknown
+                                  ? 'Mine Utils could not check whether Minecraft is running'
+                                  : undefined
+                            }
+                            onClick={() => void handleLevelRestore(group.dirName, group.label, backup.file_name)}
+                          >
+                            {levelRestoring === key ? 'Restoring…' : 'Restore'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </section>
+        ))
+      )}
     </section>
   );
 }

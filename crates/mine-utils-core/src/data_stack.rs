@@ -117,7 +117,11 @@ impl DataStack {
     pub fn snapshot(&self) -> DataSnapshot {
         DataSnapshot {
             enabled: self.enabled.iter().map(|e| e.value().to_string()).collect(),
-            disabled: self.disabled.iter().map(|e| e.value().to_string()).collect(),
+            disabled: self
+                .disabled
+                .iter()
+                .map(|e| e.value().to_string())
+                .collect(),
         }
     }
 }
@@ -173,10 +177,21 @@ pub struct DataWrite {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum DatapackImportOutcome {
-    Imported { filename: String },
-    Locked { filename: String, detail: String },
-    Duplicate { name: String, sha256: String, existing: String },
-    Collision { name: String },
+    Imported {
+        filename: String,
+    },
+    Locked {
+        filename: String,
+        detail: String,
+    },
+    Duplicate {
+        name: String,
+        sha256: String,
+        existing: String,
+    },
+    Collision {
+        name: String,
+    },
     Skipped,
 }
 
@@ -226,11 +241,7 @@ pub fn enable(
 /// Disable: drop every occurrence from both lists, then append one copy to
 /// `Disabled`. Removal matches strings, so a stale entry whose file is gone
 /// is still cleaned. A pack that is already disabled exactly once is a no-op.
-pub fn disable(
-    enabled: &mut Vec<String>,
-    disabled: &mut Vec<String>,
-    filename: &str,
-) -> bool {
+pub fn disable(enabled: &mut Vec<String>, disabled: &mut Vec<String>, filename: &str) -> bool {
     let value = format!("file/{filename}");
     let was_enabled = enabled.iter().any(|entry| entry == &value);
     enabled.retain(|entry| entry != &value);
@@ -255,10 +266,8 @@ pub fn reorder(current: &[String], order: &[String]) -> Result<(), DataStackErro
             });
         }
     }
-    let mut before_files: Vec<&String> =
-        current.iter().filter(|e| is_file_entry(e)).collect();
-    let mut after_files: Vec<&String> =
-        order.iter().filter(|e| is_file_entry(e)).collect();
+    let mut before_files: Vec<&String> = current.iter().filter(|e| is_file_entry(e)).collect();
+    let mut after_files: Vec<&String> = order.iter().filter(|e| is_file_entry(e)).collect();
     before_files.sort();
     after_files.sort();
     if before_files != after_files {
@@ -285,8 +294,16 @@ pub fn load(paths: &DataPaths) -> Result<DataStack, AppError> {
 fn stack_of(view: &level_dat::LevelDatView, paths: &DataPaths) -> DataStack {
     let status = game_lock::check(&paths.game_dir);
     DataStack {
-        enabled: view.enabled.iter().map(|v| DataStackEntry::parse(v)).collect(),
-        disabled: view.disabled.iter().map(|v| DataStackEntry::parse(v)).collect(),
+        enabled: view
+            .enabled
+            .iter()
+            .map(|v| DataStackEntry::parse(v))
+            .collect(),
+        disabled: view
+            .disabled
+            .iter()
+            .map(|v| DataStackEntry::parse(v))
+            .collect(),
         world_locked: game_lock::world_locked(&paths.world_dir),
         running: status.running,
         stale_locks: status.stale_locks,
@@ -410,7 +427,15 @@ pub fn import_datapack(
     icons: &crate::icon_cache::IconCache,
     hashes: &HashCache,
 ) -> Result<DatapackImportOutcome, AppError> {
-    import_datapack_with(paths, source, choice, icons, hashes, &SystemTrash, &SystemGuard)
+    import_datapack_with(
+        paths,
+        source,
+        choice,
+        icons,
+        hashes,
+        &SystemTrash,
+        &SystemGuard,
+    )
 }
 
 #[doc(hidden)]
@@ -454,13 +479,15 @@ pub fn import_datapack_with(
 
 fn map_pack_outcome(outcome: &crate::pack::ImportOutcome) -> DatapackImportOutcome {
     match outcome {
-        crate::pack::ImportOutcome::Duplicate { name, sha256, existing } => {
-            DatapackImportOutcome::Duplicate {
-                name: name.clone(),
-                sha256: sha256.clone(),
-                existing: existing.clone(),
-            }
-        }
+        crate::pack::ImportOutcome::Duplicate {
+            name,
+            sha256,
+            existing,
+        } => DatapackImportOutcome::Duplicate {
+            name: name.clone(),
+            sha256: sha256.clone(),
+            existing: existing.clone(),
+        },
         crate::pack::ImportOutcome::Collision { name } => {
             DatapackImportOutcome::Collision { name: name.clone() }
         }
@@ -531,9 +558,9 @@ fn reject_dir_symlinks(dir: &Path) -> Result<(), AppError> {
             path: current.clone(),
         })?;
         for entry in entries.filter_map(|e| e.ok()) {
-            let file_type = entry.file_type().map_err(|_| PackError::NotFound {
-                path: entry.path(),
-            })?;
+            let file_type = entry
+                .file_type()
+                .map_err(|_| PackError::NotFound { path: entry.path() })?;
             if file_type.is_symlink() {
                 return Err(PackError::Symlink { path: entry.path() }.into());
             }
@@ -586,10 +613,12 @@ fn zip_roots(source: &Path, name: &str) -> Result<(bool, bool), AppError> {
     let mut has_meta = false;
     let mut meta_bytes: u64 = 0;
     for index in 0..archive.len() {
-        let entry = archive.by_index(index).map_err(|_| PackError::BrokenArchive {
-            name: name.to_string(),
-            reason: "invalid Zip archive".to_string(),
-        })?;
+        let entry = archive
+            .by_index(index)
+            .map_err(|_| PackError::BrokenArchive {
+                name: name.to_string(),
+                reason: "invalid Zip archive".to_string(),
+            })?;
         let entry_name = entry.name().to_string();
         if entry_name == "pack.mcmeta" || entry_name.starts_with("data/") {
             if entry_name == "pack.mcmeta" {
@@ -629,8 +658,16 @@ pub fn scan_datapacks(
 fn stack_of_lists(write: &DataWrite, paths: &DataPaths) -> DataStack {
     let status = game_lock::check(&paths.game_dir);
     DataStack {
-        enabled: write.enabled.iter().map(|v| DataStackEntry::parse(v)).collect(),
-        disabled: write.disabled.iter().map(|v| DataStackEntry::parse(v)).collect(),
+        enabled: write
+            .enabled
+            .iter()
+            .map(|v| DataStackEntry::parse(v))
+            .collect(),
+        disabled: write
+            .disabled
+            .iter()
+            .map(|v| DataStackEntry::parse(v))
+            .collect(),
         world_locked: game_lock::world_locked(&paths.world_dir),
         running: status.running,
         stale_locks: status.stale_locks,
@@ -651,8 +688,14 @@ impl Change {
         disabled: &mut Vec<String>,
     ) -> Result<bool, DataStackError> {
         match self {
-            Change::Toggle { filename, enabled: true } => enable(enabled, disabled, filename),
-            Change::Toggle { filename, enabled: false } => {
+            Change::Toggle {
+                filename,
+                enabled: true,
+            } => enable(enabled, disabled, filename),
+            Change::Toggle {
+                filename,
+                enabled: false,
+            } => {
                 validate_filename(filename)?;
                 Ok(disable(enabled, disabled, filename))
             }
@@ -697,9 +740,8 @@ fn commit(
         let view = level_dat::parse(&before)?;
         let mut enabled = view.enabled.clone();
         let mut disabled = view.disabled.clone();
-        let stale = expected.is_some_and(|snapshot| {
-            snapshot.enabled != enabled || snapshot.disabled != disabled
-        });
+        let stale = expected
+            .is_some_and(|snapshot| snapshot.enabled != enabled || snapshot.disabled != disabled);
 
         let applied = change.apply(&mut enabled, &mut disabled);
         let changed = match applied {
@@ -714,7 +756,10 @@ fn commit(
             return Ok(DataWrite {
                 enabled,
                 disabled,
-                backup: LevelBackupOutcome { created: None, skipped: !paths.backups.enabled },
+                backup: LevelBackupOutcome {
+                    created: None,
+                    skipped: !paths.backups.enabled,
+                },
                 wrote: false,
             });
         }
@@ -728,13 +773,17 @@ fn commit(
         }
 
         // A failed backup aborts the write; the previous bytes stay intact.
-        let backup_outcome =
-            level_backup::create(&paths.backups_root, &paths.world_name(), &before, &paths.backups)?;
+        let backup_outcome = level_backup::create(
+            &paths.backups_root,
+            &paths.world_name(),
+            &before,
+            &paths.backups,
+        )?;
         // Re-check after the backup and immediately before the replace. A game
         // that started during the backup leaves the old bytes in place.
         writable(&paths.game_dir, &paths.world_dir, guard)?;
-        let rendered = level_dat::render_with(&before, &enabled, &disabled)
-            .map_err(AppError::from)?;
+        let rendered =
+            level_dat::render_with(&before, &enabled, &disabled).map_err(AppError::from)?;
         level_dat::write_level_dat(&paths.world_dir, &rendered)?;
         return Ok(DataWrite {
             enabled,

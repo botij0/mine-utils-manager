@@ -3,9 +3,6 @@ use std::path::PathBuf;
 
 use serde::{Serialize, Serializer};
 
-use crate::data_stack::DataStackError;
-use crate::level_dat::LevelDatError;
-
 /// Every fallible core operation returns this error. Tauri commands return it
 /// unchanged, so the frontend sees one wire shape.
 #[derive(Debug)]

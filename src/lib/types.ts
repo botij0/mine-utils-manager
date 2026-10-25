@@ -172,3 +172,80 @@ export interface BackupInfo {
   bytes: number;
   display: string;
 }
+
+export type DataStackEntry =
+  | { kind: 'file'; value: string; filename: string }
+  | { kind: 'foreign'; value: string };
+
+/**
+ * The datapack stack. `enabled` is the `Data.DataPacks.Enabled` array in load
+ * order, low to high: the last entry wins. The UI shows the reverse, so the
+ * top card is the highest priority. Foreign entries such as `vanilla` are
+ * locked to their indices and never move.
+ */
+export interface DataStack {
+  enabled: DataStackEntry[];
+  disabled: DataStackEntry[];
+  running: GameRunning | null;
+  /** The lock on this world's own `session.lock`, when held. */
+  world_locked: GameRunning | null;
+  /** Stale `session.lock` files. They never block a write. */
+  stale_locks: string[];
+  /** False where POSIX lock probing is unsupported. */
+  detection_supported: boolean;
+}
+
+/** What the UI rendered, so a write against a changed file set is refused. */
+export interface DataSnapshot {
+  enabled: string[];
+  disabled: string[];
+}
+
+export interface WorldVersion {
+  name: string;
+  /** The data pack format the world's datapacks must declare, when known. */
+  data_format: FormatVersion | null;
+}
+
+export interface WorldIssue {
+  code: string;
+  message: string;
+}
+
+export interface World {
+  dir_name: string;
+  path: string;
+  level_name: string;
+  version: WorldVersion | null;
+  icon: PackIcon | null;
+  running: GameRunning | null;
+  world_locked: GameRunning | null;
+  stale_lock: boolean;
+  detection_supported: boolean;
+  /** Set for corrupt, version-less, or datapack-less worlds: read-only. */
+  issue: WorldIssue | null;
+}
+
+export interface DatapackListing {
+  packs: PackListing;
+  stack: DataStack;
+}
+
+export type DatapackImportOutcome =
+  | { status: 'imported'; filename: string }
+  | { status: 'locked'; filename: string; detail: string }
+  | { status: 'duplicate'; name: string; sha256: string; existing: string }
+  | { status: 'collision'; name: string }
+  | { status: 'skipped' };
+
+export interface DatapackDeleteOutcome {
+  removed_references: boolean;
+  stack: DataStack;
+}
+
+export interface LevelBackupInfo {
+  file_name: string;
+  world: string;
+  bytes: number;
+  display: string;
+}

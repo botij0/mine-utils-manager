@@ -1000,3 +1000,270 @@ button {
   flex: none;
   padding: 2px 8px;
 }
+
+.worlds-body {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.world-rail ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.world-rail-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+
+.world-rail-item.is-selected {
+  border-color: var(--color-accent);
+}
+
+.world-rail-icon {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #3f7d5a, #2c3e50);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+}
+
+.world-rail-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.world-rail-fallback {
+  font-size: 14px;
+}
+
+.world-rail-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.world-rail-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-rail-version {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.world-rail-error {
+  margin-left: auto;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-danger, #b3261e);
+  color: #fff;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.world-header {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  margin-bottom: var(--space-3);
+}
+
+.world-icon {
+  flex: none;
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #3f7d5a, #2c3e50);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 22px;
+  position: relative;
+}
+
+.world-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  position: relative;
+  z-index: 1;
+}
+
+.world-icon-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.world-header-text {
+  min-width: 0;
+}
+
+.world-header-text h2 {
+  margin: 0 0 4px;
+}
+
+.world-meta {
+  margin: 0;
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.world-path {
+  overflow-wrap: anywhere;
+}
+
+.worlds-toolbar {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.datapack-grid {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.datapack-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.datapack-card.is-selected {
+  border-color: var(--color-accent);
+}
+
+.datapack-card-main {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.datapack-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.datapack-kind {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.datapack-lock {
+  flex: none;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.datapack-actions {
+  flex: none;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.compat-chip {
+  display: inline-block;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-warning, #8a6d00);
+  width: fit-content;
+}
+
+.datapack-detail {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: var(--space-3);
+  background: var(--color-surface);
+}
+
+.datapack-detail dl {
+  margin: var(--space-2) 0;
+}
+
+.datapack-detail dt {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.datapack-detail dd {
+  margin: 0 0 var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+.datapack-detail-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.import-prompt {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.level-backup-group {
+  margin-top: var(--space-3);
+}
+
+.level-backup-group h3 {
+  margin: var(--space-2) 0;
+}

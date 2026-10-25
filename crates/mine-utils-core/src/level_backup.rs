@@ -183,9 +183,8 @@ where
 /// `level.dat` with datapack lists. Anything else is rejected before the
 /// current file is touched.
 fn validate_backup_bytes(file_name: &str, bytes: &[u8]) -> Result<(), AppError> {
-    level_dat::parse(bytes).map_err(|err| {
-        backup_error(format!("{file_name} is not a valid level.dat: {err}"))
-    })?;
+    level_dat::parse(bytes)
+        .map_err(|err| backup_error(format!("{file_name} is not a valid level.dat: {err}")))?;
     Ok(())
 }
 
@@ -355,7 +354,10 @@ fn timestamp(nanos: u64) -> String {
 /// `YYYY-MM-DD HH:MM:SS UTC`, derived from the backup file name. Every slice
 /// uses `get`, so a crafted non-ASCII name falls back instead of panicking.
 fn display_timestamp(file_name: &str) -> String {
-    let stamp = file_name.split_once('-').map(|(stamp, _)| stamp).unwrap_or(file_name);
+    let stamp = file_name
+        .split_once('-')
+        .map(|(stamp, _)| stamp)
+        .unwrap_or(file_name);
     let Some(rest) = stamp.split_once('T') else {
         return stamp.to_string();
     };
@@ -438,10 +440,7 @@ mod tests {
                                             "vanilla".to_string(),
                                         )]),
                                     ),
-                                    (
-                                        "Disabled".to_string(),
-                                        fastnbt::Value::List(Vec::new()),
-                                    ),
+                                    ("Disabled".to_string(), fastnbt::Value::List(Vec::new())),
                                 ]
                                 .into_iter()
                                 .collect(),
@@ -522,8 +521,15 @@ mod tests {
         let name = "20260101T000000.000000000-world-level.dat";
         std::fs::write(root.join(name), b"not nbt").unwrap();
 
-        let err = restore_guarded(root.as_path(), "world", &level, name, &config(10), || Ok(()))
-            .unwrap_err();
+        let err = restore_guarded(
+            root.as_path(),
+            "world",
+            &level,
+            name,
+            &config(10),
+            || Ok(()),
+        )
+        .unwrap_err();
         assert_eq!(err.code(), "level_backup");
         assert_eq!(std::fs::read(&level).unwrap(), current);
     }

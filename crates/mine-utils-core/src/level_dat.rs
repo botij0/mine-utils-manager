@@ -73,8 +73,7 @@ pub fn gzip(raw: &[u8]) -> Vec<u8> {
 
 /// Parse decompressed NBT bytes to a value tree. The root must be a compound.
 pub fn parse_nbt(raw: &[u8]) -> Result<Value, LevelDatError> {
-    let value: Value =
-        fastnbt::from_bytes(raw).map_err(|_| LevelDatError::NotCompound)?;
+    let value: Value = fastnbt::from_bytes(raw).map_err(|_| LevelDatError::NotCompound)?;
     match &value {
         Value::Compound(_) => Ok(value),
         _ => Err(LevelDatError::NotCompound),
@@ -88,7 +87,7 @@ pub fn parse(bytes: &[u8]) -> Result<LevelDatView, LevelDatError> {
     view_of(&value)
 }
 
-fn data_of<'a>(value: &'a Value) -> Result<&'a std::collections::HashMap<String, Value>, LevelDatError> {
+fn data_of(value: &Value) -> Result<&std::collections::HashMap<String, Value>, LevelDatError> {
     match value {
         Value::Compound(root) => match root.get("Data") {
             Some(Value::Compound(data)) => Ok(data),
@@ -178,10 +177,9 @@ pub fn render_with(
     let raw = gunzip(bytes)?;
     let mut value = parse_nbt(&raw)?;
     replace_lists(&mut value, enabled, disabled)?;
-    let encoded =
-        fastnbt::to_bytes(&value).map_err(|err| LevelDatError::MalformedArrays {
-            reason: format!("could not re-encode level.dat: {err}"),
-        })?;
+    let encoded = fastnbt::to_bytes(&value).map_err(|err| LevelDatError::MalformedArrays {
+        reason: format!("could not re-encode level.dat: {err}"),
+    })?;
     Ok(gzip(&encoded))
 }
 
@@ -218,11 +216,7 @@ fn replace_lists(
 /// `file/<filename>` from `Disabled` and appends it to `Enabled`; disabling
 /// does the reverse. Duplicates are removed on disable; enabling is
 /// idempotent.
-pub fn set_enabled(
-    bytes: &[u8],
-    filename: &str,
-    enabled: bool,
-) -> Result<Vec<u8>, LevelDatError> {
+pub fn set_enabled(bytes: &[u8], filename: &str, enabled: bool) -> Result<Vec<u8>, LevelDatError> {
     let view = parse(bytes)?;
     let value = format!("file/{filename}");
     let (mut next_enabled, mut next_disabled) = (view.enabled, view.disabled);
@@ -329,13 +323,19 @@ mod tests {
                         (
                             "Enabled",
                             Value::List(
-                                enabled.iter().map(|e| Value::String(e.to_string())).collect(),
+                                enabled
+                                    .iter()
+                                    .map(|e| Value::String(e.to_string()))
+                                    .collect(),
                             ),
                         ),
                         (
                             "Disabled",
                             Value::List(
-                                disabled.iter().map(|e| Value::String(e.to_string())).collect(),
+                                disabled
+                                    .iter()
+                                    .map(|e| Value::String(e.to_string()))
+                                    .collect(),
                             ),
                         ),
                     ]),
@@ -396,9 +396,8 @@ mod tests {
         ));
         let not_compound = gzip(&[0x01, 0x00, 0x00, 0x2a]);
         assert_eq!(parse(&not_compound), Err(LevelDatError::NotCompound));
-        let no_version = gzip(
-            &fastnbt::to_bytes(&compound(vec![("Data", compound(vec![]))])).unwrap(),
-        );
+        let no_version =
+            gzip(&fastnbt::to_bytes(&compound(vec![("Data", compound(vec![]))])).unwrap());
         assert_eq!(parse(&no_version), Err(LevelDatError::MissingVersion));
         let no_packs = gzip(
             &fastnbt::to_bytes(&compound(vec![(

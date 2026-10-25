@@ -4,7 +4,7 @@ use std::sync::{Mutex, Once};
 
 use mine_utils_core::{
     discover_game_dirs, entry_for, home_dir, merge_game_dirs, validate_game_dir, AppError,
-    BackupsConfig, Config, ConfigStore, GameDirEntry, StackPaths, Theme,
+    BackupsConfig, Config, ConfigStore, DataPaths, GameDirEntry, StackPaths, Theme, WorldPaths,
 };
 use serde::Serialize;
 use tauri::State;
@@ -55,6 +55,19 @@ impl AppState {
         let game_dir = self.active_game_dir().ok_or(AppError::NoActiveGameDir)?;
         Ok(StackPaths::for_game_dir(
             &game_dir,
+            &self.data_dir,
+            self.backups_config(),
+        ))
+    }
+
+    /// Where one world's datapack stack lives: its `level.dat`, its
+    /// `datapacks` dir, and its backup folder under the app data dir.
+    pub fn world_data_paths(&self, world: &str) -> Result<DataPaths, AppError> {
+        let game_dir = self.active_game_dir().ok_or(AppError::NoActiveGameDir)?;
+        let resolved = WorldPaths::for_world(&game_dir, world)?;
+        Ok(DataPaths::for_world(
+            &game_dir,
+            &resolved.world_dir,
             &self.data_dir,
             self.backups_config(),
         ))

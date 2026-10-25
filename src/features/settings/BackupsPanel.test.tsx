@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { PackClient } from '../../lib/ipc';
+import type { IpcClient } from '../../lib/ipc';
 import type {
   BackupInfo,
   GameRunning,
@@ -47,8 +47,29 @@ function makeClient({
   restored = STACK as ResourceStack,
 } = {}) {
   const restores: string[] = [];
-  const client: PackClient & { restores: string[] } = {
+  const client: IpcClient & { restores: string[] } = {
     restores,
+    async listGameDirs() {
+      return [];
+    },
+    async addGameDir() {
+      throw new Error('not used');
+    },
+    async removeGameDir() {
+      throw new Error('not used');
+    },
+    async setActiveGameDir() {
+      throw new Error('not used');
+    },
+    async getConfig() {
+      throw new Error('not used');
+    },
+    async setTheme() {
+      throw new Error('not used');
+    },
+    async getStartupWarning() {
+      return null;
+    },
     async listResourcePacks() {
       return { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 };
     },
@@ -73,8 +94,36 @@ function makeClient({
       restores.push(backup);
       return restored;
     },
+    async listWorlds() {
+      return [];
+    },
+    async listDatapacks(): Promise<never> {
+      return unusedWorlds();
+    },
+    async importDatapack(): Promise<never> {
+      return unusedWorlds();
+    },
+    async deleteDatapack(): Promise<never> {
+      return unusedWorlds();
+    },
+    async setDatapackEnabled(): Promise<import('../../lib/types').DataStack> {
+      return unusedWorlds();
+    },
+    async reorderDatapacks(): Promise<import('../../lib/types').DataStack> {
+      return unusedWorlds();
+    },
+    async listLevelBackups() {
+      return [];
+    },
+    async restoreLevelBackup(): Promise<import('../../lib/types').DataStack> {
+      return unusedWorlds();
+    },
   };
   return client;
+}
+
+function unusedWorlds(): never {
+  throw new Error('not used');
 }
 
 describe('BackupsPanel', () => {
