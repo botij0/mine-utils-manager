@@ -18,5 +18,14 @@ read the operator's own game data.
 
 ## Checked-in files
 
-This directory holds only policy docs. The fixture trees themselves stay out
-of git. A test that needs a fixture on disk creates it.
+- `options-real-shaped.txt` is the one committed file. It is a sanitized,
+  real-world-shaped Minecraft 1.21 `options.txt`: the original line count and
+  key shapes, with operator pack names replaced by `VanillaTweaks.zip` and
+  `Recovered.zip`. It contains no paths, server addresses, or world data.
+  `options_roundtrip.rs` asserts a byte-identical round trip and a
+  toggle-only-target write against it unconditionally.
+- The operator's raw file is never committed. Set `MINE_UTILS_REAL_OPTIONS` to
+  its path to opt into the same two assertions against the raw bytes; a set but
+  missing path fails the test loudly.
+- All other fixture trees stay out of git. A test that needs a fixture on disk
+  creates it.

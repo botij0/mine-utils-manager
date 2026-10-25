@@ -81,7 +81,7 @@ pub fn list(root: &Path) -> Result<Vec<BackupInfo>, AppError> {
         .into_iter()
         .filter_map(|file_name| {
             let path = root.join(&file_name);
-            let bytes = std::fs::metadata(&path).ok()?.len();
+            let bytes = std::fs::symlink_metadata(&path).ok()?.len();
             Some(BackupInfo {
                 display: display_timestamp(&file_name),
                 file_name,
@@ -92,17 +92,35 @@ pub fn list(root: &Path) -> Result<Vec<BackupInfo>, AppError> {
 }
 
 /// Restore one backup over `options.txt`. The name must resolve inside the
-/// game dir's own backup folder. The current bytes are backed up first, then
-/// the backup is written atomically. A restored file may recreate a missing
-/// `options.txt`; that is the point of a backup.
+/// game dir's own backup folder. The backup bytes must parse as an
+/// `options.txt` before anything is replaced. The current bytes are backed up
+/// first, then a guard runs immediately before the atomic write. A restored
+/// file may recreate a missing `options.txt`; that is the point of a backup.
 pub fn restore(
     root: &Path,
     options_path: &Path,
     file_name: &str,
     config: &BackupsConfig,
 ) -> Result<BackupOutcome, AppError> {
+    restore_guarded(root, options_path, file_name, config, || Ok(()))
+}
+
+/// `restore` with a caller-supplied guard that runs after the pre-restore
+/// backup exists and immediately before the current file is replaced. The stack
+/// path uses it to re-check the game lock after the backup step.
+pub fn restore_guarded<F>(
+    root: &Path,
+    options_path: &Path,
+    file_name: &str,
+    config: &BackupsConfig,
+    before_write: F,
+) -> Result<BackupOutcome, AppError>
+where
+    F: FnOnce() -> Result<(), AppError>,
+{
     let source = validated_backup(root, file_name)?;
     let bytes = std::fs::read(&source).map_err(|err| backup_error(format!("{err}")))?;
+    validate_backup_bytes(file_name, &bytes)?;
 
     let outcome = match std::fs::read(options_path) {
         Ok(current) => create(root, &current, config)?,
@@ -113,8 +131,20 @@ pub fn restore(
         Err(err) => return Err(AppError::Io(err)),
     };
 
+    before_write()?;
     crate::options_txt::write_options_unchecked(options_path, &bytes)?;
     Ok(outcome)
+}
+
+/// A backup is only restorable when it is a readable ASCII/UTF-8 `options.txt`
+/// with a `resourcePacks` array. Anything else is rejected before the current
+/// file is touched.
+fn validate_backup_bytes(file_name: &str, bytes: &[u8]) -> Result<(), AppError> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| backup_error(format!("{file_name} is not valid UTF-8")))?;
+    crate::options_txt::OptionsTxt::parse(text)
+        .map_err(|err| backup_error(format!("{file_name} is not a valid options.txt: {err}")))?;
+    Ok(())
 }
 
 /// Read one backup after validating it lives in the given backup folder.
@@ -163,9 +193,13 @@ fn backup_names(root: &Path) -> Result<Vec<String>, AppError> {
     Ok(entries
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| {
+            // `file_type` never follows a symlink, so a link to a regular file
+            // is not listed as a restorable backup.
+            if !entry.file_type().ok()?.is_file() {
+                return None;
+            }
             let name = entry.file_name().to_string_lossy().into_owned();
-            let is_backup = name.ends_with(SUFFIX) && entry.path().is_file();
-            is_backup.then_some(name)
+            name.ends_with(SUFFIX).then_some(name)
         })
         .collect())
 }
@@ -178,6 +212,7 @@ fn rotate(root: &Path, keep: u32) -> Result<(), AppError> {
     for name in names.into_iter().take(excess) {
         std::fs::remove_file(root.join(name)).map_err(|err| backup_error(format!("{err}")))?;
     }
+    sync_dir(root);
     Ok(())
 }
 
@@ -199,41 +234,57 @@ fn unique_nanos() -> u64 {
     }
 }
 
+/// Write to a hidden temp file, fsync it, then rename it to the timestamped
+/// name and fsync the directory. A crash can leave a temp file, but it can never
+/// publish a truncated `*-options.txt`.
 fn write_unique(root: &Path, previous: &[u8]) -> Result<BackupInfo, AppError> {
     for _ in 0..64 {
         let nanos = unique_nanos();
         let stamp = timestamp(nanos);
         let file_name = format!("{stamp}{SUFFIX}");
         let path = root.join(&file_name);
+        if path.exists() {
+            continue;
+        }
+        let tmp = root.join(format!(".{stamp}.{}.tmp", std::process::id()));
         let opened = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&path);
+            .open(&tmp);
         let mut file = match opened {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(backup_error(format!("{}: {err}", path.display()))),
+            Err(err) => return Err(backup_error(format!("{}: {err}", tmp.display()))),
         };
-        let written = (|| -> std::io::Result<u64> {
+        let written = (|| -> std::io::Result<()> {
             file.write_all(previous)?;
             file.sync_all()?;
-            Ok(previous.len() as u64)
+            Ok(())
         })();
-        return match written {
-            Ok(bytes) => Ok(BackupInfo {
-                display: display_timestamp(&file_name),
-                file_name,
-                bytes,
-            }),
-            Err(err) => {
-                let _ = std::fs::remove_file(&path);
-                Err(backup_error(format!("{}: {err}", path.display())))
-            }
-        };
+        if let Err(err) = written {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(backup_error(format!("{}: {err}", tmp.display())));
+        }
+        if let Err(err) = std::fs::rename(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(backup_error(format!("{}: {err}", path.display())));
+        }
+        sync_dir(root);
+        return Ok(BackupInfo {
+            display: display_timestamp(&file_name),
+            file_name,
+            bytes: previous.len() as u64,
+        });
     }
     Err(backup_error(
         "could not find a free backup name after 64 tries",
     ))
+}
+
+fn sync_dir(path: &Path) {
+    if let Ok(handle) = std::fs::File::open(path) {
+        let _ = handle.sync_all();
+    }
 }
 
 /// `YYYYMMDDTHHMMSS.nnnnnnnnn` in UTC: sorts chronologically as text.
@@ -244,7 +295,8 @@ fn timestamp(nanos: u64) -> String {
     format!("{year:04}{month:02}{day:02}T{hour:02}{minute:02}{second:02}.{fraction:09}")
 }
 
-/// `YYYY-MM-DD HH:MM:SS UTC`, derived from the backup file name.
+/// `YYYY-MM-DD HH:MM:SS UTC`, derived from the backup file name. Every slice
+/// uses `get`, so a crafted non-ASCII name falls back instead of panicking.
 fn display_timestamp(file_name: &str) -> String {
     let stamp = file_name.strip_suffix(SUFFIX).unwrap_or(file_name);
     let Some(rest) = stamp.split_once('T') else {
@@ -260,15 +312,17 @@ fn display_timestamp(file_name: &str) -> String {
     if time.len() != 6 {
         return stamp.to_string();
     }
-    format!(
-        "{}-{}-{} {}:{}:{} UTC",
-        &date[0..4],
-        &date[4..6],
-        &date[6..8],
-        &time[0..2],
-        &time[2..4],
-        &time[4..6]
-    )
+    let (Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second)) = (
+        date.get(0..4),
+        date.get(4..6),
+        date.get(6..8),
+        time.get(0..2),
+        time.get(2..4),
+        time.get(4..6),
+    ) else {
+        return stamp.to_string();
+    };
+    format!("{year}-{month}-{day} {hour}:{minute}:{second} UTC")
 }
 
 /// Civil date and time from Unix seconds. Howard Hinnant's days-from-civil,
@@ -326,13 +380,29 @@ mod tests {
     }
 
     #[test]
+    fn display_timestamp_never_panics_on_non_ascii_names() {
+        let name = "202é610T120000.000000000-options.txt";
+        let display = display_timestamp(name);
+        assert!(
+            !display.contains("UTC"),
+            "a bad boundary falls back: {display}"
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join(name), b"body").unwrap();
+        let listed = list(root.path()).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].display, display);
+    }
+
+    #[test]
     fn rotation_keeps_the_newest_backups() {
         let root = tempfile::tempdir().unwrap();
         let keep = 3;
         for round in 0..10 {
             create(
                 root.path(),
-                format!("bytes {round}").as_bytes(),
+                format!("resourcePacks:[\"v{round}\"]\n").as_bytes(),
                 &config(keep),
             )
             .unwrap();
@@ -342,7 +412,7 @@ mod tests {
         assert_eq!(listed.len() as u32, keep, "only the newest survive");
         assert_eq!(
             std::fs::read(root.path().join(&listed[0].file_name)).unwrap(),
-            b"bytes 9",
+            b"resourcePacks:[\"v9\"]\n",
             "the newest backup is the last write"
         );
     }
@@ -350,8 +420,8 @@ mod tests {
     #[test]
     fn keep_is_clamped_to_at_least_one() {
         let root = tempfile::tempdir().unwrap();
-        create(root.path(), b"first", &config(0)).unwrap();
-        create(root.path(), b"second", &config(0)).unwrap();
+        create(root.path(), b"resourcePacks:[\"a\"]\n", &config(0)).unwrap();
+        create(root.path(), b"resourcePacks:[\"b\"]\n", &config(0)).unwrap();
 
         let listed = list(root.path()).unwrap();
         assert_eq!(listed.len(), 1);
@@ -365,7 +435,7 @@ mod tests {
             keep: 10,
         };
 
-        let outcome = create(root.path(), b"bytes", &disabled).unwrap();
+        let outcome = create(root.path(), b"resourcePacks:[]\n", &disabled).unwrap();
 
         assert!(outcome.skipped);
         assert_eq!(outcome.created, None);
@@ -376,10 +446,10 @@ mod tests {
     fn restore_puts_the_old_bytes_back_and_backs_up_the_current() {
         let root = tempfile::tempdir().unwrap();
         let options = root.path().join("options.txt");
-        std::fs::write(&options, b"v1").unwrap();
+        std::fs::write(&options, b"resourcePacks:[\"v1\"]\n").unwrap();
 
-        let first = create(root.path(), b"v1", &config(10)).unwrap();
-        std::fs::write(&options, b"v2").unwrap();
+        let first = create(root.path(), b"resourcePacks:[\"v1\"]\n", &config(10)).unwrap();
+        std::fs::write(&options, b"resourcePacks:[\"v2\"]\n").unwrap();
 
         let outcome = restore(
             root.path(),
@@ -389,14 +459,90 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(std::fs::read(&options).unwrap(), b"v1");
+        assert_eq!(
+            std::fs::read(&options).unwrap(),
+            b"resourcePacks:[\"v1\"]\n"
+        );
         assert!(outcome.created.is_some(), "the current bytes are backed up");
         let listed = list(root.path()).unwrap();
         assert!(
-            listed
-                .iter()
-                .any(|info| std::fs::read(root.path().join(&info.file_name)).unwrap() == b"v2"),
+            listed.iter().any(|info| {
+                std::fs::read(root.path().join(&info.file_name)).unwrap()
+                    == b"resourcePacks:[\"v2\"]\n"
+            }),
             "the pre-restore bytes survive as a backup"
+        );
+    }
+
+    #[test]
+    fn restore_recreates_a_missing_options_file_from_a_valid_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let options = root.path().join("options.txt");
+        let source = b"resourcePacks:[\"vanilla\"]\nlang:en_us\n";
+        let first = create(root.path(), source, &config(10)).unwrap();
+        let _ = std::fs::remove_file(&options);
+
+        let outcome = restore(
+            root.path(),
+            &options,
+            &first.created.unwrap().file_name,
+            &config(10),
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(&options).unwrap(), source);
+        assert_eq!(
+            outcome.created, None,
+            "there was no current file to back up"
+        );
+    }
+
+    #[test]
+    fn malformed_backup_is_rejected_and_leaves_the_current_file() {
+        let root = tempfile::tempdir().unwrap();
+        let options = root.path().join("options.txt");
+        std::fs::write(&options, b"resourcePacks:[\"current\"]\n").unwrap();
+        let name = "20260101T000000.000000000-options.txt";
+        std::fs::write(root.path().join(name), b"this is not options.txt").unwrap();
+
+        let err = restore(root.path(), &options, name, &config(10)).unwrap_err();
+
+        assert_eq!(err.code(), "backup");
+        assert!(err.to_string().contains("not a valid options.txt"), "{err}");
+        assert_eq!(
+            std::fs::read(&options).unwrap(),
+            b"resourcePacks:[\"current\"]\n"
+        );
+    }
+
+    #[test]
+    fn restore_guard_runs_after_the_backup_and_before_the_write() {
+        let root = tempfile::tempdir().unwrap();
+        let options = root.path().join("options.txt");
+        std::fs::write(&options, b"resourcePacks:[\"current\"]\n").unwrap();
+        let first = create(root.path(), b"resourcePacks:[\"old\"]\n", &config(10)).unwrap();
+        let name = first.created.unwrap().file_name;
+
+        let err = restore_guarded(root.path(), &options, &name, &config(10), || {
+            assert_eq!(
+                std::fs::read(&options).unwrap(),
+                b"resourcePacks:[\"current\"]\n",
+                "the current file is untouched when the guard runs"
+            );
+            assert_eq!(
+                list(root.path()).unwrap().len(),
+                2,
+                "the pre-restore backup exists before the guard"
+            );
+            Err(backup_error("game started"))
+        })
+        .unwrap_err();
+
+        assert_eq!(err.code(), "backup");
+        assert_eq!(
+            std::fs::read(&options).unwrap(),
+            b"resourcePacks:[\"current\"]\n",
+            "a blocked restore leaves the old bytes in place"
         );
     }
 
@@ -404,7 +550,7 @@ mod tests {
     fn missing_backup_is_an_error() {
         let root = tempfile::tempdir().unwrap();
         let options = root.path().join("options.txt");
-        std::fs::write(&options, b"current").unwrap();
+        std::fs::write(&options, b"resourcePacks:[\"current\"]\n").unwrap();
 
         let err = restore(
             root.path(),
@@ -415,14 +561,17 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.code(), "backup");
-        assert_eq!(std::fs::read(&options).unwrap(), b"current");
+        assert_eq!(
+            std::fs::read(&options).unwrap(),
+            b"resourcePacks:[\"current\"]\n"
+        );
     }
 
     #[test]
     fn restore_rejects_names_outside_the_backup_folder() {
         let root = tempfile::tempdir().unwrap();
         let options = root.path().join("options.txt");
-        std::fs::write(&options, b"current").unwrap();
+        std::fs::write(&options, b"resourcePacks:[\"current\"]\n").unwrap();
         std::fs::write(root.path().join("sneaky-options.txt"), b"stolen").unwrap();
 
         for name in [
@@ -435,7 +584,10 @@ mod tests {
             let err = restore(root.path(), &options, name, &config(10)).unwrap_err();
             assert_eq!(err.code(), "backup", "{name} must be rejected");
         }
-        assert_eq!(std::fs::read(&options).unwrap(), b"current");
+        assert_eq!(
+            std::fs::read(&options).unwrap(),
+            b"resourcePacks:[\"current\"]\n"
+        );
     }
 
     #[test]
@@ -455,16 +607,70 @@ mod tests {
     #[test]
     fn list_reports_names_sizes_and_display_timestamps() {
         let root = tempfile::tempdir().unwrap();
-        create(root.path(), b"12345", &config(10)).unwrap();
+        create(root.path(), b"resourcePacks:[\"abc\"]\n", &config(10)).unwrap();
 
         let listed = list(root.path()).unwrap();
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].bytes, 5);
+        assert_eq!(listed[0].bytes, 22);
         assert!(listed[0].file_name.ends_with("-options.txt"));
         assert!(
             listed[0].display.ends_with(" UTC"),
             "display timestamp: {}",
             listed[0].display
+        );
+    }
+
+    #[test]
+    fn backup_write_is_atomic_and_leaves_no_temp_files() {
+        let root = tempfile::tempdir().unwrap();
+        let body = b"resourcePacks:[\"vanilla\"]\n";
+        let created = create(root.path(), body, &config(10))
+            .unwrap()
+            .created
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(root.path().join(&created.file_name)).unwrap(),
+            body
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "no temp file survives: {leftovers:?}");
+
+        // A crash-shaped leftover must not be listed as a backup.
+        std::fs::write(root.path().join(".20260101T000000.000000000.1.tmp"), b"x").unwrap();
+        assert_eq!(list(root.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn symlinked_backups_are_not_listed() {
+        let root = tempfile::tempdir().unwrap();
+        let real = create(root.path(), b"resourcePacks:[\"x\"]\n", &config(10))
+            .unwrap()
+            .created
+            .unwrap();
+        let link_name = "20260101T000000.000000000-options.txt";
+        std::os::unix::fs::symlink(
+            root.path().join(&real.file_name),
+            root.path().join(link_name),
+        )
+        .unwrap();
+
+        let listed = list(root.path()).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].file_name, real.file_name);
+        assert!(
+            restore(
+                root.path(),
+                &root.path().join("options.txt"),
+                link_name,
+                &config(10)
+            )
+            .is_err(),
+            "a symlink is not a restorable backup"
         );
     }
 }

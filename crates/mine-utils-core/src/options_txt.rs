@@ -117,7 +117,10 @@ impl OptionsTxt {
         let mut resource_packs = None;
         let mut incompatible_packs = None;
         for (index, line) in lines.iter().enumerate() {
-            let Some((key, value)) = line.text.split_once(':') else {
+            // A UTF-8 BOM may precede the first key. It is ignored for key
+            // comparison only; the line text keeps it so a rewrite preserves it.
+            let content = line.text.strip_prefix('\u{feff}').unwrap_or(&line.text);
+            let Some((key, value)) = content.split_once(':') else {
                 continue;
             };
             match key {
@@ -217,8 +220,15 @@ impl OptionsTxt {
 }
 
 fn replace_value(line: &mut Line, key: &str, value: &[String]) {
+    // Keep whatever prefix the file used before the first colon, including a
+    // leading BOM or any spaces, so only the value bytes change.
+    let prefix = line
+        .text
+        .split_once(':')
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(key);
     line.text = format!(
-        "{key}:{}",
+        "{prefix}:{}",
         serde_json::to_string(value).expect("strings serialize")
     );
 }
@@ -238,10 +248,14 @@ fn append_line(lines: &mut Vec<Line>, key: &str, value: &[String]) {
             return;
         }
     }
-    lines.push(Line {
-        text,
-        ending: LineEnding::Lf,
-    });
+    let ending = lines
+        .last()
+        .map(|line| match line.ending {
+            LineEnding::CrLf => LineEnding::CrLf,
+            _ => LineEnding::Lf,
+        })
+        .unwrap_or(LineEnding::Lf);
+    lines.push(Line { text, ending });
 }
 
 /// Read and parse `options.txt`. A missing file or invalid UTF-8 asks the user
@@ -266,7 +280,10 @@ pub fn read_options(path: &Path) -> Result<OptionsTxt, AppError> {
 
 /// Write `options.txt` atomically: a temp file in the same directory, fsync,
 /// rename, then a directory fsync. The target must already exist; a failed
-/// write cleans its temp file and leaves the previous bytes in place.
+/// write cleans its temp file and leaves the previous bytes in place. The
+/// existence check is best-effort: a concurrent external delete between the
+/// check and the rename cannot be prevented. Callers that must keep a missing
+/// file missing re-read under their own write lock first.
 pub fn write_options(path: &Path, text: &str) -> Result<(), AppError> {
     if !path.exists() {
         return Err(AppError::Options(OptionsError::Missing {
@@ -295,7 +312,10 @@ pub(crate) fn write_options_unchecked(path: &Path, bytes: &[u8]) -> Result<(), A
     ));
 
     let write_result = (|| -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&tmp)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         std::fs::rename(&tmp, path)?;
