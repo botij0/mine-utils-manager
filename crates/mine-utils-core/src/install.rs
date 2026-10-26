@@ -160,6 +160,22 @@ pub fn prepare_modrinth_install<T: Transport>(
             reason: missing_file_reason(version_id, filename, version),
         })?;
     validate_sha512(&file.hashes.sha512, version_id, filename)?;
+    // Datapacks and resource packs install as `.zip` files (`import_pack`
+    // and the `data/` root check both require it). A version can also carry
+    // mod `.jar` files, so refuse those before any download.
+    match kind {
+        SearchKind::Datapack | SearchKind::ResourcePack => {
+            if !file.filename.to_ascii_lowercase().ends_with(".zip") {
+                return Err(ModrinthError::Parse {
+                    reason: format!(
+                        "version {version_id} file {:?} is not a .zip pack; refusing before download",
+                        file.filename,
+                    ),
+                }
+                .into());
+            }
+        }
+    }
     if let (SearchKind::Datapack, Some(world_v)) = (kind, world_version.as_deref()) {
         if !version.game_versions.is_empty() && !version.game_versions.iter().any(|g| g == world_v)
         {

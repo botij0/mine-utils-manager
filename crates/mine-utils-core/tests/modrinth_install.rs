@@ -1027,6 +1027,59 @@ fn empty_and_malformed_sha512_are_refused_before_download() {
 }
 
 #[test]
+fn non_zip_pack_files_are_refused_before_download() {
+    // A datapack version whose primary file is a mod `.jar` can never
+    // install as a datapack; refuse before any CDN request.
+    for (kind, world, dest_file) in [
+        ("datapack", Some("alpha"), DATAPACK_FILE),
+        ("resourcepack", None, RESOURCE_FILE),
+    ] {
+        let fx = fixture();
+        let jar_name = if kind == "datapack" {
+            "cool-mod-2.0.jar"
+        } else {
+            "fresh-1.9.jar"
+        };
+        let jar_url = if kind == "datapack" {
+            "https://cdn.modrinth.com/data/def/cool-mod-2.0.jar"
+        } else {
+            "https://cdn.modrinth.com/data/abc/fresh-1.9.jar"
+        };
+        let fake_sha = &"a".repeat(128);
+        let (client, api) = client(MockApi::new().with(
+            &versions_url(),
+            versions_json(jar_url, jar_name, fake_sha, &[WORLD_VERSION]),
+        ));
+        let err = prepare_modrinth_install(
+            &client,
+            &fx.game_dir,
+            world,
+            PROJECT,
+            VERSION,
+            jar_name,
+            kind,
+        )
+        .expect_err(&format!("a {kind} .jar must be refused"));
+        assert!(err.to_string().contains("not a .zip"), "{err}");
+        assert!(
+            api.cdn_calls().is_empty(),
+            "refused before any download for {kind}"
+        );
+        let dest = if kind == "datapack" {
+            fx.game_dir
+                .join("saves")
+                .join("alpha")
+                .join("datapacks")
+                .join(jar_name)
+        } else {
+            fx.game_dir.join("resourcepacks").join(jar_name)
+        };
+        assert!(!dest.exists(), "nothing lands for {kind}");
+        let _ = dest_file;
+    }
+}
+
+#[test]
 fn malformed_pack_commit_is_removed_on_import_failure() {
     let fx = fixture();
     // Valid zip root but invalid pack metadata: commits, then import fails.
