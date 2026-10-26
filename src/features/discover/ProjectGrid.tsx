@@ -14,7 +14,7 @@ export function formatCount(count: number): string {
 
 export default function ProjectGrid({ hits, selectedId, onSelect }: ProjectGridProps) {
   return (
-    <ul className="pack-grid">
+    <ul className="pack-grid discover-grid">
       {hits.map((hit) => (
         <li key={hit.project_id}>
           <button

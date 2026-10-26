@@ -227,8 +227,8 @@ function packListing(): PackListing {
  * synthetic packs to exercise every UI state.
  */
 /**
- * What the mock pretends Modrinth hosts. The icons are remote HTTPS URLs,
- * like the real CDN; they never use the local `asset://` icon path.
+ * What the mock pretends Modrinth hosts. Icons are inline SVG data URLs with
+ * the same shape as the real CDN icons: the mock never reaches the network.
  */
 const MOCK_PROJECTS: ModrinthSearchHit[] = [
   {
@@ -236,7 +236,7 @@ const MOCK_PROJECTS: ModrinthSearchHit[] = [
     slug: 'fresh-animations',
     title: 'Fresh Animations',
     description: 'Fresh animations for mobs and players.',
-    icon_url: 'https://cdn.modrinth.com/icons/fresh.webp',
+    icon_url: iconDataUrl('FA', '#3f7d5a'),
     downloads: 123456,
     follows: 789,
     project_type: 'resourcepack',
@@ -260,7 +260,7 @@ const MOCK_PROJECTS: ModrinthSearchHit[] = [
     slug: 'pure-datapack',
     title: 'Pure Datapack',
     description: 'Only datapack files, no mods.',
-    icon_url: 'https://cdn.modrinth.com/icons/datapack.webp',
+    icon_url: iconDataUrl('PD', '#5a3f7d'),
     downloads: 500,
     follows: 5,
     project_type: 'datapack',
