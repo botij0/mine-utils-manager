@@ -16,17 +16,17 @@ before running it:
 sha256sum -c SHA256SUMS.txt
 ```
 
-Run the AppImage directly:
+Run the AppImage directly (stable release name, version from the tag):
 
 ```sh
-chmod +x Mine_Utils-*.AppImage
-./Mine_Utils-*.AppImage
+chmod +x mine-utils_*_amd64.AppImage
+./mine-utils_*_amd64.AppImage
 ```
 
 Or install the RPM on Fedora (and other rpm systems):
 
 ```sh
-sudo dnf install ./mine-utils-*.rpm
+sudo dnf install ./mine-utils-*-1.x86_64.rpm
 ```
 
 There is no auto-update and the artifacts are not signed: install a new
@@ -77,11 +77,13 @@ core functions as the app.
 cargo run -p mine-utils-core --bin mine-utils-probe list-game-dirs
 ```
 
-Modrinth search and install go through the same core client:
+Modrinth search and install go through the same core client. `install-modrinth`
+needs an explicit game dir (positional or `$MINE_UTILS_GAME_DIR`); it never
+falls through to `~/.minecraft`:
 
 ```sh
 cargo run -p mine-utils-core --bin mine-utils-probe search-modrinth fresh resourcepack
-cargo run -p mine-utils-core --bin mine-utils-probe install-modrinth <project> <version> resourcepack
+cargo run -p mine-utils-core --bin mine-utils-probe install-modrinth <project> <version> resourcepack /tmp/demo-game
 ```
 
 ## Build a release
@@ -94,9 +96,10 @@ GitHub release. To build the same artifacts locally:
 env -u APPIMAGE pnpm tauri build
 ```
 
-The bundles land under `src-tauri/target/release/bundle/`. The RPM needs
-`webkit2gtk4.1` and `gtk3` at install time; the AppImage carries the app and
-uses the host WebKit.
+The bundles land under `target/release/bundle/` (the workspace target dir,
+not `src-tauri/target/`). The RPM needs `webkit2gtk4.1` and `gtk3` at install
+time; the AppImage bundles its own WebKit, which is why it is large
+(~112 MB, ~320 MB extracted). No signing, no auto-update.
 
 ## Layout
 
@@ -126,11 +129,14 @@ Launcher and MultiMC instance dirs. A dir counts when it holds `versions`,
   every write keeps a backup under the data dir.
 - Modrinth search fires only from the Discover tab; the local tabs never
   touch the network.
-- Downloads come only from `https://cdn.modrinth.com`. Redirects elsewhere
-  are refused, files are capped at 500 MB, the SHA-512 from the version
-  metadata must match, and the zip must contain `assets/` (resource packs) or
-  `data/` (datapacks). A mismatch deletes the temp file and leaves nothing
-  behind.
+- Downloads come only from `https://cdn.modrinth.com` on the default port.
+  Redirects elsewhere are refused, files are capped at 500 MB, the SHA-512
+  from the version metadata must match, and the zip must contain `assets/`
+  (resource packs) or `data/` (datapacks). A mismatch deletes the temp file
+  and leaves nothing behind. The verified file is committed under the API
+  filename without replacing an existing file, then routed through the same
+  import/enable path as a manual install; a running game refuses before any
+  download starts.
 - A hash mismatch, a non-zip, or a wrong archive root is never retried.
   A 429 or 5xx is retried up to three times, honoring `Retry-After`.
 
@@ -140,4 +146,8 @@ Launcher and MultiMC instance dirs. A dir counts when it holds `versions`,
   Modrinth result icons are plain remote HTTPS and are unaffected.
 - A locked world copies a new datapack but leaves it disabled until the lock
   releases.
+- The installed `.desktop` entry lists `Categories=Utility;` only. Tauri v2
+  exposes a single `bundle.category` string and no desktop template, so
+  `Utility;Game;` cannot be expressed in `tauri.conf.json`; changing it is
+  the operator's call at packaging time.
 - No auto-update: watch the releases page for new versions.
