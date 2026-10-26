@@ -89,9 +89,9 @@ export default function DiscoverPage({
   return (
     <section className="panel">
       <h2>Discover</h2>
-      {gameRunning !== undefined ? (
+      {gameRunning !== undefined || gameGuardUnknown ? (
         <GameRunningBanner
-          running={gameRunning}
+          running={gameRunning ?? null}
           guardUnknown={gameGuardUnknown}
           staleLocks={[]}
           supported

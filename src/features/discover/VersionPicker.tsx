@@ -24,8 +24,11 @@ export default function VersionPicker({
     <div className="field">
       <label htmlFor="discover-version-picker">
         Version
-        {targetLabel ? ` (compatible with ${targetLabel} preselected)` : ''}
+        {compatibleId && targetLabel ? ` (compatible with ${targetLabel} preselected)` : null}
       </label>
+      {targetLabel && !compatibleId ? (
+        <p className="empty-note">No published version lists {targetLabel}; the backend rejects a mismatch on install.</p>
+      ) : null}
       <select
         id="discover-version-picker"
         value={selectedId ?? ''}

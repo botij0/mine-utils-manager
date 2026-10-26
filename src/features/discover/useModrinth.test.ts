@@ -237,8 +237,7 @@ describe('useModrinth', () => {
     expect(result.current.detailLoading).toBe(false);
   });
 
-  it('re-runs the version preference when the datapack world changes', async () => {
-    const client = makeFakeClient([]);
+  it('re-runs the version preference when the datapack world changes', async () => {    const client = makeFakeClient([]);
     const origTargets = client.modrinthTargets.bind(client);
     client.modrinthTargets = async (world) => ({
       ...(await origTargets(world)),
@@ -262,5 +261,73 @@ describe('useModrinth', () => {
     await act(async () => {});
     // v2 supports only 1.21.1, so the preference resets to the 1.20.1 build.
     expect(result.current.selectedVersionId).toBe('v1');
+  });
+
+  it('drops a late search response after the query is cleared', async () => {
+    const client = makeFakeClient([]);
+    let release!: (hits: ModrinthSearchHit[]) => void;
+    const gate = new Promise<ModrinthSearchHit[]>((resolve) => {
+      release = resolve;
+    });
+    client.searchModrinth = () => gate;
+    const { result } = renderHook(() => useModrinth(client));
+
+    await act(async () => {
+      result.current.setQuery('fresh');
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS + 50);
+    });
+    // Clear the box while the search is still in flight.
+    await act(async () => {
+      result.current.setQuery('');
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS + 50);
+    });
+    await act(async () => {
+      release([freshHit()]);
+    });
+    await act(async () => {});
+    await act(async () => {});
+    expect(result.current.hits).toEqual([]);
+    expect(result.current.searched).toBe(false);
+  });
+
+  it('closeDetail invalidates an in-flight project fetch', async () => {
+    const client = makeFakeClient([]);
+    let resolveProject!: (value: unknown) => void;
+    const gate = new Promise((resolve) => {
+      resolveProject = resolve;
+    });
+    const origProject = client.getModrinthProject.bind(client);
+    const origVersions = client.listModrinthVersions.bind(client);
+    client.getModrinthProject = async (id) => {
+      const project = await origProject(id);
+      await gate;
+      return project;
+    };
+    client.listModrinthVersions = async (id) => {
+      const versions = await origVersions(id);
+      await gate;
+      return versions;
+    };
+    const { result } = renderHook(() => useModrinth(client));
+
+    let selected!: Promise<void>;
+    await act(async () => {
+      selected = result.current.select(freshHit());
+    });
+    await act(async () => {
+      result.current.closeDetail();
+    });
+    await act(async () => {
+      resolveProject(undefined);
+      await selected;
+    });
+    await act(async () => {});
+    expect(result.current.selected).toBeNull();
+    expect(result.current.project).toBeNull();
+    expect(result.current.versions).toEqual([]);
   });
 });

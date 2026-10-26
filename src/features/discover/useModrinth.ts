@@ -137,6 +137,9 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
 
   useEffect(() => {
     if (!debouncedQuery) {
+      // Invalidate any in-flight search so a late response cannot repopulate
+      // hits under an empty box.
+      requestId.current += 1;
       setHits([]);
       setSearching(false);
       setError(null);
@@ -210,6 +213,9 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
     // A new tab is a new search: drop the old hits so a stale datapack list
     // never renders under the resource-pack tab (and vice versa).
     requestId.current += 1;
+    // Invalidate any in-flight project/version fetch so it cannot repopulate
+    // hidden detail state after the tab switch.
+    selectToken.current += 1;
     setKind(next);
     setHits([]);
     setSearched(false);
@@ -281,6 +287,9 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
   }, []);
 
   const closeDetail = useCallback(() => {
+    // Invalidate any in-flight fetch so it cannot repopulate hidden state
+    // after the dialog closes.
+    selectToken.current += 1;
     setSelected(null);
     setProject(null);
     setVersions([]);

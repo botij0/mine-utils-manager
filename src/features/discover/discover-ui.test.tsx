@@ -145,6 +145,46 @@ describe('discover dialogs', () => {
     }
   });
 
+  it('claims a preselected compatible version only when one exists', () => {
+    const { rerender } = render(
+      <VersionPicker
+        versions={versions()}
+        selectedId="v2"
+        onSelect={() => {}}
+        compatibleId="v2"
+        targetLabel="1.21.1"
+      />,
+    );
+    expect(screen.getByText(/compatible with 1\.21\.1 preselected/)).toBeInTheDocument();
+    rerender(
+      <VersionPicker
+        versions={versions()}
+        selectedId="v2"
+        onSelect={() => {}}
+        compatibleId={null}
+        targetLabel="1.19.4"
+      />,
+    );
+    expect(screen.queryByText(/preselected/)).toBeNull();
+    expect(
+      screen.getByText(/No published version lists 1\.19\.4/),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the guard banner while the first check is still unknown', async () => {
+    const { makeFakeClient } = await import('../../test/fake-ipc');
+    const { default: DiscoverPage } = await import('./DiscoverPage');
+    const client = makeFakeClient([]);
+    const { rerender } = render(
+      <DiscoverPage client={client} gameRunning={undefined} gameGuardUnknown hasGameDir />,
+    );
+    expect(screen.getByText(/Game guard unavailable/)).toBeInTheDocument();
+    rerender(
+      <DiscoverPage client={client} gameRunning={undefined} gameGuardUnknown={false} hasGameDir />,
+    );
+    expect(screen.queryByText(/Game guard unavailable/)).toBeNull();
+  });
+
   it('renders one dialog with aria-modal and closes on Escape', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
