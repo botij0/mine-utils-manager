@@ -239,8 +239,23 @@ fn run() -> Result<String, String> {
                     ))
                 }
             };
-            let world_name = args.next();
-            let game_dir = game_dir(args.next())?;
+            let world_arg = args.next();
+            let (world_name, game_dir) = match kind.0 {
+                SearchKind::ResourcePack => {
+                    // No world for resource packs: the next positional is the
+                    // game dir, so it can never fall through to ~/.minecraft.
+                    (None, game_dir(world_arg)?)
+                }
+                SearchKind::Datapack => {
+                    let name = world_arg
+                        .ok_or_else(|| format!("datapack install needs a world\n{USAGE}"))?;
+                    let game = game_dir(args.next())?;
+                    // Resolve the world eagerly so a typo fails before any
+                    // download starts.
+                    WorldPaths::for_world(&game, &name).map_err(|err| err.to_string())?;
+                    (Some(name), game)
+                }
+            };
             let paths = AppPaths::resolve().map_err(|err| err.to_string())?;
             let client =
                 ModrinthClient::new(ReqwestTransport::new().map_err(|err| err.to_string())?);
