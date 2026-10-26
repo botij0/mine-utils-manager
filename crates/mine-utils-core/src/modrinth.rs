@@ -765,8 +765,11 @@ impl<T: Transport> ModrinthClient<T> {
         Ok(url)
     }
 
-    /// Search projects. For datapacks the facet also returns mods with
-    /// datapack versions, so hits are filtered to `project_type == datapack`.
+    /// Search projects. The `project_type:datapack` facet is what restricts
+    /// datapack results: the live API indexes datapack projects as
+    /// `project_type: "mod"` with datapack loaders/versions, so a client-side
+    /// `project_type == "datapack"` filter would wrongly drop every hit.
+    /// All facet hits are returned (with the existing icon sanitize).
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>, ModrinthError> {
         let project_type = match query.kind {
             SearchKind::ResourcePack => "resourcepack",
@@ -795,16 +798,7 @@ impl<T: Transport> ModrinthClient<T> {
         })?
         .to_string();
         let answer: SearchAnswer = self.get_json(&url)?;
-        if query.kind == SearchKind::Datapack {
-            Ok(answer
-                .hits
-                .into_iter()
-                .filter(|hit| hit.project_type.as_deref() == Some("datapack"))
-                .map(sanitize_hit_icon)
-                .collect())
-        } else {
-            Ok(answer.hits.into_iter().map(sanitize_hit_icon).collect())
-        }
+        Ok(answer.hits.into_iter().map(sanitize_hit_icon).collect())
     }
 
     /// Project metadata for the detail sheet. The icon URL is sanitized to

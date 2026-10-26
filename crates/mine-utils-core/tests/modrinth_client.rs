@@ -135,7 +135,7 @@ const SEARCH_DATAPACK_MIXED: &str = r#"{
       "description": "Only datapack files.",
       "downloads": 500,
       "follows": 5,
-      "project_type": "datapack",
+      "project_type": "mod",
       "versions": ["1.21.1"]
     }
   ]
@@ -213,11 +213,12 @@ fn search_resourcepacks_returns_hits() {
 }
 
 #[test]
-fn search_datapack_filters_mods_with_datapack_versions() {
+fn search_datapack_keeps_mods_with_datapack_versions() {
     let (client, _) = client(|_, _| json_response(200, SEARCH_DATAPACK_MIXED));
     let hits = client.search(&query(SearchKind::Datapack)).expect("search");
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].slug, "pure-datapack");
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].slug, "mod-with-datapack");
+    assert_eq!(hits[1].slug, "pure-datapack");
 }
 
 #[test]
