@@ -57,6 +57,22 @@ impl FormatTable {
         lookup(entries, version)
     }
 
+    /// The data-pack rows of the embedded table: the source of truth for the
+    /// world-version resolver. Labels come from here, so a future table edit
+    /// flows through without a probe list.
+    pub fn data_rows(&self) -> &[FormatRangeEntry] {
+        &self.data
+    }
+
+    /// Every format number the table knows for one pack kind.
+    pub fn formats(&self, kind: PackKind) -> Vec<FormatVersion> {
+        let entries = match kind {
+            PackKind::Data => &self.data,
+            _ => &self.resource,
+        };
+        entries.iter().map(|entry| entry.format).collect()
+    }
+
     /// Game versions for the declared range. A range must map at both ends and
     /// must not be reversed; an open end is named as open instead of guessed,
     /// and a `Both` pack is labelled for each half from its own table.

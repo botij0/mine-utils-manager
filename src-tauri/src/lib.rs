@@ -79,6 +79,16 @@ pub fn run() {
             commands::resource_stack::reorder_resource_stack,
             commands::resource_stack::list_options_backups,
             commands::resource_stack::restore_options_backup,
+            commands::worlds::list_worlds,
+            commands::worlds::list_datapacks,
+            commands::worlds::import_datapack,
+            commands::worlds::set_datapack_enabled,
+            commands::worlds::reorder_datapacks,
+            commands::worlds::delete_datapack,
+            commands::worlds::remove_datapack_reference,
+            commands::worlds::list_level_backups,
+            commands::worlds::list_all_level_backups,
+            commands::worlds::restore_level_backup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

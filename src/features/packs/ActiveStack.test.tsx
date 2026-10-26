@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { PackClient } from '../../lib/ipc';
+import type { BackupsClient, PackClient } from '../../lib/ipc';
 import type {
   BackupInfo,
+  DataStack,
   GameRunning,
   Pack,
   PackListing,
@@ -47,7 +48,7 @@ function makePack(name: string): Pack {
   };
 }
 
-interface StackClient extends PackClient {
+interface StackClient extends PackClient, BackupsClient {
   resource: string[];
   running: GameRunning | null;
   staleLocks: string[];
@@ -122,6 +123,15 @@ function makeStackClient({
     async restoreOptionsBackup(backup: string) {
       client.restores.push(backup);
       return client.restoredStack ?? client.getResourceStack();
+    },
+    async listLevelBackups() {
+      return [];
+    },
+    async listAllLevelBackups() {
+      return [];
+    },
+    async restoreLevelBackup(): Promise<DataStack> {
+      throw new Error('not used');
     },
   };
   return client;

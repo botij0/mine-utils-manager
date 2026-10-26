@@ -2,8 +2,10 @@ import type { IpcClient } from '../lib/ipc';
 import type {
   BackupInfo,
   Config,
+  DataStack,
   GameDirEntry,
   GameDirState,
+  LevelBackupInfo,
   ResourceStack,
   StackEntry,
   Theme,
@@ -33,6 +35,20 @@ function entry(value: string): StackEntry {
   return value.startsWith('file/')
     ? { kind: 'file', value, filename: value.slice('file/'.length) }
     : { kind: 'foreign', value };
+}
+
+function dataStack(): DataStack {
+  return {
+    enabled: ['vanilla'].map((value) => ({
+      kind: 'foreign' as const,
+      value,
+    })),
+    disabled: [],
+    running: null,
+    world_locked: null,
+    stale_locks: [],
+    detection_supported: true,
+  };
 }
 
 function looksLikeGameDir(path: string): boolean {
@@ -169,6 +185,39 @@ export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
     },
     async restoreOptionsBackup() {
       return stack;
+    },
+    async listWorlds() {
+      return [];
+    },
+    async listDatapacks() {
+      return {
+        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        stack: dataStack(),
+      };
+    },
+    async importDatapack() {
+      return { status: 'skipped' as const };
+    },
+    async deleteDatapack() {
+      return { removed_references: false, stack: dataStack() };
+    },
+    async removeDatapackReference() {
+      return dataStack();
+    },
+    async setDatapackEnabled() {
+      return dataStack();
+    },
+    async reorderDatapacks() {
+      return dataStack();
+    },
+    async listLevelBackups(): Promise<LevelBackupInfo[]> {
+      return [];
+    },
+    async listAllLevelBackups(): Promise<LevelBackupInfo[]> {
+      return [];
+    },
+    async restoreLevelBackup() {
+      return dataStack();
     },
   };
 }

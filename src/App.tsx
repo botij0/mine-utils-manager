@@ -52,6 +52,7 @@ export default function App({ client = ipc }: AppProps) {
   // running value stays and writes stay paused until a check succeeds.
   const [gameGuardUnknown, setGameGuardUnknown] = useState(false);
 
+
   useEffect(() => {
     window.location.hash = page;
   }, [page]);
@@ -150,7 +151,14 @@ export default function App({ client = ipc }: AppProps) {
               refreshGameRunning={refreshGameRunning}
             />
           ) : null}
-          {page === 'worlds' ? <WorldsPage /> : null}
+          {page === 'worlds' ? (
+            <WorldsPage
+              client={client}
+              gameRunning={gameRunning}
+              gameGuardUnknown={gameGuardUnknown}
+              refreshGameRunning={refreshGameRunning}
+            />
+          ) : null}
           {page === 'discover' ? <DiscoverPage /> : null}
           {page === 'settings' ? (
             <SettingsPage

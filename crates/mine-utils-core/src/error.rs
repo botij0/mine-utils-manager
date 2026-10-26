@@ -23,6 +23,14 @@ pub enum AppError {
     Pack(crate::pack::PackError),
     Options(crate::options_txt::OptionsError),
     Stack(crate::resource_stack::StackError),
+    World {
+        reason: String,
+    },
+    LevelDat(crate::level_dat::LevelDatError),
+    DataStack(crate::data_stack::DataStackError),
+    LevelBackup {
+        reason: String,
+    },
     Backup {
         reason: String,
     },
@@ -42,7 +50,11 @@ impl AppError {
             AppError::Pack(err) => err.code(),
             AppError::Options(err) => err.code(),
             AppError::Stack(err) => err.code(),
+            AppError::World { .. } => "world",
+            AppError::LevelDat(err) => err.code(),
+            AppError::DataStack(err) => err.code(),
             AppError::Backup { .. } => "backup",
+            AppError::LevelBackup { .. } => "level_backup",
             AppError::GameRunning { .. } => "game_running",
         }
     }
@@ -67,10 +79,14 @@ impl fmt::Display for AppError {
             AppError::Pack(err) => write!(f, "{err}"),
             AppError::Options(err) => write!(f, "{err}"),
             AppError::Stack(err) => write!(f, "{err}"),
+            AppError::World { reason } => write!(f, "world error: {reason}"),
+            AppError::LevelDat(err) => write!(f, "{err}"),
+            AppError::DataStack(err) => write!(f, "{err}"),
+            AppError::LevelBackup { reason } => write!(f, "level backup failed: {reason}"),
             AppError::Backup { reason } => write!(f, "backup failed: {reason}"),
             AppError::GameRunning { running } => write!(
                 f,
-                "Minecraft is running ({}); close it before Mine Utils writes options.txt",
+                "Minecraft is running ({}); close it before Mine Utils writes game files",
                 running.detail
             ),
         }
@@ -84,6 +100,8 @@ impl std::error::Error for AppError {
             AppError::Pack(err) => Some(err),
             AppError::Options(err) => Some(err),
             AppError::Stack(err) => Some(err),
+            AppError::LevelDat(err) => Some(err),
+            AppError::DataStack(err) => Some(err),
             _ => None,
         }
     }
