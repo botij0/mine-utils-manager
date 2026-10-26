@@ -45,6 +45,11 @@ impl AppState {
         self.lock().config().active_game_dir.clone()
     }
 
+    /// The app data dir: provenance and backup roots live under it.
+    pub fn data_dir(&self) -> PathBuf {
+        self.data_dir.clone()
+    }
+
     /// The backup policy from the config. Config writes stay backend-owned.
     pub fn backups_config(&self) -> BackupsConfig {
         self.lock().config().backups.clone()

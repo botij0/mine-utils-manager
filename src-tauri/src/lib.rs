@@ -61,6 +61,7 @@ pub fn run() {
             ));
             app.manage(PackState::new(&paths.cache_dir));
             app.manage(commands::resource_stack::StackState::default());
+            app.manage(commands::discover::ModrinthState::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -89,6 +90,12 @@ pub fn run() {
             commands::worlds::list_level_backups,
             commands::worlds::list_all_level_backups,
             commands::worlds::restore_level_backup,
+            commands::discover::search_modrinth,
+            commands::discover::get_modrinth_project,
+            commands::discover::list_modrinth_versions,
+            commands::discover::modrinth_targets,
+            commands::discover::install_modrinth_pack,
+            commands::discover::get_modrinth_provenance,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
