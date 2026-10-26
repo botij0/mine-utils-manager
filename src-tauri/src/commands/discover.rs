@@ -166,7 +166,7 @@ pub async fn modrinth_targets(
 /// default `resource_pack` snake_case. `provenance_warning` is set when the
 /// file installed fine but the provenance record write failed; it never
 /// fails the install.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ModrinthInstallOutcome {
     #[serde(rename = "resourcepack")]
@@ -257,4 +257,36 @@ pub async fn install_modrinth_pack(
     })
     .await
     .map_err(join_error)?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Locks the wire contract that caused the original `Installed undefined`
+    /// bug: the Tauri command serializes the outcome kind as `resourcepack`
+    /// (one word, matching the Modrinth project type), never `resource_pack`.
+    #[test]
+    fn install_outcome_kind_is_one_word_on_the_wire() {
+        let resource = ModrinthInstallOutcome::ResourcePack {
+            outcome: ImportOutcome::Skipped,
+            provenance_warning: None,
+        };
+        let wire = serde_json::to_value(&resource).expect("serializes");
+        assert_eq!(
+            wire.get("kind").and_then(|k| k.as_str()),
+            Some("resourcepack")
+        );
+
+        let data = ModrinthInstallOutcome::Datapack {
+            outcome: DatapackImportOutcome::Skipped,
+            provenance_warning: Some("w".to_string()),
+        };
+        let wire = serde_json::to_value(&data).expect("serializes");
+        assert_eq!(wire.get("kind").and_then(|k| k.as_str()), Some("datapack"));
+        // A `resource_pack` payload must never silently render as a datapack.
+        let legacy: Result<ModrinthInstallOutcome, _> =
+            serde_json::from_str(r#"{"kind":"resource_pack","outcome":{"status":"skipped"}}"#);
+        assert!(legacy.is_err(), "snake_case kind must not deserialize");
+    }
 }

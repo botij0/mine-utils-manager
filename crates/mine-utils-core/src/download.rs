@@ -309,6 +309,12 @@ fn download_into<T: Transport>(
     out.flush().map_err(|err| DownloadError::Io {
         reason: format!("cannot write {}: {err}", temp.display()),
     })?;
+    // Fsync the temp before the atomic rename so a crash cannot leave a
+    // zero/partial destination that no later check re-hashes. The parent-dir
+    // sync in `commit_path` then makes the rename itself durable.
+    out.sync_all().map_err(|err| DownloadError::Io {
+        reason: format!("cannot write {}: {err}", temp.display()),
+    })?;
     drop(out);
     let actual_sha512 = hex::encode(sha512.finalize());
     if !constant_time_eq_hex(&actual_sha512, expected_sha512) {

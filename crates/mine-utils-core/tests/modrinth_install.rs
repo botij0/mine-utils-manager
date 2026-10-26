@@ -797,3 +797,407 @@ fn running_game_refuses_before_any_download() {
         .exists());
     assert!(leftovers(&fx.game_dir).is_empty());
 }
+
+#[test]
+fn datapack_typo_world_fails_before_any_request() {
+    let fx = fixture();
+    let (client, api) = client(MockApi::new());
+    let err = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        Some("beta"),
+        PROJECT,
+        VERSION,
+        DATAPACK_FILE,
+        "datapack",
+    )
+    .expect_err("a typo world must fail");
+    assert!(matches!(err, AppError::World { .. }), "{err}");
+    assert!(api.calls().is_empty(), "no metadata or CDN request");
+    assert!(!fx
+        .game_dir
+        .join("saves")
+        .join("beta")
+        .join("datapacks")
+        .join(DATAPACK_FILE)
+        .exists());
+}
+
+#[test]
+fn datapack_world_without_level_dat_fails_before_any_request() {
+    let fx = fixture();
+    std::fs::create_dir_all(fx.game_dir.join("saves").join("gamma").join("datapacks")).unwrap();
+    let (client, api) = client(MockApi::new());
+    let err = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        Some("gamma"),
+        PROJECT,
+        VERSION,
+        DATAPACK_FILE,
+        "datapack",
+    )
+    .expect_err("a world without level.dat must fail");
+    assert!(err.to_string().contains("no readable level.dat"), "{err}");
+    assert!(api.calls().is_empty(), "no metadata or CDN request");
+}
+
+#[test]
+fn datapack_corrupt_level_dat_fails_before_any_request() {
+    let fx = fixture();
+    std::fs::write(
+        fx.game_dir.join("saves").join("alpha").join("level.dat"),
+        b"garbage-not-gzip",
+    )
+    .unwrap();
+    let (client, api) = client(MockApi::new());
+    let err = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        Some("alpha"),
+        PROJECT,
+        VERSION,
+        DATAPACK_FILE,
+        "datapack",
+    )
+    .expect_err("a corrupt level.dat must fail");
+    assert!(err.to_string().contains("no readable level.dat"), "{err}");
+    assert!(api.calls().is_empty(), "no metadata or CDN request");
+    assert!(!fx
+        .game_dir
+        .join("saves")
+        .join("alpha")
+        .join("datapacks")
+        .join(DATAPACK_FILE)
+        .exists());
+}
+
+#[test]
+fn fresh_game_dir_without_options_txt_refuses_before_download() {
+    let fx = fixture();
+    std::fs::remove_file(fx.game_dir.join("options.txt")).unwrap();
+    let bytes = resource_zip();
+    let (client, api) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    RESOURCE_URL,
+                    RESOURCE_FILE,
+                    &sha512_hex(&bytes),
+                    &["1.21.10"],
+                ),
+            )
+            .with(RESOURCE_URL, bytes),
+    );
+    let err = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .expect_err("a fresh game dir must fail before download");
+    assert!(err.to_string().contains("options.txt"), "{err}");
+    assert!(api.calls().is_empty(), "no metadata or CDN request");
+    assert!(!fx
+        .game_dir
+        .join("resourcepacks")
+        .join(RESOURCE_FILE)
+        .exists());
+    assert!(leftovers(&fx.game_dir).is_empty(), "no download temps");
+}
+
+#[test]
+fn existing_dest_swapped_between_prepare_and_finish_is_refused() {
+    let fx = fixture();
+    let bytes = resource_zip();
+    let dest = fx.game_dir.join("resourcepacks").join(RESOURCE_FILE);
+    std::fs::write(&dest, &bytes).unwrap();
+    let original_sha256 = sha256_hex(&bytes);
+    let (client, api) = client(MockApi::new().with(
+        &versions_url(),
+        versions_json(
+            RESOURCE_URL,
+            RESOURCE_FILE,
+            &sha512_hex(&bytes),
+            &["1.21.10"],
+        ),
+    ));
+
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .expect("prepare");
+    // Swap the file between prepare and finish.
+    std::fs::write(&dest, datapack_zip()).unwrap();
+
+    let err = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        None,
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .expect_err("a swapped dest must not be reused");
+    assert!(err.to_string().contains("SHA-512 mismatch"), "{err}");
+    assert!(api.cdn_calls().is_empty(), "no download ran");
+    assert!(
+        provenance_lookup(&fx.data_dir, &original_sha256)
+            .expect("lookup")
+            .is_none(),
+        "no provenance for the wrong bytes"
+    );
+}
+
+#[test]
+fn datapack_finish_without_data_paths_errors_instead_of_panicking() {
+    let fx = fixture();
+    let bytes = datapack_zip();
+    let (client, _) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    DATAPACK_URL,
+                    DATAPACK_FILE,
+                    &sha512_hex(&bytes),
+                    &[WORLD_VERSION],
+                ),
+            )
+            .with(DATAPACK_URL, bytes),
+    );
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        Some("alpha"),
+        PROJECT,
+        VERSION,
+        DATAPACK_FILE,
+        "datapack",
+    )
+    .expect("prepare");
+    let err = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        None,
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .expect_err("missing datapack context must error");
+    assert!(matches!(err, AppError::World { .. }), "{err}");
+}
+
+#[test]
+fn empty_and_malformed_sha512_are_refused_before_download() {
+    for bad in ["", "zz", &"0".repeat(10), &"x".repeat(128)] {
+        let fx = fixture();
+        let (client, api) = client(MockApi::new().with(
+            &versions_url(),
+            versions_json(RESOURCE_URL, RESOURCE_FILE, bad, &["1.21.10"]),
+        ));
+        let err = prepare_modrinth_install(
+            &client,
+            &fx.game_dir,
+            None,
+            PROJECT,
+            VERSION,
+            RESOURCE_FILE,
+            "resourcepack",
+        )
+        .expect_err("bad hash must fail");
+        assert!(err.to_string().contains("SHA-512"), "{bad}: {err}");
+        assert!(api.cdn_calls().is_empty(), "no download for {bad:?}");
+        assert!(!fx
+            .game_dir
+            .join("resourcepacks")
+            .join(RESOURCE_FILE)
+            .exists());
+    }
+}
+
+#[test]
+fn malformed_pack_commit_is_removed_on_import_failure() {
+    let fx = fixture();
+    // Valid zip root but invalid pack metadata: commits, then import fails.
+    let bad = zip_bytes(&[
+        ("assets/minecraft/textures/a.png", b"asset"),
+        ("pack.mcmeta", b"this is not json"),
+    ]);
+    let (client, api) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(RESOURCE_URL, RESOURCE_FILE, &sha512_hex(&bad), &["1.21.10"]),
+            )
+            .with(RESOURCE_URL, bad),
+    );
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .expect("prepare");
+    let err = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        None,
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .expect_err("import must fail");
+    let _ = api;
+    assert!(
+        !fx.game_dir
+            .join("resourcepacks")
+            .join(RESOURCE_FILE)
+            .exists(),
+        "the fresh commit is removed, got error {err}"
+    );
+    assert!(leftovers(&fx.game_dir).is_empty(), "no download temps");
+}
+
+#[test]
+fn provenance_write_failure_warns_but_install_succeeds() {
+    let fx = fixture();
+    std::fs::create_dir_all(&fx.data_dir).unwrap();
+    std::fs::write(fx.data_dir.join("provenance.json"), b"corrupt{").unwrap();
+    let bytes = resource_zip();
+    let (client, _) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    RESOURCE_URL,
+                    RESOURCE_FILE,
+                    &sha512_hex(&bytes),
+                    &["1.21.10"],
+                ),
+            )
+            .with(RESOURCE_URL, bytes.clone()),
+    );
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .expect("prepare");
+    let outcome = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        None,
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .expect("install succeeds despite the provenance failure");
+    let CoreInstallOutcome::ResourcePack {
+        outcome,
+        provenance_warning,
+    } = outcome
+    else {
+        panic!("wrong outcome kind");
+    };
+    assert!(
+        matches!(outcome, mine_utils_core::ImportOutcome::Imported { .. }),
+        "{outcome:?}"
+    );
+    let warning = provenance_warning.expect("a warning is reported");
+    assert!(warning.contains("provenance"), "{warning}");
+    assert_eq!(
+        std::fs::read(fx.game_dir.join("resourcepacks").join(RESOURCE_FILE)).unwrap(),
+        bytes
+    );
+    let options = std::fs::read_to_string(fx.game_dir.join("options.txt")).unwrap();
+    assert!(
+        options.contains(&format!("file/{RESOURCE_FILE}")),
+        "{options}"
+    );
+    assert!(leftovers(&fx.game_dir).is_empty(), "no download temps");
+}
+
+#[test]
+fn identical_bytes_under_a_different_filename_installs_a_second_copy() {
+    // Contract: the picker installs by API filename. Identical bytes already
+    // present under a different name do not block the install; the new file
+    // is committed as an intentional second copy.
+    let fx = fixture();
+    let bytes = resource_zip();
+    std::fs::write(
+        fx.game_dir.join("resourcepacks").join("other-name.zip"),
+        &bytes,
+    )
+    .unwrap();
+    let (client, _) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    RESOURCE_URL,
+                    RESOURCE_FILE,
+                    &sha512_hex(&bytes),
+                    &["1.21.10"],
+                ),
+            )
+            .with(RESOURCE_URL, bytes.clone()),
+    );
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .expect("prepare");
+    let outcome = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        None,
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .expect("finish");
+    assert!(
+        matches!(
+            outcome,
+            CoreInstallOutcome::ResourcePack {
+                outcome: mine_utils_core::ImportOutcome::Imported { .. },
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        std::fs::read(fx.game_dir.join("resourcepacks").join(RESOURCE_FILE)).unwrap(),
+        bytes,
+    );
+    assert!(
+        fx.game_dir
+            .join("resourcepacks")
+            .join("other-name.zip")
+            .exists(),
+        "the pre-existing file is untouched"
+    );
+}

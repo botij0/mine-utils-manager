@@ -147,6 +147,10 @@ impl<T: Transport> Transport for std::sync::Arc<T> {
 pub struct ReqwestTransport {
     client: reqwest::blocking::Client,
     download_client: reqwest::blocking::Client,
+    /// Set when the client could not be built with safe settings. Every
+    /// request then fails closed as `Offline` instead of using an
+    /// auto-redirect fallback client.
+    unavailable: Option<String>,
 }
 
 fn blocking_client(total: std::time::Duration) -> Result<reqwest::blocking::Client, String> {
@@ -171,20 +175,52 @@ impl ReqwestTransport {
         Ok(ReqwestTransport {
             client,
             download_client,
+            unavailable: None,
         })
     }
 
+    /// Fail closed: keep no-redirect and the timeouts, and if the client
+    /// cannot be built at all, mark the transport unavailable so every
+    /// request returns `Offline` instead of riding an auto-redirect client.
     fn degraded(reason: &str) -> Self {
-        log::warn!("HTTP client build failed ({reason}); using degraded defaults");
-        let client = reqwest::blocking::Client::builder()
+        log::warn!("HTTP client build failed ({reason}); failing closed");
+        match (
+            blocking_client(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
+            blocking_client(std::time::Duration::from_secs(DOWNLOAD_TIMEOUT_SECS)),
+        ) {
+            (Ok(client), Ok(download_client)) => ReqwestTransport {
+                client,
+                download_client,
+                unavailable: None,
+            },
+            (Err(err), _) | (_, Err(err)) => {
+                let fallback = reqwest::blocking::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .user_agent(user_agent())
+                    .build()
+                    .unwrap_or_else(|_| reqwest::blocking::Client::new());
+                ReqwestTransport {
+                    client: fallback.clone(),
+                    download_client: fallback,
+                    unavailable: Some(err),
+                }
+            }
+        }
+    }
+
+    /// A transport that always fails closed. Tests use this to prove the
+    /// degraded path returns `Offline` without touching the network.
+    #[doc(hidden)]
+    pub fn failed_for_tests(reason: &str) -> Self {
+        let fallback = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(user_agent())
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new());
-        let download_client = client.clone();
         ReqwestTransport {
-            client,
-            download_client,
+            client: fallback.clone(),
+            download_client: fallback,
+            unavailable: Some(reason.to_string()),
         }
     }
 }
@@ -231,9 +267,19 @@ fn classify_reqwest(err: reqwest::Error, url: &str) -> ModrinthError {
 
 impl Transport for ReqwestTransport {
     fn request(&self, url: &str) -> Result<RawResponse, ModrinthError> {
+        if let Some(reason) = &self.unavailable {
+            return Err(ModrinthError::Offline {
+                reason: format!("HTTP client unavailable: {reason}"),
+            });
+        }
         Self::get(&self.client, url)
     }
     fn request_download(&self, url: &str) -> Result<RawResponse, ModrinthError> {
+        if let Some(reason) = &self.unavailable {
+            return Err(ModrinthError::Offline {
+                reason: format!("HTTP client unavailable: {reason}"),
+            });
+        }
         Self::get(&self.download_client, url)
     }
 }
@@ -421,13 +467,22 @@ fn checked_host(value: &str) -> Result<(String, String), ModrinthError> {
 }
 
 /// A remote icon is rendered by the UI without proxying. Only `https://`
-/// CDN icons on the default port are trusted; anything else renders as the
-/// local placeholder instead of hitting an unexpected host.
+/// CDN icons on the default port are trusted; anything else is sanitized to
+/// `None` by the search/project responses below. The TS `isTrustedIconUrl`
+/// additionally allows `data:image/` URLs, but only for the offline dev mock:
+/// the backend never returns one.
 pub fn is_allowed_icon_url(url: &str) -> bool {
     match checked_host(url) {
         Ok((host, _)) => host == CDN_HOST,
         Err(_) => false,
     }
+}
+
+/// Drop a non-CDN icon URL from a search hit. The UI renders `None` as the
+/// local placeholder instead of hitting an unexpected host.
+fn sanitize_hit_icon(mut hit: SearchHit) -> SearchHit {
+    hit.icon_url = hit.icon_url.filter(|url| is_allowed_icon_url(url));
+    hit
 }
 
 /// Send one request with retries for 429/5xx, honoring `Retry-After`.
@@ -745,13 +800,16 @@ impl<T: Transport> ModrinthClient<T> {
                 .hits
                 .into_iter()
                 .filter(|hit| hit.project_type.as_deref() == Some("datapack"))
+                .map(sanitize_hit_icon)
                 .collect())
         } else {
-            Ok(answer.hits)
+            Ok(answer.hits.into_iter().map(sanitize_hit_icon).collect())
         }
     }
 
-    /// Project metadata for the detail sheet.
+    /// Project metadata for the detail sheet. The icon URL is sanitized to
+    /// the CDN allowlist; anything else becomes `None` so the UI renders the
+    /// local placeholder instead of hitting an unexpected host.
     pub fn project(&self, id_or_slug: &str) -> Result<ModrinthProject, ModrinthError> {
         // Slugs are path-safe by construction; ids must be plain so the
         // interpolation below cannot escape the project path.
@@ -767,7 +825,9 @@ impl<T: Transport> ModrinthClient<T> {
             });
         }
         let url = self.api_url(&format!("/v2/project/{id_or_slug}"))?;
-        self.get_json(&url)
+        let mut project: ModrinthProject = self.get_json(&url)?;
+        project.icon_url = project.icon_url.filter(|u| is_allowed_icon_url(u));
+        Ok(project)
     }
 
     /// Every version of a project, newest first as the API returns them.
@@ -1146,5 +1206,53 @@ mod tests {
         assert!(host_of("https://cdn.modrinth.com:443/data/x.zip").is_ok());
         assert!(host_of("http://cdn.modrinth.com/data/x.zip").is_err());
         assert!(host_of("https://cdn.modrinth.com:8443/data/x.zip").is_err());
+    }
+
+    #[test]
+    fn failed_transport_fails_closed_as_offline() {
+        let transport = ReqwestTransport::failed_for_tests("builder broke");
+        let err = match transport.request("https://api.modrinth.com/v2/search") {
+            Err(err) => err,
+            Ok(_) => panic!("degraded transport must fail closed"),
+        };
+        assert!(
+            matches!(err, ModrinthError::Offline { .. }),
+            "degraded transport must fail closed, got {err:?}"
+        );
+        let err = match transport.request_download("https://cdn.modrinth.com/data/x.zip") {
+            Err(err) => err,
+            Ok(_) => panic!("degraded transport must fail closed"),
+        };
+        assert!(matches!(err, ModrinthError::Offline { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn search_sanitizes_non_cdn_icon_urls() {
+        let evil = SearchHit {
+            project_id: "p".into(),
+            slug: String::new(),
+            title: String::new(),
+            description: String::new(),
+            icon_url: Some("https://evil.example/icon.png".into()),
+            downloads: 0,
+            follows: 0,
+            project_type: None,
+            versions: vec![],
+            latest_version: None,
+        };
+        assert_eq!(sanitize_hit_icon(evil).icon_url, None);
+        let good = SearchHit {
+            project_id: "p".into(),
+            slug: String::new(),
+            title: String::new(),
+            description: String::new(),
+            icon_url: Some("https://cdn.modrinth.com/data/x/icon.png".into()),
+            downloads: 0,
+            follows: 0,
+            project_type: None,
+            versions: vec![],
+            latest_version: None,
+        };
+        assert!(sanitize_hit_icon(good).icon_url.is_some());
     }
 }

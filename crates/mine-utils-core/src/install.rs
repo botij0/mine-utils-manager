@@ -18,6 +18,7 @@ use crate::error::AppError;
 use crate::game_lock;
 use crate::level_dat;
 use crate::modrinth::{validate_modrinth_id, ModrinthClient, ModrinthError, SearchKind, Transport};
+use crate::options_txt::OptionsError;
 use crate::pack::{ImportChoice, ImportOutcome};
 use crate::provenance::{self, ProvenanceEntry};
 use crate::resource_stack::{self, StackPaths};
@@ -43,7 +44,9 @@ pub enum PreparedSource {
     /// drop unless committed.
     Downloaded(VerifiedDownload),
     /// The exact bytes (by SHA-512) were already in place; no download ran.
-    Existing { sha256: String },
+    /// The expected hash is carried into `finish` so a swap between prepare
+    /// and finish is detected instead of misattributed.
+    Existing { sha256: String, sha512: String },
 }
 
 /// Everything [`finish_modrinth_install`] needs. Built without holding any
@@ -96,15 +99,39 @@ pub fn prepare_modrinth_install<T: Transport>(
     // leaves it disabled with the `Locked` outcome, so the pre-check is
     // skipped and the world lock is re-probed at enable time.
     let (target_dir, world_version) = match kind {
-        SearchKind::ResourcePack => (game_dir.join("resourcepacks"), None),
+        SearchKind::ResourcePack => {
+            // A fresh game dir has no `options.txt` until Minecraft launches
+            // once; enabling would fail after the commit. Refuse before any
+            // download so the install is atomic.
+            let options = game_dir.join("options.txt");
+            if !options.is_file() {
+                return Err(AppError::Options(OptionsError::Missing { path: options }));
+            }
+            (game_dir.join("resourcepacks"), None)
+        }
         SearchKind::Datapack => {
             let name = world.ok_or_else(|| ModrinthError::Parse {
                 reason: "a datapack install needs a target world".to_string(),
             })?;
             // Resolve the world eagerly so a typo fails before any download.
             let resolved = WorldPaths::for_world(game_dir, name)?;
-            let version = world_version_name(&resolved.world_dir);
-            (resolved.world_dir.join("datapacks"), version)
+            // The name may resolve while the world is missing or unreadable
+            // (typo, deleted world): refuse before any metadata request.
+            if !resolved.world_dir.is_dir() {
+                return Err(AppError::World {
+                    reason: format!("world {name} does not exist in this game dir"),
+                });
+            }
+            if !resolved.world_dir.join("level.dat").is_file() {
+                return Err(AppError::World {
+                    reason: format!("world {name} has no readable level.dat"),
+                });
+            }
+            let version =
+                world_version_name(&resolved.world_dir).ok_or_else(|| AppError::World {
+                    reason: format!("world {name} has no readable level.dat"),
+                })?;
+            (resolved.world_dir.join("datapacks"), Some(version))
         }
     };
     let world_locked = match kind {
@@ -132,6 +159,7 @@ pub fn prepare_modrinth_install<T: Transport>(
         .ok_or_else(|| ModrinthError::Parse {
             reason: missing_file_reason(version_id, filename, version),
         })?;
+    validate_sha512(&file.hashes.sha512, version_id, filename)?;
     if let (SearchKind::Datapack, Some(world_v)) = (kind, world_version.as_deref()) {
         if !version.game_versions.is_empty() && !version.game_versions.iter().any(|g| g == world_v)
         {
@@ -154,8 +182,11 @@ pub fn prepare_modrinth_install<T: Transport>(
         match hash_file(&dest)? {
             hashes if hashes.sha512_eq(&file.hashes.sha512) => {
                 // Identical bytes already in place: reuse them, no download.
+                // The expected hash rides along so `finish` can re-hash and
+                // refuse a swap that landed between the two phases.
                 PreparedSource::Existing {
                     sha256: hashes.sha256,
+                    sha512: file.hashes.sha512.to_ascii_lowercase(),
                 }
             }
             _ => {
@@ -194,6 +225,22 @@ pub fn prepare_modrinth_install<T: Transport>(
     })
 }
 
+/// A Modrinth file hash must be 128 lowercase-able hex chars (SHA-512).
+/// Checked before any download so an empty or malformed hash fails fast with
+/// a clear parse error instead of a confusing `expected ""` mismatch after
+/// the bytes arrive.
+fn validate_sha512(hash: &str, version_id: &str, filename: &str) -> Result<(), ModrinthError> {
+    let ok = hash.len() == 128 && hash.bytes().all(|b| b.is_ascii_hexdigit());
+    if ok {
+        Ok(())
+    } else {
+        Err(ModrinthError::Parse {
+            reason: format!(
+                "version {version_id} file {filename:?} has no usable SHA-512 hash; refusing before download"
+            ),
+        })
+    }
+}
 fn missing_file_reason(
     version_id: &str,
     filename: &str,
@@ -257,8 +304,8 @@ fn hash_file(path: &Path) -> Result<FileHashes, AppError> {
 }
 
 /// Read a world's game version from its `level.dat`. `None` when the file is
-/// missing or unreadable; the caller then skips target validation rather
-/// than refusing the install.
+/// missing or unreadable; `prepare` treats that as a refusal (a typo or an
+/// unreadable world must fail before any download), never as a skip.
 fn world_version_name(world_dir: &Path) -> Option<String> {
     let bytes = std::fs::read(world_dir.join("level.dat")).ok()?;
     level_dat::parse(&bytes).ok().map(|view| view.version_name)
@@ -283,8 +330,8 @@ pub fn finish_modrinth_install(
     let kind = prepared.kind;
     match kind {
         SearchKind::ResourcePack => {
-            let (dest, sha256) = match commit_source(prepared)? {
-                Committed::Ready(dest, sha256) => (dest, sha256),
+            let (dest, sha256, fresh) = match commit_source(prepared)? {
+                Committed::Ready(dest, sha256, fresh) => (dest, sha256, fresh),
                 Committed::Collision { name } => {
                     return Ok(CoreInstallOutcome::ResourcePack {
                         outcome: ImportOutcome::Collision { name },
@@ -292,15 +339,26 @@ pub fn finish_modrinth_install(
                     });
                 }
             };
-            let outcome = match import_resource(&dest, stack_paths, icons, hashes)? {
-                ImportOutcome::Collision { name } => {
-                    // Same name, different bytes: leave the dest alone.
-                    return Ok(CoreInstallOutcome::ResourcePack {
-                        outcome: ImportOutcome::Collision { name },
-                        provenance_warning: None,
-                    });
+            let outcome = match import_resource(&dest, stack_paths, icons, hashes) {
+                Ok(outcome) => match outcome {
+                    ImportOutcome::Collision { name } => {
+                        // Same name, different bytes: leave the dest alone.
+                        return Ok(CoreInstallOutcome::ResourcePack {
+                            outcome: ImportOutcome::Collision { name },
+                            provenance_warning: None,
+                        });
+                    }
+                    outcome => outcome,
+                },
+                Err(err) => {
+                    // A fresh commit that fails validation must not linger as
+                    // a stray file with no provenance. An `Existing` file is
+                    // never removed: it predates this install.
+                    if fresh {
+                        let _ = std::fs::remove_file(&dest);
+                    }
+                    return Err(err);
                 }
-                outcome => outcome,
             };
             let provenance_warning =
                 record_provenance(data_dir, &sha256, &ids, outcome_is_imported(&outcome));
@@ -318,9 +376,11 @@ pub fn finish_modrinth_install(
             })
         }
         SearchKind::Datapack => {
-            let paths = data_paths.expect("datapack target checked in prepare");
-            let (dest, sha256) = match commit_source(prepared)? {
-                Committed::Ready(dest, sha256) => (dest, sha256),
+            let paths = data_paths.ok_or_else(|| AppError::World {
+                reason: "a datapack install needs a target world".to_string(),
+            })?;
+            let (dest, sha256, fresh) = match commit_source(prepared)? {
+                Committed::Ready(dest, sha256, fresh) => (dest, sha256, fresh),
                 Committed::Collision { name } => {
                     return Ok(CoreInstallOutcome::Datapack {
                         outcome: DatapackImportOutcome::Collision { name },
@@ -328,14 +388,22 @@ pub fn finish_modrinth_install(
                     });
                 }
             };
-            let outcome = match import_datapack(paths, &dest, icons, hashes)? {
-                DatapackImportOutcome::Collision { name } => {
-                    return Ok(CoreInstallOutcome::Datapack {
-                        outcome: DatapackImportOutcome::Collision { name },
-                        provenance_warning: None,
-                    });
+            let outcome = match import_datapack(paths, &dest, icons, hashes) {
+                Ok(outcome) => match outcome {
+                    DatapackImportOutcome::Collision { name } => {
+                        return Ok(CoreInstallOutcome::Datapack {
+                            outcome: DatapackImportOutcome::Collision { name },
+                            provenance_warning: None,
+                        });
+                    }
+                    outcome => outcome,
+                },
+                Err(err) => {
+                    if fresh {
+                        let _ = std::fs::remove_file(&dest);
+                    }
+                    return Err(err);
                 }
-                outcome => outcome,
             };
             // `import_datapack` enables internally (`Locked` when the world
             // is locked). Record provenance for installed packs; a record
@@ -355,9 +423,15 @@ pub fn finish_modrinth_install(
 
 /// Commit the verified temp (or reuse verified-existing bytes). A lost race
 /// on an identical file reuses it; a lost race on different bytes reports a
-/// collision. Returns the final path and its SHA-256, or the collision.
+/// collision. An `Existing` dest is re-hashed immediately before reuse: if
+/// the bytes changed between prepare and finish, the install fails instead
+/// of recording provenance for the wrong bytes. Returns the final path, its
+/// SHA-256, whether the commit was fresh this run, or the collision.
+/// A second filename with identical bytes is an intentional second copy under
+/// the API filename (not a `Duplicate`): the picker installs by filename and
+/// the import path treats a direct child as the pack itself.
 enum Committed {
-    Ready(PathBuf, String),
+    Ready(PathBuf, String, bool),
     Collision { name: String },
 }
 
@@ -369,20 +443,28 @@ fn commit_source(prepared: PreparedInstall) -> Result<Committed, AppError> {
         ..
     } = prepared;
     match source {
-        PreparedSource::Existing { sha256 } => {
-            Ok(Committed::Ready(target_dir.join(&filename), sha256))
+        PreparedSource::Existing { sha256, sha512 } => {
+            let dest = target_dir.join(&filename);
+            let current = hash_file(&dest)?;
+            if !current.sha512_eq(&sha512) {
+                return Err(AppError::Download(DownloadError::HashMismatch {
+                    expected: sha512,
+                    actual: current.sha512,
+                }));
+            }
+            Ok(Committed::Ready(dest, sha256, false))
         }
         PreparedSource::Downloaded(verified) => {
             let sha256 = verified.sha256.clone();
             match verified.commit(&target_dir, &filename) {
-                Ok(dest) => Ok(Committed::Ready(dest, sha256)),
+                Ok(dest) => Ok(Committed::Ready(dest, sha256, true)),
                 Err(DownloadError::Exists { .. }) => {
                     // Lost a race: reuse identical bytes, else collide. The
                     // temp was cleaned up by `Drop` on the failed commit.
                     let dest = target_dir.join(&filename);
                     let hashes = hash_file(&dest)?;
                     if hashes.sha256 == sha256 {
-                        Ok(Committed::Ready(dest, sha256))
+                        Ok(Committed::Ready(dest, sha256, false))
                     } else {
                         Ok(Committed::Collision { name: filename })
                     }
