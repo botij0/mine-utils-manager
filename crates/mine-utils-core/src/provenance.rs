@@ -7,8 +7,15 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
+
+/// Serializes concurrent installs in this process: the record is a global
+/// read-modify-write, so two installs in different game dirs must not
+/// interleave.
+static PROVENANCE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static PROVENANCE_TEMPS: AtomicU64 = AtomicU64::new(0);
 
 /// Where an installed file came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,11 +89,17 @@ pub fn lookup(data_dir: &Path, sha256: &str) -> Result<Option<ProvenanceEntry>, 
 }
 
 /// Record where an installed file came from. Other entries are preserved.
+/// Concurrent installs in this process are serialized; the temp name is
+/// unique per record and both the file and its parent dir are fsynced, so a
+/// crash cannot leave a half-written record behind.
 pub fn record(
     data_dir: &Path,
     sha256: &str,
     entry: ProvenanceEntry,
 ) -> Result<(), ProvenanceError> {
+    let _guard = PROVENANCE_LOCK
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
     let mut all = read_all(data_dir)?;
     all.insert(sha256.to_string(), entry);
     let bytes = serde_json::to_vec_pretty(&all).map_err(|err| ProvenanceError::Io {
@@ -98,13 +111,30 @@ pub fn record(
             reason: format!("cannot use {}: {err}", parent.display()),
         })?;
     }
-    let temp = path.with_extension("json.tmp");
+    let id = PROVENANCE_TEMPS.fetch_add(1, Ordering::Relaxed);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp = path.with_extension(format!("json.{}.{}.{}.tmp", std::process::id(), stamp, id));
     std::fs::write(&temp, &bytes).map_err(|err| ProvenanceError::Io {
         reason: format!("cannot write {}: {err}", temp.display()),
     })?;
-    std::fs::rename(&temp, &path).map_err(|err| ProvenanceError::Io {
-        reason: format!("cannot replace {}: {err}", path.display()),
-    })?;
+    // fsync the file before it becomes visible under the real name.
+    if let Ok(handle) = std::fs::File::open(&temp) {
+        let _ = handle.sync_all();
+    }
+    if let Err(err) = std::fs::rename(&temp, &path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(ProvenanceError::Io {
+            reason: format!("cannot replace {}: {err}", path.display()),
+        });
+    }
+    if let Some(parent) = path.parent() {
+        if let Ok(handle) = std::fs::File::open(parent) {
+            let _ = handle.sync_all();
+        }
+    }
     Ok(())
 }
 
@@ -138,6 +168,38 @@ mod tests {
         let first = lookup(dir.path(), "aaa").expect("lookup");
         assert_eq!(first.map(|e| e.project_id), Some("p1".into()));
         assert!(lookup(dir.path(), "zzz").expect("lookup").is_none());
+    }
+
+    #[test]
+    fn concurrent_records_do_not_lose_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    record(
+                        &path,
+                        &format!("key-{i}"),
+                        ProvenanceEntry {
+                            project_id: format!("p{i}"),
+                            version_id: format!("v{i}"),
+                            file_name: format!("{i}.zip"),
+                        },
+                    )
+                    .expect("record");
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("thread");
+        }
+        for i in 0..8 {
+            let entry = lookup(dir.path(), &format!("key-{i}"))
+                .expect("lookup")
+                .expect("entry survives concurrent records");
+            assert_eq!(entry.project_id, format!("p{i}"));
+        }
     }
 
     #[test]

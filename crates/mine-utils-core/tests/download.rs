@@ -222,7 +222,7 @@ fn commit_refuses_to_overwrite() {
     let target = dir.path().join("resourcepacks");
     std::fs::create_dir_all(&target).expect("mkdir");
     std::fs::write(target.join("pack.zip"), b"existing").expect("write");
-    let temp = target.join(".pack.zip.part");
+    let temp = target.join(".pack.zip.mine-utils-download-1.tmp");
     std::fs::write(&temp, b"new").expect("write");
 
     let err = commit_verified(&temp, &target, "pack.zip").expect_err("exists must fail");
@@ -232,6 +232,160 @@ fn commit_refuses_to_overwrite() {
         b"existing"
     );
     std::fs::remove_file(&temp).expect("cleanup");
+}
+
+#[test]
+fn commit_is_no_replace_when_a_rival_wins_the_race() {
+    // A rival creates the destination between our exists-check and rename.
+    // The second commit must fail without touching the rival's bytes; on
+    // Linux this is one atomic renameat2, elsewhere a hard-link fallback.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("resourcepacks");
+    std::fs::create_dir_all(&target).expect("mkdir");
+    let temp = target.join(".pack.zip.mine-utils-download-1.tmp");
+    std::fs::write(&temp, b"new").expect("write");
+    std::fs::write(target.join("pack.zip"), b"rival").expect("write");
+
+    let err = commit_verified(&temp, &target, "pack.zip").expect_err("exists must fail");
+    assert!(matches!(err, DownloadError::Exists { .. }), "{err}");
+    assert_eq!(
+        std::fs::read(target.join("pack.zip")).expect("read"),
+        b"rival"
+    );
+}
+
+#[test]
+fn dropped_downloads_clean_their_temps() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("resourcepacks");
+    let bytes = zip_bytes(&[("assets/minecraft/pack.png", b"png")]);
+    let (client, _) = client_for(bytes.clone());
+
+    let temp = {
+        let verified = download_verified(
+            &client,
+            CDN_URL,
+            &target,
+            "fresh-1.9.zip",
+            &sha512_hex(&bytes),
+            ZipRoot::Assets,
+        )
+        .expect("download");
+        assert!(verified.temp_path.exists());
+        verified.temp_path.clone()
+    };
+    assert!(!temp.exists(), "dropping the download deletes the temp");
+    assert!(leftovers(&target).is_empty());
+}
+
+#[test]
+fn download_temps_end_in_tmp_so_scans_skip_them() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("resourcepacks");
+    let bytes = zip_bytes(&[("assets/minecraft/pack.png", b"png")]);
+    let (client, _) = client_for(bytes.clone());
+
+    let verified = download_verified(
+        &client,
+        CDN_URL,
+        &target,
+        "fresh-1.9.zip",
+        &sha512_hex(&bytes),
+        ZipRoot::Assets,
+    )
+    .expect("download");
+    assert!(
+        verified
+            .temp_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".tmp")),
+        "{}",
+        verified.temp_path.display()
+    );
+    let sha256 = verified.sha256.clone();
+    let _ = sha256;
+    drop(verified);
+    assert!(leftovers(&target).is_empty());
+}
+
+struct ChunkedReader {
+    chunks: std::vec::IntoIter<Vec<u8>>,
+}
+
+impl Read for ChunkedReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.chunks.next() {
+            None => Ok(0),
+            Some(chunk) => {
+                // Never hand over more than 512 bytes per read, however big
+                // the transport buffer is, so the test proves bounded reads.
+                let n = chunk.len().min(buf.len()).min(512);
+                buf[..n].copy_from_slice(&chunk[..n]);
+                if n < chunk.len() {
+                    let rest = chunk[n..].to_vec();
+                    let tail = std::mem::replace(&mut self.chunks, Vec::new().into_iter());
+                    let mut kept: Vec<Vec<u8>> = tail.collect();
+                    kept.insert(0, rest);
+                    self.chunks = kept.into_iter();
+                }
+                Ok(n)
+            }
+        }
+    }
+}
+
+struct ChunkedCdn {
+    bytes: Vec<u8>,
+    chunk: usize,
+}
+
+impl Transport for ChunkedCdn {
+    fn request(&self, url: &str) -> Result<RawResponse, ModrinthError> {
+        assert!(url.starts_with("https://cdn.modrinth.com/"), "{url}");
+        let chunks: Vec<Vec<u8>> = self.bytes.chunks(self.chunk).map(|c| c.to_vec()).collect();
+        Ok(RawResponse {
+            status: 200,
+            headers: vec![],
+            body: Box::new(ChunkedReader {
+                chunks: chunks.into_iter(),
+            }),
+        })
+    }
+}
+
+#[test]
+fn chunked_download_verifies_without_buffering_the_file() {
+    // A 256 KiB zip arrives in 1 KiB transport chunks and is read back in
+    // bounded pieces: `download_verified` streams it, checks the SHA-512,
+    // and validates the zip root without ever holding the whole file.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("resourcepacks");
+    let payload = vec![b'p'; 256 * 1024];
+    let bytes = zip_bytes(&[
+        ("assets/minecraft/pack.png", payload.as_slice()),
+        ("pack.mcmeta", b"{}"),
+    ]);
+    let expected = sha512_hex(&bytes);
+    let cdn = ChunkedCdn {
+        bytes: bytes.clone(),
+        chunk: 1024,
+    };
+    let client = ModrinthClient::without_sleep(cdn);
+
+    let verified = download_verified(
+        &client,
+        CDN_URL,
+        &target,
+        "big-1.0.zip",
+        &expected,
+        ZipRoot::Assets,
+    )
+    .expect("chunked download");
+    assert_eq!(verified.bytes, bytes.len() as u64);
+    let dest = verified.commit(&target, "big-1.0.zip").expect("commit");
+    assert_eq!(std::fs::read(&dest).expect("read"), bytes);
+    assert!(leftovers(&target).is_empty());
 }
 
 #[test]
@@ -252,10 +406,11 @@ fn successful_install_updates_provenance() {
         ZipRoot::Assets,
     )
     .expect("download");
-    commit_verified(&verified.temp_path, &target, "fresh-1.9.zip").expect("commit");
+    let sha256 = verified.sha256.clone();
+    verified.commit(&target, "fresh-1.9.zip").expect("commit");
     provenance_record(
         data.path(),
-        &verified.sha256,
+        &sha256,
         ProvenanceEntry {
             project_id: "7q7JnQD0".to_string(),
             version_id: "v2".to_string(),
@@ -263,7 +418,7 @@ fn successful_install_updates_provenance() {
         },
     )
     .expect("record");
-    let entry = provenance_lookup(data.path(), &verified.sha256)
+    let entry = provenance_lookup(data.path(), &sha256)
         .expect("lookup")
         .expect("entry");
     assert_eq!(entry.project_id, "7q7JnQD0");
@@ -287,22 +442,34 @@ impl Read for SlowReader {
 }
 
 #[test]
-fn stream_never_buffers_the_whole_file() {
+fn slow_streaming_reader_still_streams() {
+    // A dripping reader (at most 1 KiB per read) behind `download_verified`
+    // proves the cap is enforced while streaming: the over-cap stream is
+    // refused without writing unbounded bytes.
+    struct SlowCdn;
+    impl Transport for SlowCdn {
+        fn request(&self, url: &str) -> Result<RawResponse, ModrinthError> {
+            assert!(url.starts_with("https://cdn.modrinth.com/"), "{url}");
+            Ok(RawResponse {
+                status: 200,
+                headers: vec![],
+                body: Box::new(SlowReader { remaining: 3000 }),
+            })
+        }
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let target = dir.path().join("resourcepacks");
-    std::fs::create_dir_all(&target).expect("mkdir");
-    let temp = target.join(".probe.part");
-    let mut out = std::fs::File::create(&temp).expect("create");
-    let mut reader = SlowReader { remaining: 3000 };
-    let mut chunk = [0u8; 512];
-    let mut total = 0;
-    while {
-        let n: usize = reader.read(&mut chunk).expect("read");
-        total += n;
-        std::io::Write::write_all(&mut out, &chunk[..n]).expect("write");
-        n > 0
-    } {}
-    drop(out);
-    assert_eq!(total, 3000);
-    std::fs::remove_file(&temp).expect("cleanup");
+    let client = ModrinthClient::without_sleep(SlowCdn);
+    let err = download_verified_capped(
+        &client,
+        CDN_URL,
+        &target,
+        "slow.zip",
+        &"00".repeat(64),
+        ZipRoot::Assets,
+        64,
+    )
+    .expect_err("over-cap must fail");
+    assert!(matches!(err, DownloadError::TooLarge { .. }), "{err}");
+    assert!(leftovers(&target).is_empty());
 }

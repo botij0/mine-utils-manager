@@ -156,9 +156,9 @@ impl ZipRoot {
 }
 
 /// A verified temp file inside the target directory. Commit it with
-/// [`commit_verified`] or hand it to `import_pack`/`import_datapack`;
-/// dropping it without committing leaves the temp behind, so prefer
-/// [`download_verified`]'s cleanup paths and remove it explicitly.
+/// [`VerifiedDownload::commit`] (or [`commit_verified`]); dropping it
+/// without committing deletes the temp, so a failed install never leaves a
+/// `.tmp` behind. The temp ends in `.tmp` so pack scans skip it.
 #[derive(Debug)]
 pub struct VerifiedDownload {
     /// The temp file. Lives in the target dir, so the commit is atomic.
@@ -167,6 +167,26 @@ pub struct VerifiedDownload {
     pub sha256: String,
     /// Bytes written.
     pub bytes: u64,
+    committed: bool,
+}
+
+impl Drop for VerifiedDownload {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.temp_path);
+        }
+    }
+}
+
+impl VerifiedDownload {
+    /// Atomically move the verified temp to `target_dir/filename` without
+    /// replacing an existing file. Marks the download committed so `Drop`
+    /// no longer deletes it.
+    pub fn commit(mut self, target_dir: &Path, filename: &str) -> Result<PathBuf, DownloadError> {
+        let dest = commit_path(&self.temp_path, target_dir, filename)?;
+        self.committed = true;
+        Ok(dest)
+    }
 }
 
 /// The file name must be a plain name: no separators, no escapes.
@@ -192,7 +212,7 @@ fn temp_path_for(target_dir: &Path, filename: &str) -> PathBuf {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     target_dir.join(format!(
-        ".{filename}.mine-utils-download-{pid}-{stamp}-{id}.part",
+        ".{filename}.mine-utils-download-{pid}-{stamp}-{id}.tmp",
         pid = std::process::id()
     ))
 }
@@ -245,6 +265,7 @@ pub fn download_verified_capped<T: Transport>(
         temp_path: temp,
         sha256,
         bytes,
+        committed: false,
     })
 }
 
@@ -311,8 +332,11 @@ fn constant_time_eq_hex(actual: &str, expected: &str) -> bool {
     diff == 0 && !actual.is_empty()
 }
 
-/// The temp must be a zip containing the expected root. Not retried.
+/// The temp must be a zip containing the expected root. Not retried. Only
+/// a bounded number of entry names are kept for the error summary, so a
+/// hostile archive with millions of entries cannot blow up the message.
 fn validate_zip_root(temp: &Path, root: ZipRoot) -> Result<(), DownloadError> {
+    const MAX_LISTED_ENTRIES: usize = 64;
     let file = std::fs::File::open(temp).map_err(|err| DownloadError::Io {
         reason: err.to_string(),
     })?;
@@ -327,6 +351,7 @@ fn validate_zip_root(temp: &Path, root: ZipRoot) -> Result<(), DownloadError> {
     }
     let want = format!("{}/", root.dir());
     let mut found = Vec::new();
+    let mut truncated = false;
     for index in 0..archive.len() {
         let entry = archive
             .by_index(index)
@@ -334,15 +359,101 @@ fn validate_zip_root(temp: &Path, root: ZipRoot) -> Result<(), DownloadError> {
                 reason: err.to_string(),
             })?;
         let name = entry.name().to_string();
-        found.push(name.clone());
+        if found.len() < MAX_LISTED_ENTRIES {
+            found.push(name.clone());
+        } else {
+            truncated = true;
+        }
         if name == root.dir() || name.starts_with(&want) {
             return Ok(());
         }
+    }
+    if truncated {
+        found.push("…".to_string());
     }
     Err(DownloadError::WrongRoot {
         expected: root.dir().to_string(),
         found,
     })
+}
+
+fn commit_path(temp: &Path, target_dir: &Path, filename: &str) -> Result<PathBuf, DownloadError> {
+    validate_filename(filename)?;
+    let dest = target_dir.join(filename);
+    atomic_no_replace(temp, &dest).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            DownloadError::Exists {
+                name: filename.to_string(),
+            }
+        } else {
+            DownloadError::Io {
+                reason: format!("cannot move download into place: {err}"),
+            }
+        }
+    })?;
+    sync_parent(&dest);
+    Ok(dest)
+}
+
+/// Move `temp` to `dest` without replacing an existing file. On Linux the
+/// rename is a single `renameat2` with `RENAME_NOREPLACE`, so the
+/// exists-then-rename race cannot happen; elsewhere a hard link (same
+/// directory, so same filesystem) provides the atomic no-replace, with an
+/// exists-checked rename as the last resort.
+fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        // renameat2 with AT_FDCWD renames by path. RENAME_NOREPLACE makes
+        // an existing destination fail with EEXIST instead of replacing it.
+        const RENAME_NOREPLACE: libc::c_uint = 1;
+        let temp_c = std::ffi::CString::new(temp.as_os_str().as_encoded_bytes());
+        let dest_c = std::ffi::CString::new(dest.as_os_str().as_encoded_bytes());
+        if let (Ok(temp_c), Ok(dest_c)) = (temp_c, dest_c) {
+            // SAFETY: plain integers and NUL-terminated path pointers; no
+            // memory is retained by the kernel after the call returns.
+            let rc = unsafe {
+                libc::renameat2(
+                    libc::AT_FDCWD,
+                    temp_c.as_ptr(),
+                    libc::AT_FDCWD,
+                    dest_c.as_ptr(),
+                    RENAME_NOREPLACE,
+                )
+            };
+            if rc == 0 {
+                return Ok(());
+            }
+            let err = std::io::Error::last_os_error();
+            // ENOSYS/EPERM (seccomp, exotic fs): fall through to the link
+            // path rather than failing the install.
+            if err.kind() != std::io::ErrorKind::PermissionDenied
+                && err.raw_os_error() != Some(libc::ENOSYS)
+            {
+                return Err(err);
+            }
+        }
+    }
+    match std::fs::hard_link(temp, dest) {
+        Ok(()) => std::fs::remove_file(temp),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Err(err),
+        Err(_) => {
+            if dest.exists() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "destination exists",
+                ));
+            }
+            std::fs::rename(temp, dest)
+        }
+    }
+}
+
+fn sync_parent(path: &Path) {
+    if let Some(parent) = path.parent() {
+        if let Ok(handle) = std::fs::File::open(parent) {
+            let _ = handle.sync_all();
+        }
+    }
 }
 
 /// Atomically rename a verified temp into `target_dir/filename`. Refuses to
@@ -352,17 +463,7 @@ pub fn commit_verified(
     target_dir: &Path,
     filename: &str,
 ) -> Result<PathBuf, DownloadError> {
-    validate_filename(filename)?;
-    let dest = target_dir.join(filename);
-    if dest.exists() {
-        return Err(DownloadError::Exists {
-            name: filename.to_string(),
-        });
-    }
-    std::fs::rename(temp, &dest).map_err(|err| DownloadError::Io {
-        reason: format!("cannot move download into place: {err}"),
-    })?;
-    Ok(dest)
+    commit_path(temp, target_dir, filename)
 }
 
 #[cfg(test)]

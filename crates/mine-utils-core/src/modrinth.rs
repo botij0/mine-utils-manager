@@ -24,8 +24,13 @@ pub const MAX_DOWNLOAD_BYTES: u64 = 500 * 1024 * 1024;
 pub const MAX_RETRIES: u32 = 3;
 /// Redirect hops followed before giving up.
 pub const MAX_REDIRECTS: u32 = 5;
-/// Seconds before a request is abandoned.
+/// Seconds before a metadata request is abandoned.
 pub const REQUEST_TIMEOUT_SECS: u64 = 15;
+/// Connect timeout for downloads; the total budget is much larger so a
+/// 500 MB pack can stream without a 15 s total timeout aborting it.
+pub const DOWNLOAD_CONNECT_TIMEOUT_SECS: u64 = 15;
+/// Total budget for one pack download.
+pub const DOWNLOAD_TIMEOUT_SECS: u64 = 900;
 
 /// ` Fn(seconds) ` run before each retry. Production sleeps; tests pass a
 /// no-op and count attempts instead.
@@ -116,9 +121,14 @@ pub struct RawResponse {
 }
 
 /// The injectable HTTP transport. `request` performs exactly one exchange:
-/// no redirects, no retries. [`ModrinthClient`] adds those.
+/// no redirects, no retries. [`ModrinthClient`] adds those. `request_download`
+/// is the same exchange with a download-sized budget; transports that do not
+/// distinguish the two use `request` for both.
 pub trait Transport: Send + Sync {
     fn request(&self, url: &str) -> Result<RawResponse, ModrinthError>;
+    fn request_download(&self, url: &str) -> Result<RawResponse, ModrinthError> {
+        self.request(url)
+    }
 }
 
 /// Shared transports (e.g. `Arc` in Tauri state) forward to the inner one.
@@ -126,31 +136,67 @@ impl<T: Transport> Transport for std::sync::Arc<T> {
     fn request(&self, url: &str) -> Result<RawResponse, ModrinthError> {
         (**self).request(url)
     }
+    fn request_download(&self, url: &str) -> Result<RawResponse, ModrinthError> {
+        (**self).request_download(url)
+    }
 }
 
-/// `reqwest` over rustls, 15 s timeout, the app User-Agent, no automatic
-/// redirects: every hop is checked against [`ALLOWED_HOSTS`] by the client.
+/// `reqwest` over rustls, 15 s timeout for metadata, a separate long-budget
+/// client for pack downloads, the app User-Agent, no automatic redirects:
+/// every hop is checked against [`ALLOWED_HOSTS`] by the client.
 pub struct ReqwestTransport {
     client: reqwest::blocking::Client,
+    download_client: reqwest::blocking::Client,
+}
+
+fn blocking_client(total: std::time::Duration) -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(total)
+        .connect_timeout(std::time::Duration::from_secs(
+            DOWNLOAD_CONNECT_TIMEOUT_SECS,
+        ))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(user_agent())
+        .build()
+        .map_err(|err| err.to_string())
 }
 
 impl ReqwestTransport {
     pub fn new() -> Result<Self, ModrinthError> {
+        let client = blocking_client(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .map_err(|reason| ModrinthError::Offline { reason })?;
+        let download_client =
+            blocking_client(std::time::Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
+                .map_err(|reason| ModrinthError::Offline { reason })?;
+        Ok(ReqwestTransport {
+            client,
+            download_client,
+        })
+    }
+
+    fn degraded(reason: &str) -> Self {
+        log::warn!("HTTP client build failed ({reason}); using degraded defaults");
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(user_agent())
             .build()
-            .map_err(|err| ModrinthError::Offline {
-                reason: err.to_string(),
-            })?;
-        Ok(ReqwestTransport { client })
+            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+        let download_client = client.clone();
+        ReqwestTransport {
+            client,
+            download_client,
+        }
     }
 }
 
 impl Default for ReqwestTransport {
+    /// Never panics: a builder failure degrades to default client settings
+    /// (logged) instead of aborting app setup.
     fn default() -> Self {
-        ReqwestTransport::new().expect("HTTP client builds")
+        match ReqwestTransport::new() {
+            Ok(transport) => transport,
+            Err(err) => ReqwestTransport::degraded(&err.to_string()),
+        }
     }
 }
 
@@ -185,8 +231,16 @@ fn classify_reqwest(err: reqwest::Error, url: &str) -> ModrinthError {
 
 impl Transport for ReqwestTransport {
     fn request(&self, url: &str) -> Result<RawResponse, ModrinthError> {
-        let response = self
-            .client
+        Self::get(&self.client, url)
+    }
+    fn request_download(&self, url: &str) -> Result<RawResponse, ModrinthError> {
+        Self::get(&self.download_client, url)
+    }
+}
+
+impl ReqwestTransport {
+    fn get(client: &reqwest::blocking::Client, url: &str) -> Result<RawResponse, ModrinthError> {
+        let response = client
             .get(url)
             .send()
             .map_err(|err| classify_reqwest(err, url))?;
@@ -333,28 +387,64 @@ fn join_url(base: &str, location: &str) -> Result<String, ModrinthError> {
 }
 
 fn host_of(value: &str) -> Result<String, ModrinthError> {
-    url::Url::parse(value)
-        .map_err(|err| ModrinthError::BadUrl {
+    checked_host(value).map(|(host, _)| host)
+}
+
+/// The host of a Modrinth URL, refusing anything that is not plain `https`
+/// on the default port. Scheme and port are checked on every hop, not just
+/// the host name, so an `http://` downgrade or a non-standard port never
+/// slips through the allowlist.
+fn checked_host(value: &str) -> Result<(String, String), ModrinthError> {
+    let parsed = url::Url::parse(value).map_err(|err| ModrinthError::BadUrl {
+        url: value.to_string(),
+        reason: err.to_string(),
+    })?;
+    if parsed.scheme() != "https" {
+        return Err(ModrinthError::BadUrl {
             url: value.to_string(),
-            reason: err.to_string(),
-        })?
+            reason: format!("refused non-https scheme {:?}", parsed.scheme()),
+        });
+    }
+    if parsed.port().is_some() {
+        return Err(ModrinthError::BadUrl {
+            url: value.to_string(),
+            reason: "refused non-default port".to_string(),
+        });
+    }
+    parsed
         .host_str()
-        .map(str::to_string)
+        .map(|host| (host.to_string(), parsed.to_string()))
         .ok_or_else(|| ModrinthError::BadUrl {
             url: value.to_string(),
             reason: "no host".to_string(),
         })
 }
 
+/// A remote icon is rendered by the UI without proxying. Only `https://`
+/// CDN icons on the default port are trusted; anything else renders as the
+/// local placeholder instead of hitting an unexpected host.
+pub fn is_allowed_icon_url(url: &str) -> bool {
+    match checked_host(url) {
+        Ok((host, _)) => host == CDN_HOST,
+        Err(_) => false,
+    }
+}
+
 /// Send one request with retries for 429/5xx, honoring `Retry-After`.
+/// Downloads ride the long-budget transport; metadata uses the 15 s client.
 fn send<T: Transport + ?Sized>(
     transport: &T,
     url: &str,
     sleep: &SleepFn,
+    download: bool,
 ) -> Result<RawResponse, ModrinthError> {
     let mut attempt: u32 = 0;
     loop {
-        let response = transport.request(url)?;
+        let response = if download {
+            transport.request_download(url)?
+        } else {
+            transport.request(url)?
+        };
         match response.status {
             429 | 500..=599 => {
                 if attempt >= MAX_RETRIES {
@@ -380,9 +470,18 @@ pub fn fetch<T: Transport + ?Sized>(
     url: &str,
     sleep: &SleepFn,
 ) -> Result<Fetched, ModrinthError> {
+    fetch_inner(transport, url, sleep, false)
+}
+
+fn fetch_inner<T: Transport + ?Sized>(
+    transport: &T,
+    url: &str,
+    sleep: &SleepFn,
+    download: bool,
+) -> Result<Fetched, ModrinthError> {
     let mut current = url.to_string();
     for _ in 0..=MAX_REDIRECTS {
-        let response = send(transport, &current, sleep)?;
+        let response = send(transport, &current, sleep, download)?;
         if (300..400).contains(&response.status) {
             let location = header(&response.headers, "location")
                 .ok_or_else(|| ModrinthError::Redirect {
@@ -654,24 +753,52 @@ impl<T: Transport> ModrinthClient<T> {
 
     /// Project metadata for the detail sheet.
     pub fn project(&self, id_or_slug: &str) -> Result<ModrinthProject, ModrinthError> {
+        // Slugs are path-safe by construction; ids must be plain so the
+        // interpolation below cannot escape the project path.
+        if !id_or_slug
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            || id_or_slug.is_empty()
+            || id_or_slug.len() > 128
+        {
+            return Err(ModrinthError::BadUrl {
+                url: id_or_slug.to_string(),
+                reason: "not a plain project id or slug".to_string(),
+            });
+        }
         let url = self.api_url(&format!("/v2/project/{id_or_slug}"))?;
         self.get_json(&url)
     }
 
     /// Every version of a project, newest first as the API returns them.
     pub fn versions(&self, project_id: &str) -> Result<Vec<ModrinthVersion>, ModrinthError> {
+        validate_modrinth_id(project_id)?;
         let url = self.api_url(&format!("/v2/project/{project_id}/version"))?;
         self.get_json(&url)
     }
 
+    /// One project version by id. The id is validated before interpolation.
+    pub fn version(
+        &self,
+        project_id: &str,
+        version_id: &str,
+    ) -> Result<ModrinthVersion, ModrinthError> {
+        validate_modrinth_id(project_id)?;
+        validate_modrinth_id(version_id)?;
+        let url = self.api_url(&format!("/v2/project/{project_id}/version/{version_id}"))?;
+        self.get_json(&url)
+    }
+
     /// The raw file stream for [`crate::download`], after redirects/retries.
-    /// The final URL must be the CDN; anything else is refused.
+    /// The final URL must be the CDN; anything else is refused. Downloads
+    /// ride the long-budget transport so a large pack is not cut off by the
+    /// 15 s metadata timeout.
     pub fn file_stream(&self, url: &str) -> Result<Fetched, ModrinthError> {
         let host = host_of(url)?;
         if host != CDN_HOST {
             return Err(ModrinthError::Redirect { host });
         }
-        let fetched = fetch(&self.transport, url, &self.sleep)?;
+        let fetched = fetch_inner(&self.transport, url, &self.sleep, true)?;
         if !(200..300).contains(&fetched.status) {
             return Err(ModrinthError::Status {
                 status: fetched.status,
@@ -686,8 +813,27 @@ impl<T: Transport> ModrinthClient<T> {
     }
 }
 
+/// A Modrinth project or version id as it appears in API paths. Only plain
+/// identifiers are accepted so callers can interpolate them into URLs
+/// without escaping or injection hazards.
+pub fn validate_modrinth_id(id: &str) -> Result<(), ModrinthError> {
+    let ok = !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if ok {
+        Ok(())
+    } else {
+        Err(ModrinthError::BadUrl {
+            url: id.to_string(),
+            reason: "not a plain Modrinth identifier".to_string(),
+        })
+    }
+}
 /// Game versions installed in the game dir: the direct children of
-/// `versions/`. Only the caller-selected versions are ever trusted.
+/// `versions/`. Only the caller-selected versions are ever trusted. Sorted
+/// numerically (`1.9` before `1.21`), not lexicographically.
 pub fn installed_game_versions(game_dir: &std::path::Path) -> Vec<String> {
     let mut versions = Vec::new();
     let Ok(entries) = std::fs::read_dir(game_dir.join("versions")) else {
@@ -700,31 +846,84 @@ pub fn installed_game_versions(game_dir: &std::path::Path) -> Vec<String> {
             }
         }
     }
-    versions.sort();
+    sort_game_versions(&mut versions);
     versions
 }
 
-/// The launcher's selected (or last) version from `launcher_profiles.json`,
-/// the resource-pack preference. `None` when nothing selected one.
+/// Order game versions numerically: each dot-separated run of digits
+/// compares as a number, everything else as text. `1.9` sorts before `1.21`.
+pub fn sort_game_versions(versions: &mut [String]) {
+    versions.sort_by(|a, b| compare_game_versions(a, b));
+}
+
+fn compare_game_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut a_parts = a.split(['.', '-']);
+    let mut b_parts = b.split(['.', '-']);
+    loop {
+        match (a_parts.next(), b_parts.next()) {
+            (None, None) => return a.cmp(b),
+            (None, _) => return std::cmp::Ordering::Less,
+            (_, None) => return std::cmp::Ordering::Greater,
+            (Some(x), Some(y)) => {
+                let ord = compare_version_part(x, y);
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+            }
+        }
+    }
+}
+
+fn compare_version_part(a: &str, b: &str) -> std::cmp::Ordering {
+    match (a.parse::<u64>(), b.parse::<u64>()) {
+        (Ok(x), Ok(y)) => x.cmp(&y).then_with(|| a.cmp(b)),
+        _ => a.cmp(b),
+    }
+}
+
+/// The launcher's selected version from `launcher_profiles.json`, the
+/// resource-pack preference. A modded `lastVersionId` (e.g.
+/// `1.20.1-forge-47.2.0`) never matches a Modrinth game version, so the
+/// profile's `inheritsFrom` (the vanilla version it builds on) wins when
+/// present. Otherwise the id is used only when it names an installed version
+/// directory. `None` when nothing usable was selected. Deterministic: the
+/// selected profile wins over any other profile.
 pub fn preferred_launcher_version(game_dir: &std::path::Path) -> Option<String> {
     let bytes = std::fs::read(game_dir.join("launcher_profiles.json")).ok()?;
     let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     let profiles = json.get("profiles")?.as_object()?;
-    if let Some(selected) = json.get("selectedProfile").and_then(|v| v.as_str()) {
-        if let Some(version) = profiles
-            .get(selected)
-            .and_then(|p| p.get("lastVersionId"))
-            .and_then(|v| v.as_str())
-        {
-            return Some(version.to_string());
-        }
+    let profile = if let Some(selected) = json.get("selectedProfile").and_then(|v| v.as_str()) {
+        profiles.get(selected).or_else(|| first_profile(profiles))?
+    } else {
+        first_profile(profiles)?
+    };
+    let last = profile
+        .get("lastVersionId")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())?;
+    if let Some(inherits) = profile
+        .get("inheritsFrom")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+    {
+        return Some(inherits.to_string());
     }
-    profiles.values().find_map(|profile| {
-        profile
-            .get("lastVersionId")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-    })
+    if last
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' || c == ' ')
+        && game_dir.join("versions").join(last).is_dir()
+    {
+        return Some(last.to_string());
+    }
+    None
+}
+
+/// Deterministic first profile: `serde_json` maps sort by key without the
+/// `preserve_order` feature, so the smallest profile name wins.
+fn first_profile(
+    profiles: &serde_json::Map<String, serde_json::Value>,
+) -> Option<&serde_json::Value> {
+    profiles.values().next()
 }
 
 /// Pick the default version for the picker: the first version compatible
@@ -816,5 +1015,136 @@ mod tests {
             Some("new")
         );
         assert!(prefer_version(&[], Some("1.21.1")).is_none());
+    }
+
+    #[test]
+    fn modrinth_ids_must_be_plain() {
+        for good in ["abc123", "a-b_c", "1", "Fresh-Animations_2"] {
+            assert!(validate_modrinth_id(good).is_ok(), "{good:?} must pass");
+        }
+        for bad in [
+            "",
+            "../x",
+            "a/b",
+            "a b",
+            "a?b",
+            "a%b",
+            "a.b",
+            &"x".repeat(65),
+        ] {
+            assert!(validate_modrinth_id(bad).is_err(), "{bad:?} must fail");
+        }
+    }
+
+    #[test]
+    fn game_versions_sort_numerically() {
+        let mut versions = vec![
+            "1.21".to_string(),
+            "1.9".to_string(),
+            "1.21.1".to_string(),
+            "1.8.9".to_string(),
+            "24w03a".to_string(),
+        ];
+        sort_game_versions(&mut versions);
+        assert_eq!(versions, vec!["1.8.9", "1.9", "1.21", "1.21.1", "24w03a"]);
+    }
+
+    fn launcher_game(dir: &std::path::Path, profiles: serde_json::Value) {
+        std::fs::create_dir_all(dir.join("versions").join("1.21.1")).expect("versions");
+        std::fs::write(dir.join("launcher_profiles.json"), profiles.to_string()).expect("profiles");
+    }
+
+    #[test]
+    fn launcher_prefers_inherits_from_for_modded_profiles() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        launcher_game(
+            dir.path(),
+            serde_json::json!({
+                "selectedProfile": "modded",
+                "profiles": {
+                    "modded": {
+                        "lastVersionId": "1.21.1-forge-52.1.0",
+                        "inheritsFrom": "1.21.1",
+                    }
+                }
+            }),
+        );
+        assert_eq!(
+            preferred_launcher_version(dir.path()).as_deref(),
+            Some("1.21.1")
+        );
+    }
+
+    #[test]
+    fn launcher_uses_vanilla_id_only_when_installed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        launcher_game(
+            dir.path(),
+            serde_json::json!({
+                "selectedProfile": "main",
+                "profiles": { "main": { "lastVersionId": "1.21.1" } }
+            }),
+        );
+        assert_eq!(
+            preferred_launcher_version(dir.path()).as_deref(),
+            Some("1.21.1")
+        );
+
+        let missing = tempfile::tempdir().expect("tempdir");
+        launcher_game(
+            missing.path(),
+            serde_json::json!({
+                "selectedProfile": "main",
+                "profiles": { "main": { "lastVersionId": "99.99" } }
+            }),
+        );
+        assert_eq!(preferred_launcher_version(missing.path()), None);
+    }
+
+    #[test]
+    fn launcher_falls_back_deterministically_without_selection() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        launcher_game(
+            dir.path(),
+            serde_json::json!({
+                "profiles": {
+                    "b-second": { "lastVersionId": "1.21.1" },
+                    "a-first": {
+                        "lastVersionId": "1.20.1-forge-47.2.0",
+                        "inheritsFrom": "1.20.1",
+                    }
+                }
+            }),
+        );
+        // Smallest profile name wins: the modded profile's vanilla base.
+        assert_eq!(
+            preferred_launcher_version(dir.path()).as_deref(),
+            Some("1.20.1")
+        );
+    }
+
+    #[test]
+    fn icon_urls_must_be_cdn_https() {
+        assert!(is_allowed_icon_url(
+            "https://cdn.modrinth.com/data/x/icon.png"
+        ));
+        assert!(!is_allowed_icon_url(
+            "http://cdn.modrinth.com/data/x/icon.png"
+        ));
+        assert!(!is_allowed_icon_url(
+            "https://cdn.modrinth.com:8443/data/x/icon.png"
+        ));
+        assert!(!is_allowed_icon_url("https://evil.example/icon.png"));
+        assert!(!is_allowed_icon_url("data:image/png;base64,AAA"));
+        assert!(!is_allowed_icon_url("not a url"));
+    }
+
+    #[test]
+    fn redirect_targets_must_be_https_default_port() {
+        assert!(host_of("https://cdn.modrinth.com/data/x.zip").is_ok());
+        // Explicit :443 normalizes to the default port, so it is allowed.
+        assert!(host_of("https://cdn.modrinth.com:443/data/x.zip").is_ok());
+        assert!(host_of("http://cdn.modrinth.com/data/x.zip").is_err());
+        assert!(host_of("https://cdn.modrinth.com:8443/data/x.zip").is_err());
     }
 }

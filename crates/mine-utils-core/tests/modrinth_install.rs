@@ -1,0 +1,799 @@
+//! Modrinth install-path tests: the shared prepare/finish routine on a temp
+//! game dir with a mock transport. Nothing here touches the network or the
+//! real game dir.
+
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use mine_utils_core::{
+    finish_modrinth_install, level_dat, prepare_modrinth_install, provenance_lookup,
+    resource_stack, AppError, BackupsConfig, CoreInstallOutcome, DataPaths, HashCache, IconCache,
+    ModrinthClient, ModrinthError, RawResponse, StackPaths, Transport,
+};
+use sha2::{Digest, Sha256, Sha512};
+
+const PROJECT: &str = "testproj1";
+const VERSION: &str = "version01";
+const RESOURCE_FILE: &str = "fresh-1.9.zip";
+const DATAPACK_FILE: &str = "cool-datapack-2.0.zip";
+const RESOURCE_URL: &str = "https://cdn.modrinth.com/data/abc/fresh-1.9.zip";
+const DATAPACK_URL: &str = "https://cdn.modrinth.com/data/def/cool-datapack-2.0.zip";
+const WORLD_VERSION: &str = "1.21.10";
+
+fn versions_url() -> String {
+    format!("https://api.modrinth.com/v2/project/{PROJECT}/version")
+}
+
+struct MockApi {
+    calls: Mutex<Vec<String>>,
+    bodies: BTreeMap<String, Vec<u8>>,
+}
+
+impl MockApi {
+    fn new() -> Self {
+        MockApi {
+            calls: Mutex::new(Vec::new()),
+            bodies: BTreeMap::new(),
+        }
+    }
+
+    fn with(mut self, url: &str, body: Vec<u8>) -> Self {
+        self.bodies.insert(url.to_string(), body);
+        self
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().expect("calls").clone()
+    }
+
+    fn cdn_calls(&self) -> Vec<String> {
+        self.calls()
+            .into_iter()
+            .filter(|url| url.contains("cdn.modrinth.com"))
+            .collect()
+    }
+}
+
+impl Transport for MockApi {
+    fn request(&self, url: &str) -> Result<RawResponse, ModrinthError> {
+        self.calls.lock().expect("calls").push(url.to_string());
+        match self.bodies.get(url) {
+            Some(body) => Ok(RawResponse {
+                status: 200,
+                headers: vec![],
+                body: Box::new(std::io::Cursor::new(body.clone())),
+            }),
+            None => Ok(RawResponse {
+                status: 404,
+                headers: vec![],
+                body: Box::new(std::io::Cursor::new(Vec::new())),
+            }),
+        }
+    }
+}
+
+fn zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(&mut out);
+    for (name, data) in entries {
+        zip.start_file(*name, zip::write::SimpleFileOptions::default())
+            .expect("entry");
+        zip.write_all(data).expect("write");
+    }
+    zip.finish().expect("finish");
+    out.into_inner()
+}
+
+fn pack_mcmeta() -> &'static [u8] {
+    br#"{"pack": {"pack_format": 48, "description": "temp"}}"#
+}
+
+fn resource_zip() -> Vec<u8> {
+    zip_bytes(&[
+        ("assets/minecraft/textures/a.png", b"asset"),
+        ("pack.mcmeta", pack_mcmeta()),
+    ])
+}
+
+fn datapack_zip() -> Vec<u8> {
+    zip_bytes(&[
+        ("data/example/loot_tables/x.json", b"{}"),
+        ("pack.mcmeta", pack_mcmeta()),
+    ])
+}
+
+fn sha512_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha512::digest(bytes))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn versions_json(url: &str, filename: &str, sha512: &str, games: &[&str]) -> Vec<u8> {
+    let games: Vec<String> = games.iter().map(|g| g.to_string()).collect();
+    serde_json::json!([{
+        "id": VERSION,
+        "project_id": PROJECT,
+        "name": "1.0",
+        "version_number": "1.0",
+        "game_versions": games,
+        "loaders": ["minecraft"],
+        "files": [{
+            "url": url,
+            "filename": filename,
+            "size": 100,
+            "primary": true,
+            "hashes": { "sha512": sha512, "sha1": "" },
+        }],
+    }])
+    .to_string()
+    .into_bytes()
+}
+
+fn level_bytes(version: &str, enabled: &[&str], disabled: &[&str]) -> Vec<u8> {
+    use fastnbt::Value;
+    let strings = |entries: &[&str]| {
+        Value::List(
+            entries
+                .iter()
+                .map(|e| Value::String(e.to_string()))
+                .collect(),
+        )
+    };
+    let data = Value::Compound(
+        [
+            (
+                "Version".to_string(),
+                Value::Compound(
+                    [("Name".to_string(), Value::String(version.to_string()))]
+                        .into_iter()
+                        .collect(),
+                ),
+            ),
+            ("LevelName".to_string(), Value::String("Temp".to_string())),
+            (
+                "DataPacks".to_string(),
+                Value::Compound(
+                    [
+                        ("Enabled".to_string(), strings(enabled)),
+                        ("Disabled".to_string(), strings(disabled)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let root = Value::Compound([("Data".to_string(), data)].into_iter().collect());
+    level_dat::gzip(&fastnbt::to_bytes(&root).unwrap())
+}
+
+struct Fixture {
+    _dir: tempfile::TempDir,
+    game_dir: PathBuf,
+    data_dir: PathBuf,
+    stack_paths: StackPaths,
+    icons: IconCache,
+    hashes: HashCache,
+}
+
+fn fixture() -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    let game_dir = dir.path().join("game");
+    std::fs::create_dir_all(game_dir.join("resourcepacks")).unwrap();
+    std::fs::write(
+        game_dir.join("options.txt"),
+        "version:4707\nresourcePacks:[]\n",
+    )
+    .unwrap();
+    let world = game_dir.join("saves").join("alpha");
+    std::fs::create_dir_all(world.join("datapacks")).unwrap();
+    std::fs::write(
+        world.join("level.dat"),
+        level_bytes(WORLD_VERSION, &[], &[]),
+    )
+    .unwrap();
+    let data_dir = dir.path().join("data");
+    let icons_dir = dir.path().join("icons");
+    let stack_paths = StackPaths::for_game_dir(
+        &game_dir,
+        &data_dir,
+        BackupsConfig {
+            enabled: true,
+            keep: 5,
+        },
+    );
+    Fixture {
+        _dir: dir,
+        game_dir,
+        data_dir,
+        stack_paths,
+        icons: IconCache::new(&icons_dir),
+        hashes: HashCache::new(),
+    }
+}
+
+fn data_paths(fx: &Fixture) -> DataPaths {
+    DataPaths::for_world(
+        &fx.game_dir,
+        &fx.game_dir.join("saves").join("alpha"),
+        &fx.data_dir,
+        BackupsConfig {
+            enabled: true,
+            keep: 5,
+        },
+    )
+}
+
+fn client(api: MockApi) -> (ModrinthClient<Arc<MockApi>>, Arc<MockApi>) {
+    let api = Arc::new(api);
+    (ModrinthClient::without_sleep(Arc::clone(&api)), api)
+}
+
+fn leftovers(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.contains("mine-utils-download") {
+                    out.push(path.display().to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn resource_pack_installs_enables_and_records_provenance() {
+    let fx = fixture();
+    let bytes = resource_zip();
+    let (client, api) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    RESOURCE_URL,
+                    RESOURCE_FILE,
+                    &sha512_hex(&bytes),
+                    &["1.21.10", "1.21.9"],
+                ),
+            )
+            .with(RESOURCE_URL, bytes.clone()),
+    );
+
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .expect("prepare");
+    let outcome = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        None,
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .expect("finish");
+
+    let CoreInstallOutcome::ResourcePack {
+        outcome,
+        provenance_warning,
+    } = outcome
+    else {
+        panic!("wrong outcome kind");
+    };
+    assert!(provenance_warning.is_none(), "{provenance_warning:?}");
+    assert!(
+        matches!(outcome, mine_utils_core::ImportOutcome::Imported { .. }),
+        "{outcome:?}"
+    );
+
+    let dest = fx.game_dir.join("resourcepacks").join(RESOURCE_FILE);
+    assert_eq!(std::fs::read(&dest).unwrap(), bytes, "API filename lands");
+    let options = std::fs::read_to_string(fx.game_dir.join("options.txt")).unwrap();
+    assert!(
+        options.contains(&format!("file/{RESOURCE_FILE}")),
+        "{options}"
+    );
+    let stack = resource_stack::load(&fx.stack_paths).unwrap();
+    assert!(
+        stack
+            .snapshot()
+            .resource
+            .iter()
+            .any(|e| e == &format!("file/{RESOURCE_FILE}")),
+        "enabled in the stack"
+    );
+
+    let entry = provenance_lookup(&fx.data_dir, &sha256_hex(&bytes))
+        .expect("lookup")
+        .expect("provenance recorded");
+    assert_eq!(entry.project_id, PROJECT);
+    assert_eq!(entry.version_id, VERSION);
+    assert_eq!(entry.file_name, RESOURCE_FILE);
+    assert!(leftovers(&fx.game_dir).is_empty(), "no download temps left");
+    assert_eq!(api.cdn_calls().len(), 1, "one download");
+}
+
+#[test]
+fn datapack_installs_into_the_selected_world_and_enables() {
+    let fx = fixture();
+    let bytes = datapack_zip();
+    let (client, _) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    DATAPACK_URL,
+                    DATAPACK_FILE,
+                    &sha512_hex(&bytes),
+                    &[WORLD_VERSION],
+                ),
+            )
+            .with(DATAPACK_URL, bytes.clone()),
+    );
+    let paths = data_paths(&fx);
+
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        Some("alpha"),
+        PROJECT,
+        VERSION,
+        DATAPACK_FILE,
+        "datapack",
+    )
+    .expect("prepare");
+    let outcome = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        Some(&paths),
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .expect("finish");
+
+    let CoreInstallOutcome::Datapack {
+        outcome,
+        provenance_warning,
+    } = outcome
+    else {
+        panic!("wrong outcome kind");
+    };
+    assert!(provenance_warning.is_none(), "{provenance_warning:?}");
+    assert!(
+        matches!(
+            outcome,
+            mine_utils_core::DatapackImportOutcome::Imported { .. }
+        ),
+        "{outcome:?}"
+    );
+
+    let dest = fx
+        .game_dir
+        .join("saves")
+        .join("alpha")
+        .join("datapacks")
+        .join(DATAPACK_FILE);
+    assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+    let parsed = level_dat::parse(&std::fs::read(paths.level_dat_path).unwrap()).unwrap();
+    assert!(
+        parsed
+            .enabled
+            .iter()
+            .any(|e| e == &format!("file/{DATAPACK_FILE}")),
+        "enabled in level.dat: {:?}",
+        parsed.enabled
+    );
+    let entry = provenance_lookup(&fx.data_dir, &sha256_hex(&bytes))
+        .expect("lookup")
+        .expect("provenance recorded");
+    assert_eq!(entry.project_id, PROJECT);
+    assert!(leftovers(&fx.game_dir).is_empty(), "no download temps left");
+}
+
+#[test]
+fn identical_existing_file_reuses_without_download() {
+    let fx = fixture();
+    let bytes = resource_zip();
+    std::fs::write(
+        fx.game_dir.join("resourcepacks").join(RESOURCE_FILE),
+        &bytes,
+    )
+    .unwrap();
+    let (client, api) = client(MockApi::new().with(
+        &versions_url(),
+        versions_json(
+            RESOURCE_URL,
+            RESOURCE_FILE,
+            &sha512_hex(&bytes),
+            &["1.21.10"],
+        ),
+    ));
+
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .expect("prepare");
+    let outcome = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        None,
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .expect("finish");
+
+    assert!(
+        matches!(
+            outcome,
+            CoreInstallOutcome::ResourcePack {
+                outcome: mine_utils_core::ImportOutcome::Imported { .. },
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert!(
+        api.cdn_calls().is_empty(),
+        "identical bytes are reused, not downloaded"
+    );
+    assert!(provenance_lookup(&fx.data_dir, &sha256_hex(&bytes))
+        .expect("lookup")
+        .is_some());
+}
+
+#[test]
+fn colliding_existing_file_reports_collision_and_keeps_dest() {
+    let fx = fixture();
+    let installed = resource_zip();
+    let other = datapack_zip();
+    assert_ne!(installed, other);
+    std::fs::write(
+        fx.game_dir.join("resourcepacks").join(RESOURCE_FILE),
+        &other,
+    )
+    .unwrap();
+    let (client, api) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    RESOURCE_URL,
+                    RESOURCE_FILE,
+                    &sha512_hex(&installed),
+                    &["1.21.10"],
+                ),
+            )
+            .with(RESOURCE_URL, installed.clone()),
+    );
+
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .expect("prepare");
+    let outcome = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        None,
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .expect("collision is an outcome, not an error");
+
+    assert!(
+        matches!(
+            outcome,
+            CoreInstallOutcome::ResourcePack {
+                outcome: mine_utils_core::ImportOutcome::Collision { .. },
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        std::fs::read(fx.game_dir.join("resourcepacks").join(RESOURCE_FILE)).unwrap(),
+        other,
+        "the existing file is untouched"
+    );
+    assert!(provenance_lookup(&fx.data_dir, &sha256_hex(&installed))
+        .expect("lookup")
+        .is_none());
+    assert!(
+        api.cdn_calls().len() == 1,
+        "the real bytes were verified first"
+    );
+    assert!(leftovers(&fx.game_dir).is_empty(), "no download temps left");
+}
+
+#[test]
+fn datapack_target_version_mismatch_is_refused_before_download() {
+    let fx = fixture();
+    let bytes = datapack_zip();
+    let (client, api) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    DATAPACK_URL,
+                    DATAPACK_FILE,
+                    &sha512_hex(&bytes),
+                    &["1.20.1"],
+                ),
+            )
+            .with(DATAPACK_URL, bytes.clone()),
+    );
+
+    let err = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        Some("alpha"),
+        PROJECT,
+        VERSION,
+        DATAPACK_FILE,
+        "datapack",
+    )
+    .expect_err("world is 1.21.10, version only lists 1.20.1");
+    let message = err.to_string();
+    assert!(message.contains("1.21.10"), "{message}");
+    assert!(api.cdn_calls().is_empty(), "refused before any download");
+    assert!(!fx
+        .game_dir
+        .join("saves")
+        .join("alpha")
+        .join("datapacks")
+        .join(DATAPACK_FILE)
+        .exists());
+}
+
+#[test]
+fn locked_world_copies_but_leaves_the_datapack_disabled() {
+    if !mine_utils_core::game_lock::lock_detection_supported() {
+        eprintln!("skipping: POSIX lock probing is unsupported here");
+        return;
+    }
+    let fx = fixture();
+    let world_dir = fx.game_dir.join("saves").join("alpha");
+    let lock_path = world_dir.join("session.lock");
+    std::fs::write(&lock_path, b"\x00").unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().expect("current exe"))
+        .args(["--exact", "lock_holder_helper", "--nocapture"])
+        .env("MINE_UTILS_LOCK_HOLDER", &lock_path)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn the lock holder");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if mine_utils_core::game_lock::world_locked(&world_dir).is_some() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the held lock is detected"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let bytes = datapack_zip();
+    let (client, api) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    DATAPACK_URL,
+                    DATAPACK_FILE,
+                    &sha512_hex(&bytes),
+                    &[WORLD_VERSION],
+                ),
+            )
+            .with(DATAPACK_URL, bytes.clone()),
+    );
+    let paths = data_paths(&fx);
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        Some("alpha"),
+        PROJECT,
+        VERSION,
+        DATAPACK_FILE,
+        "datapack",
+    )
+    .expect("a locked world still downloads");
+    assert!(
+        !api.cdn_calls().is_empty(),
+        "the file is fetched, not refused"
+    );
+    let outcome = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        Some(&paths),
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .expect("locked is an outcome, not an error");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        matches!(
+            outcome,
+            CoreInstallOutcome::Datapack {
+                outcome: mine_utils_core::DatapackImportOutcome::Locked { .. },
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    let dest = world_dir.join("datapacks").join(DATAPACK_FILE);
+    assert_eq!(std::fs::read(&dest).unwrap(), bytes, "the file is copied");
+    let parsed = level_dat::parse(&std::fs::read(paths.level_dat_path).unwrap()).unwrap();
+    assert!(
+        !parsed.enabled.iter().any(|e| e.contains(DATAPACK_FILE)),
+        "left disabled"
+    );
+    assert!(provenance_lookup(&fx.data_dir, &sha256_hex(&bytes))
+        .expect("lookup")
+        .is_some());
+    assert!(leftovers(&fx.game_dir).is_empty());
+}
+
+#[test]
+fn bad_identifiers_are_refused_without_network() {
+    let fx = fixture();
+    let (client, api) = client(MockApi::new());
+    for bad in ["../x", "a/b", "", "v 1"] {
+        let err = prepare_modrinth_install(
+            &client,
+            &fx.game_dir,
+            None,
+            bad,
+            VERSION,
+            RESOURCE_FILE,
+            "resourcepack",
+        )
+        .expect_err("bad project id must fail");
+        assert!(matches!(err, AppError::Modrinth(_)), "{bad}: {err}");
+    }
+    let err = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "mod",
+    )
+    .expect_err("bad kind must fail");
+    assert!(matches!(err, AppError::Modrinth(_)), "{err}");
+    assert!(api.calls().is_empty(), "no request for bad identifiers");
+}
+
+/// Spawned helper: takes a POSIX write lock on `$MINE_UTILS_LOCK_HOLDER` and
+/// holds it until killed. Same pattern as the game-lock tests: POSIX locks
+/// are per process, so the holder must be a second process.
+#[test]
+fn lock_holder_helper() {
+    let Ok(path) = std::env::var("MINE_UTILS_LOCK_HOLDER") else {
+        return;
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open the lock file");
+    let mut lock = libc::flock {
+        l_type: libc::F_WRLCK as libc::c_short,
+        l_whence: libc::SEEK_SET as libc::c_short,
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+    };
+    use std::os::unix::io::AsRawFd;
+    let result = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &mut lock) };
+    assert_eq!(result, 0, "the helper takes the write lock");
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+#[test]
+fn running_game_refuses_before_any_download() {
+    if !mine_utils_core::game_lock::lock_detection_supported() {
+        eprintln!("skipping: POSIX lock probing is unsupported here");
+        return;
+    }
+    let fx = fixture();
+    let lock_path = fx.game_dir.join("saves").join("alpha").join("session.lock");
+    std::fs::write(&lock_path, b"\x00").unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().expect("current exe"))
+        .args(["--exact", "lock_holder_helper", "--nocapture"])
+        .env("MINE_UTILS_LOCK_HOLDER", &lock_path)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn the lock holder");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if mine_utils_core::game_lock::check(&fx.game_dir)
+            .running
+            .is_some()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the held lock is detected"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let bytes = resource_zip();
+    let (client, api) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    RESOURCE_URL,
+                    RESOURCE_FILE,
+                    &sha512_hex(&bytes),
+                    &["1.21.10"],
+                ),
+            )
+            .with(RESOURCE_URL, bytes.clone()),
+    );
+    let err = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .expect_err("a running game refuses the install");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(matches!(err, AppError::GameRunning { .. }), "{err}");
+    assert!(api.calls().is_empty(), "refused before any request");
+    assert!(!fx
+        .game_dir
+        .join("resourcepacks")
+        .join(RESOURCE_FILE)
+        .exists());
+    assert!(leftovers(&fx.game_dir).is_empty());
+}

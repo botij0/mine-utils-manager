@@ -8,6 +8,7 @@ pub mod format_table;
 pub mod game_dir;
 pub mod game_lock;
 pub mod icon_cache;
+pub mod install;
 pub mod level_backup;
 pub mod level_dat;
 pub mod modrinth;
@@ -41,14 +42,19 @@ pub use game_dir::{
 };
 pub use game_lock::{GameRunning, GameRunningKind, GameStatus};
 pub use icon_cache::{icon_within_pixel_cap, png_dimensions, IconCache, MAX_ICON_DIMENSION};
+pub use install::{
+    finish_modrinth_install, parse_install_kind, prepare_modrinth_install, CoreInstallOutcome,
+    PreparedInstall, PreparedSource,
+};
 pub use level_backup::{LevelBackupInfo, LevelBackupOutcome};
 pub use level_dat::{LevelDatError, LevelDatView};
 pub use modrinth::{
-    installed_game_versions, prefer_version, preferred_launcher_version, primary_file,
-    ModrinthClient, ModrinthError, ModrinthFile, ModrinthHashes, ModrinthProject, ModrinthVersion,
-    RawResponse, ReqwestTransport, SearchHit, SearchKind, SearchQuery, SearchSort, Transport,
-    ALLOWED_HOSTS, API_BASE, CDN_HOST, MAX_API_BODY, MAX_DOWNLOAD_BYTES, MAX_REDIRECTS,
-    MAX_RETRIES, REQUEST_TIMEOUT_SECS,
+    installed_game_versions, is_allowed_icon_url, prefer_version, preferred_launcher_version,
+    primary_file, sort_game_versions, validate_modrinth_id, ModrinthClient, ModrinthError,
+    ModrinthFile, ModrinthHashes, ModrinthProject, ModrinthVersion, RawResponse, ReqwestTransport,
+    SearchHit, SearchKind, SearchQuery, SearchSort, Transport, ALLOWED_HOSTS, API_BASE, CDN_HOST,
+    DOWNLOAD_CONNECT_TIMEOUT_SECS, DOWNLOAD_TIMEOUT_SECS, MAX_API_BODY, MAX_DOWNLOAD_BYTES,
+    MAX_REDIRECTS, MAX_RETRIES, REQUEST_TIMEOUT_SECS,
 };
 pub use options_txt::{read_options, write_options, OptionsError, OptionsTxt};
 pub use pack::{
