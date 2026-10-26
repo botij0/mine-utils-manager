@@ -79,10 +79,54 @@ impl AppState {
         ))
     }
 
+    /// One locked read of the active game dir, its stack paths, and the
+    /// backup policy. Installs snapshot once instead of reading the config
+    /// three times across the download/enable/provenance phases.
+    pub fn install_snapshot(&self) -> Result<InstallSnapshot, AppError> {
+        let store = self.lock();
+        let config = store.config();
+        let game_dir = config
+            .active_game_dir
+            .clone()
+            .ok_or(AppError::NoActiveGameDir)?;
+        Ok(InstallSnapshot {
+            game_dir: game_dir.clone(),
+            stack_paths: StackPaths::for_game_dir(
+                &game_dir,
+                &self.data_dir,
+                config.backups.clone(),
+            ),
+            data_dir: self.data_dir.clone(),
+            backups: config.backups.clone(),
+        })
+    }
+
     /// The shared backup folder for the active game dir's `level.dat` files.
     pub fn level_backups_root(&self) -> Result<PathBuf, AppError> {
         let game_dir = self.active_game_dir().ok_or(AppError::NoActiveGameDir)?;
         Ok(level_backup::root_for(&self.data_dir, &game_dir))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InstallSnapshot {
+    pub game_dir: PathBuf,
+    pub stack_paths: StackPaths,
+    pub data_dir: PathBuf,
+    pub backups: BackupsConfig,
+}
+
+impl InstallSnapshot {
+    /// The datapack write context for a target world, derived from the
+    /// snapshot without re-reading the config.
+    pub fn world_data_paths(&self, world: &str) -> Result<DataPaths, AppError> {
+        let resolved = WorldPaths::for_world(&self.game_dir, world)?;
+        Ok(DataPaths::for_world(
+            &self.game_dir,
+            &resolved.world_dir,
+            &self.data_dir,
+            self.backups.clone(),
+        ))
     }
 }
 

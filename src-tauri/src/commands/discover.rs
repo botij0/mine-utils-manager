@@ -3,14 +3,13 @@
 //! `https://cdn.modrinth.com`, and every write goes through the existing
 //! pack/datapack import paths so duplicates, locks, and guards behave as one.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use mine_utils_core::{
-    data_stack, download_verified, installed_game_versions, preferred_launcher_version,
-    primary_file, provenance_record, resource_stack, world, AppError, DatapackImportOutcome,
-    ImportOutcome, ModrinthClient, ModrinthError, ModrinthProject, ModrinthVersion,
-    ProvenanceEntry, ReqwestTransport, SearchHit, SearchKind, SearchQuery, SearchSort, ZipRoot,
+    finish_modrinth_install, installed_game_versions, parse_install_kind,
+    preferred_launcher_version, prepare_modrinth_install, world, AppError, CoreInstallOutcome,
+    DatapackImportOutcome, ImportOutcome, ModrinthClient, ModrinthError, ModrinthProject,
+    ModrinthVersion, ReqwestTransport, SearchHit, SearchKind, SearchQuery, SearchSort,
 };
 use tauri::State;
 
@@ -43,13 +42,7 @@ fn join_error(err: impl std::error::Error + Send + Sync + 'static) -> AppError {
 }
 
 fn parse_kind(kind: &str) -> Result<SearchKind, ModrinthError> {
-    match kind {
-        "resourcepack" => Ok(SearchKind::ResourcePack),
-        "datapack" => Ok(SearchKind::Datapack),
-        other => Err(ModrinthError::Parse {
-            reason: format!("unknown project type {other:?}; want resourcepack or datapack"),
-        }),
-    }
+    parse_install_kind(kind)
 }
 
 fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
@@ -66,9 +59,9 @@ fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
 }
 
 /// Search Modrinth. Runs only when the Discover page calls it; nothing
-/// prefetches, and the local tabs never trigger a request.
+/// prefetches, and the local tabs never trigger a request. One page of 20
+/// hits: there is no pagination UI, so offset is always zero.
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn search_modrinth(
     state: State<'_, AppState>,
     mods: State<'_, ModrinthState>,
@@ -76,8 +69,6 @@ pub async fn search_modrinth(
     kind: String,
     game_version: Option<String>,
     sort: Option<String>,
-    limit: Option<u8>,
-    offset: Option<u32>,
 ) -> Result<Vec<SearchHit>, AppError> {
     state.note_ipc();
     let client = Arc::clone(&mods.client);
@@ -87,8 +78,8 @@ pub async fn search_modrinth(
             kind: parse_kind(&kind)?,
             game_version,
             sort: parse_sort(sort.as_deref().unwrap_or("relevance"))?,
-            limit: limit.unwrap_or(20),
-            offset: offset.unwrap_or(0),
+            limit: 20,
+            offset: 0,
         })?;
         Ok(found)
     })
@@ -170,17 +161,53 @@ pub async fn modrinth_targets(
 
 /// What an install did. Resource outcomes match the Packs page; datapack
 /// outcomes match the Worlds page, including `locked` when a running game
-/// or a locked world keeps the pack disabled.
+/// or a locked world keeps the pack disabled. The wire kind is `resourcepack`
+/// (one word, matching the Modrinth project type and the TS union), not the
+/// default `resource_pack` snake_case. `provenance_warning` is set when the
+/// file installed fine but the provenance record write failed; it never
+/// fails the install.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ModrinthInstallOutcome {
-    ResourcePack { outcome: ImportOutcome },
-    Datapack { outcome: DatapackImportOutcome },
+    #[serde(rename = "resourcepack")]
+    ResourcePack {
+        outcome: ImportOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provenance_warning: Option<String>,
+    },
+    Datapack {
+        outcome: DatapackImportOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provenance_warning: Option<String>,
+    },
 }
 
-/// Download a version file from the CDN, verify it, and route it through the
-/// existing import paths so duplicates, collisions, locks, and the game
-/// guard behave exactly like a manual import.
+impl From<CoreInstallOutcome> for ModrinthInstallOutcome {
+    fn from(outcome: CoreInstallOutcome) -> Self {
+        match outcome {
+            CoreInstallOutcome::ResourcePack {
+                outcome,
+                provenance_warning,
+            } => ModrinthInstallOutcome::ResourcePack {
+                outcome,
+                provenance_warning,
+            },
+            CoreInstallOutcome::Datapack {
+                outcome,
+                provenance_warning,
+            } => ModrinthInstallOutcome::Datapack {
+                outcome,
+                provenance_warning,
+            },
+        }
+    }
+}
+
+/// Download a version file from the CDN, verify it, commit it under the API
+/// filename, and route it through the existing import paths so duplicates,
+/// collisions, locks, and the game guard behave exactly like a manual
+/// import. The metadata fetch and download run with no game lock held; only
+/// the commit/import/enable/provenance phase takes the per-game-dir lock.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn install_modrinth_pack(
@@ -195,184 +222,38 @@ pub async fn install_modrinth_pack(
     world: Option<String>,
 ) -> Result<ModrinthInstallOutcome, AppError> {
     state.note_ipc();
-    let game_dir = state.active_game_dir().ok_or(AppError::NoActiveGameDir)?;
-    let stack_paths = state.stack_paths()?;
+    // One snapshot: the game dir, stack paths, and backup policy are read
+    // once, not three times across the install.
+    let snapshot = state.install_snapshot()?;
     let data_paths = match world.clone() {
-        Some(name) => Some(state.world_data_paths(&name)?),
+        Some(name) => Some(snapshot.world_data_paths(&name)?),
         None => None,
     };
+    let guard = stack.lock_for(&snapshot.game_dir);
     let data_dir = state.data_dir();
     let icons = packs.icons();
     let hashes = packs.hashes();
-    let guard = stack.lock_for(&stack_paths.game_dir);
     let client = Arc::clone(&mods.client);
     tauri::async_runtime::spawn_blocking(move || {
-        let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
-        install_blocking(
+        let prepared = prepare_modrinth_install(
             &client,
-            &game_dir,
-            &stack_paths,
-            data_paths.as_ref(),
-            &data_dir,
-            &icons,
-            &hashes,
+            &snapshot.game_dir,
+            world.as_deref(),
             &project_id,
             &version_id,
             &filename,
             &kind,
-        )
-    })
-    .await
-    .map_err(join_error)?
-}
-
-#[allow(clippy::too_many_arguments)]
-fn install_blocking(
-    client: &ModrinthClient<ReqwestTransport>,
-    game_dir: &std::path::Path,
-    stack_paths: &mine_utils_core::StackPaths,
-    data_paths: Option<&mine_utils_core::DataPaths>,
-    data_dir: &std::path::Path,
-    icons: &mine_utils_core::IconCache,
-    hashes: &mine_utils_core::HashCache,
-    project_id: &str,
-    version_id: &str,
-    filename: &str,
-    kind: &str,
-) -> Result<ModrinthInstallOutcome, AppError> {
-    let search_kind = parse_kind(kind)?;
-    let versions = client.versions(project_id)?;
-    let version = versions
-        .iter()
-        .find(|v| v.id == version_id)
-        .ok_or_else(|| ModrinthError::Parse {
-            reason: format!("version {version_id} is not in project {project_id}"),
-        })?;
-    let file = version
-        .files
-        .iter()
-        .find(|f| f.filename == filename)
-        .or_else(|| primary_file(version))
-        .ok_or_else(|| ModrinthError::Parse {
-            reason: format!("version {version_id} has no downloadable file"),
-        })?;
-    if file.filename != filename {
-        return Err(ModrinthError::Parse {
-            reason: format!(
-                "version {version_id} has no file named {filename:?}; closest is {:?}",
-                file.filename
-            ),
-        }
-        .into());
-    }
-    let root = match search_kind {
-        SearchKind::ResourcePack => ZipRoot::Assets,
-        SearchKind::Datapack => ZipRoot::Data,
-    };
-    let target_dir: PathBuf = match search_kind {
-        SearchKind::ResourcePack => game_dir.join("resourcepacks"),
-        SearchKind::Datapack => {
-            let paths = data_paths.ok_or_else(|| ModrinthError::Parse {
-                reason: "a datapack install needs a target world".to_string(),
-            })?;
-            paths.datapacks_dir.clone()
-        }
-    };
-    let verified = download_verified(
-        client,
-        &file.url,
-        &target_dir,
-        &file.filename,
-        &file.hashes.sha512,
-        root,
-    )?;
-    let outcome = route_verified(
-        &verified.temp_path,
-        stack_paths,
-        data_paths,
-        icons,
-        hashes,
-        &file.filename,
-        search_kind,
-    );
-    let _ = std::fs::remove_file(&verified.temp_path);
-    let outcome = outcome?;
-    if installed(&outcome) {
-        provenance_record(
-            data_dir,
-            &verified.sha256,
-            ProvenanceEntry {
-                project_id: project_id.to_string(),
-                version_id: version_id.to_string(),
-                file_name: file.filename.clone(),
-            },
         )?;
-    }
-    Ok(outcome)
-}
-
-/// Hand the verified temp to the existing import paths, then enable through
-/// the stack paths. A running game blocks `options.txt`/`level.dat` writes
-/// through the existing guards; a locked world copies but stays disabled.
-fn route_verified(
-    temp: &std::path::Path,
-    stack_paths: &mine_utils_core::StackPaths,
-    data_paths: Option<&mine_utils_core::DataPaths>,
-    icons: &mine_utils_core::IconCache,
-    hashes: &mine_utils_core::HashCache,
-    filename: &str,
-    kind: SearchKind,
-) -> Result<ModrinthInstallOutcome, AppError> {
-    match kind {
-        SearchKind::ResourcePack => {
-            let outcome = mine_utils_core::import_pack(
-                temp,
-                &stack_paths.game_dir.join("resourcepacks"),
-                icons,
-                mine_utils_core::ImportChoice::Default,
-                hashes,
-            )?;
-            if let ImportOutcome::Imported { .. } = &outcome {
-                resource_stack::set_enabled(stack_paths, filename, true)?;
-            }
-            Ok(ModrinthInstallOutcome::ResourcePack { outcome })
-        }
-        SearchKind::Datapack => {
-            let paths = data_paths.expect("datapack target checked above");
-            let outcome = data_stack::import_datapack(
-                paths,
-                temp,
-                mine_utils_core::ImportChoice::Default,
-                icons,
-                hashes,
-            )?;
-            Ok(ModrinthInstallOutcome::Datapack { outcome })
-        }
-    }
-}
-
-fn installed(outcome: &ModrinthInstallOutcome) -> bool {
-    match outcome {
-        ModrinthInstallOutcome::ResourcePack { outcome } => {
-            matches!(outcome, ImportOutcome::Imported { .. })
-        }
-        ModrinthInstallOutcome::Datapack { outcome } => matches!(
-            outcome,
-            DatapackImportOutcome::Imported { .. } | DatapackImportOutcome::Locked { .. }
-        ),
-    }
-}
-
-/// Where an installed file came from, if it was installed from Modrinth.
-#[tauri::command]
-pub async fn get_modrinth_provenance(
-    state: State<'_, AppState>,
-    sha256: String,
-) -> Result<Option<ProvenanceEntry>, AppError> {
-    state.note_ipc();
-    let data_dir = state.data_dir();
-    tauri::async_runtime::spawn_blocking(move || {
-        mine_utils_core::provenance_lookup(&data_dir, &sha256).map_err(AppError::from)
+        let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
+        finish_modrinth_install(
+            prepared,
+            &snapshot.stack_paths,
+            data_paths.as_ref(),
+            &data_dir,
+            &icons,
+            &hashes,
+        )
+        .map(ModrinthInstallOutcome::from)
     })
     .await
     .map_err(join_error)?
