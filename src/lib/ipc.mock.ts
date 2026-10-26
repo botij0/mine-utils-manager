@@ -16,6 +16,12 @@ import type {
   ImportChoice,
   ImportOutcome,
   LevelBackupInfo,
+  ModrinthInstallArgs,
+  ModrinthInstallOutcome,
+  ModrinthKind,
+  ModrinthSearchHit,
+  ModrinthSort,
+  ModrinthVersion,
   Pack,
   PackKind,
   PackListing,
@@ -220,6 +226,157 @@ function packListing(): PackListing {
  * pack list. The mock can not stat the disk, so it uses path markers and a few
  * synthetic packs to exercise every UI state.
  */
+/**
+ * What the mock pretends Modrinth hosts. The icons are remote HTTPS URLs,
+ * like the real CDN; they never use the local `asset://` icon path.
+ */
+const MOCK_PROJECTS: ModrinthSearchHit[] = [
+  {
+    project_id: '7q7JnQD0',
+    slug: 'fresh-animations',
+    title: 'Fresh Animations',
+    description: 'Fresh animations for mobs and players.',
+    icon_url: 'https://cdn.modrinth.com/icons/fresh.webp',
+    downloads: 123456,
+    follows: 789,
+    project_type: 'resourcepack',
+    versions: ['1.21.1', '1.21'],
+    latest_version: 'v2',
+  },
+  {
+    project_id: 'bbbb',
+    slug: 'other-pack',
+    title: 'Other Pack',
+    description: 'Another resource pack for testing filters.',
+    icon_url: null,
+    downloads: 10,
+    follows: 1,
+    project_type: 'resourcepack',
+    versions: ['1.21'],
+    latest_version: 'o1',
+  },
+  {
+    project_id: 'dp1',
+    slug: 'pure-datapack',
+    title: 'Pure Datapack',
+    description: 'Only datapack files, no mods.',
+    icon_url: 'https://cdn.modrinth.com/icons/datapack.webp',
+    downloads: 500,
+    follows: 5,
+    project_type: 'datapack',
+    versions: ['1.21.1'],
+    latest_version: 'd2',
+  },
+  {
+    project_id: 'mm1',
+    slug: 'mismatch-pack',
+    title: 'Mismatch Pack',
+    description: 'Installing this file always fails the hash check in the mock.',
+    icon_url: null,
+    downloads: 3,
+    follows: 0,
+    project_type: 'resourcepack',
+    versions: ['1.21.1'],
+    latest_version: 'm1',
+  },
+];
+
+const MOCK_VERSIONS: Record<string, ModrinthVersion[]> = {
+  '7q7JnQD0': [
+    {
+      id: 'v2',
+      project_id: '7q7JnQD0',
+      name: 'Fresh Animations 1.9',
+      version_number: '1.9',
+      game_versions: ['1.21.1', '1.21'],
+      loaders: ['minecraft'],
+      files: [
+        {
+          url: 'https://cdn.modrinth.com/data/7q7/fresh-1.9.zip',
+          filename: 'fresh-1.9.zip',
+          size: 1024,
+          primary: true,
+          hashes: { sha512: 'mock-sha512', sha1: 'mock-sha1' },
+        },
+      ],
+    },
+    {
+      id: 'v1',
+      project_id: '7q7JnQD0',
+      name: 'Fresh Animations 1.8',
+      version_number: '1.8',
+      game_versions: ['1.20.1'],
+      loaders: ['minecraft'],
+      files: [
+        {
+          url: 'https://cdn.modrinth.com/data/7q7/fresh-1.8.zip',
+          filename: 'fresh-1.8.zip',
+          size: 900,
+          primary: true,
+          hashes: { sha512: 'mock-old', sha1: 'mock-old1' },
+        },
+      ],
+    },
+  ],
+  bbbb: [
+    {
+      id: 'o1',
+      project_id: 'bbbb',
+      name: 'Other Pack 1.0',
+      version_number: '1.0',
+      game_versions: ['1.21'],
+      loaders: ['minecraft'],
+      files: [
+        {
+          url: 'https://cdn.modrinth.com/data/bbb/other-1.0.zip',
+          filename: 'other-1.0.zip',
+          size: 512,
+          primary: true,
+          hashes: { sha512: 'mock-other', sha1: 'mock-other1' },
+        },
+      ],
+    },
+  ],
+  dp1: [
+    {
+      id: 'd2',
+      project_id: 'dp1',
+      name: 'Pure Datapack 2.0',
+      version_number: '2.0',
+      game_versions: ['1.21.1'],
+      loaders: ['minecraft'],
+      files: [
+        {
+          url: 'https://cdn.modrinth.com/data/dp1/pure-2.0.zip',
+          filename: 'pure-2.0.zip',
+          size: 256,
+          primary: true,
+          hashes: { sha512: 'mock-dp', sha1: 'mock-dp1' },
+        },
+      ],
+    },
+  ],
+  mm1: [
+    {
+      id: 'm1',
+      project_id: 'mm1',
+      name: 'Mismatch Pack 1.0',
+      version_number: '1.0',
+      game_versions: ['1.21.1'],
+      loaders: ['minecraft'],
+      files: [
+        {
+          url: 'https://cdn.modrinth.com/data/mm1/mismatch.zip',
+          filename: 'mismatch.zip',
+          size: 128,
+          primary: true,
+          hashes: { sha512: '00aa', sha1: '00' },
+        },
+      ],
+    },
+  ],
+};
+
 export const mockClient: IpcClient = {
   async listGameDirs() {
     await delay();
@@ -492,6 +649,126 @@ export const mockClient: IpcClient = {
       disabled: [...found.disabled],
     };
     return mockDataStack(world);
+  },
+  async searchModrinth(
+    text: string,
+    kind: ModrinthKind,
+    gameVersion?: string | null,
+    sort?: ModrinthSort,
+  ) {
+    await delay();
+    void sort;
+    // The mock simulates the network: it never reaches api.modrinth.com.
+    // Searching for "offline" simulates a dead network instead of results.
+    if (text.toLowerCase().includes('offline')) {
+      throw new IpcError('modrinth_offline', 'Modrinth is unreachable (simulated offline); check the network');
+    }
+    const needle = text.trim().toLowerCase();
+    return MOCK_PROJECTS.filter((hit) => {
+      if (kind === 'resourcepack' && hit.project_type !== 'resourcepack') return false;
+      if (kind === 'datapack' && hit.project_type !== 'datapack') return false;
+      if (
+        gameVersion &&
+        hit.versions.length > 0 &&
+        !hit.versions.includes(gameVersion)
+      ) {
+        return false;
+      }
+      if (!needle) return true;
+      return (
+        hit.title.toLowerCase().includes(needle) ||
+        hit.description.toLowerCase().includes(needle) ||
+        hit.slug.includes(needle)
+      );
+    });
+  },
+  async getModrinthProject(projectId: string) {
+    await delay();
+    const hit = MOCK_PROJECTS.find(
+      (item) => item.project_id === projectId || item.slug === projectId,
+    );
+    if (!hit) {
+      throw new IpcError('modrinth_status', `Modrinth request failed with status 404 for ${projectId}`);
+    }
+    return {
+      id: hit.project_id,
+      slug: hit.slug,
+      title: hit.title,
+      description: hit.description,
+      body: `${hit.description} Full project body from the mock.`,
+      icon_url: hit.icon_url,
+      downloads: hit.downloads,
+      follows: hit.follows,
+      project_type: hit.project_type,
+      game_versions: [...hit.versions],
+      versions: MOCK_VERSIONS[hit.project_id]?.map((version) => version.id) ?? [],
+    };
+  },
+  async listModrinthVersions(projectId: string) {
+    await delay();
+    const hit = MOCK_PROJECTS.find(
+      (item) => item.project_id === projectId || item.slug === projectId,
+    );
+    if (!hit) {
+      throw new IpcError('modrinth_status', `Modrinth request failed with status 404 for ${projectId}`);
+    }
+    return MOCK_VERSIONS[hit.project_id] ?? [];
+  },
+  async modrinthTargets(world?: string | null) {
+    await delay();
+    return {
+      installed_versions: ['1.21', '1.21.1'],
+      preferred_launcher: '1.21.1',
+      world_version: world ? '1.21.1' : null,
+    };
+  },
+  async installModrinthPack(args: ModrinthInstallArgs) {
+    await delay();
+    const lower = args.filename.toLowerCase();
+    if (lower.includes('mismatch')) {
+      throw new IpcError(
+        'download_hash_mismatch',
+        'download failed: SHA-512 mismatch (expected 00aa, got ffbb)',
+      );
+    }
+    if (lower.includes('offline')) {
+      throw new IpcError('modrinth_offline', 'Modrinth is unreachable (simulated offline); check the network');
+    }
+    if (args.kind === 'datapack') {
+      if (!args.world) {
+        throw new IpcError('modrinth_url', 'a datapack install needs a target world');
+      }
+      const outcome = mockImportDatapack(args.world, args.filename, 'default');
+      return { kind: 'datapack', outcome } as ModrinthInstallOutcome;
+    }
+    const pack: Pack = {
+      ...makePack(
+        args.filename.replace(/\.zip$/i, ''),
+        'resource',
+        range(34, 69),
+        '1.21 to 1.21.10',
+        `Installed from Modrinth (${args.projectId}).`,
+        null,
+      ),
+      path: `/home/demo/.minecraft/resourcepacks/${args.filename}`,
+      location: 'zip',
+    };
+    mockPacks = [...mockPacks, pack];
+    mockStack = {
+      ...mockStack,
+      resource: [...mockStack.resource, `file/${args.filename}`],
+    };
+    const outcome: ImportOutcome = { status: 'imported', pack };
+    return { kind: 'resourcepack', outcome } as ModrinthInstallOutcome;
+  },
+  async getModrinthProvenance(sha256: string) {
+    await delay();
+    if (!sha256.startsWith('mock')) return null;
+    return {
+      project_id: '7q7JnQD0',
+      version_id: 'v2',
+      file_name: 'fresh-1.9.zip',
+    };
   },
 };
 

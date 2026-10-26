@@ -14,6 +14,15 @@ import type {
   ImportChoice,
   ImportOutcome,
   LevelBackupInfo,
+  ModrinthInstallArgs,
+  ModrinthInstallOutcome,
+  ModrinthKind,
+  ModrinthProject,
+  ModrinthProvenanceEntry,
+  ModrinthSearchHit,
+  ModrinthSort,
+  ModrinthTargets,
+  ModrinthVersion,
   Pack,
   PackListing,
   PackMeta,
@@ -61,7 +70,25 @@ export interface BackupsClient {
   restoreLevelBackup(world: string, backup: string): Promise<DataStack>;
 }
 
-export interface IpcClient extends PackClient, WorldsClient {
+/** The Modrinth discovery surface. Search fires only from the Discover page:
+ *  the local tabs never trigger a network request. */
+export interface DiscoverClient {
+  searchModrinth(
+    text: string,
+    kind: ModrinthKind,
+    gameVersion?: string | null,
+    sort?: ModrinthSort,
+    limit?: number,
+    offset?: number,
+  ): Promise<ModrinthSearchHit[]>;
+  getModrinthProject(projectId: string): Promise<ModrinthProject>;
+  listModrinthVersions(projectId: string): Promise<ModrinthVersion[]>;
+  modrinthTargets(world?: string | null): Promise<ModrinthTargets>;
+  installModrinthPack(args: ModrinthInstallArgs): Promise<ModrinthInstallOutcome>;
+  getModrinthProvenance(sha256: string): Promise<ModrinthProvenanceEntry | null>;
+}
+
+export interface IpcClient extends PackClient, WorldsClient, DiscoverClient {
   listGameDirs(): Promise<GameDirEntry[]>;
   addGameDir(path: string): Promise<GameDirState>;
   removeGameDir(path: string): Promise<GameDirState>;
@@ -196,6 +223,31 @@ const tauriClient: IpcClient = {
   listAllLevelBackups: () => call<LevelBackupInfo[]>('list_all_level_backups'),
   restoreLevelBackup: (world, backup) =>
     call<DataStack>('restore_level_backup', { world, backup }),
+  searchModrinth: (text, kind, gameVersion, sort, limit, offset) =>
+    call<ModrinthSearchHit[]>('search_modrinth', {
+      query: text,
+      kind,
+      gameVersion: gameVersion ?? null,
+      sort: sort ?? 'relevance',
+      limit: limit ?? 20,
+      offset: offset ?? 0,
+    }),
+  getModrinthProject: (projectId) =>
+    call<ModrinthProject>('get_modrinth_project', { projectId }),
+  listModrinthVersions: (projectId) =>
+    call<ModrinthVersion[]>('list_modrinth_versions', { projectId }),
+  modrinthTargets: (world) =>
+    call<ModrinthTargets>('modrinth_targets', { world: world ?? null }),
+  installModrinthPack: (args) =>
+    call<ModrinthInstallOutcome>('install_modrinth_pack', {
+      projectId: args.projectId,
+      versionId: args.versionId,
+      filename: args.filename,
+      kind: args.kind,
+      world: args.world ?? null,
+    }),
+  getModrinthProvenance: (sha256) =>
+    call<ModrinthProvenanceEntry | null>('get_modrinth_provenance', { sha256 }),
 };
 
 export function worldWithIconUrl(world: WireWorld): World {
@@ -242,6 +294,13 @@ export const ipc: IpcClient = {
   listLevelBackups: (world) => pick().listLevelBackups(world),
   listAllLevelBackups: () => pick().listAllLevelBackups(),
   restoreLevelBackup: (world, backup) => pick().restoreLevelBackup(world, backup),
+  searchModrinth: (text, kind, gameVersion, sort, limit, offset) =>
+    pick().searchModrinth(text, kind, gameVersion, sort, limit, offset),
+  getModrinthProject: (projectId) => pick().getModrinthProject(projectId),
+  listModrinthVersions: (projectId) => pick().listModrinthVersions(projectId),
+  modrinthTargets: (world) => pick().modrinthTargets(world),
+  installModrinthPack: (args) => pick().installModrinthPack(args),
+  getModrinthProvenance: (sha256) => pick().getModrinthProvenance(sha256),
 };
 
 function pick(): IpcClient {

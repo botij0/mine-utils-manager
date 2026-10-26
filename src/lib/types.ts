@@ -249,3 +249,82 @@ export interface LevelBackupInfo {
   bytes: number;
   display: string;
 }
+
+export type ModrinthKind = 'resourcepack' | 'datapack';
+
+export type ModrinthSort = 'relevance' | 'downloads' | 'follows' | 'newest' | 'updated';
+
+export interface ModrinthSearchHit {
+  project_id: string;
+  slug: string;
+  title: string;
+  description: string;
+  icon_url: string | null;
+  downloads: number;
+  follows: number;
+  project_type: string | null;
+  versions: string[];
+  latest_version: string | null;
+}
+
+export interface ModrinthHashes {
+  sha512: string;
+  sha1: string;
+}
+
+export interface ModrinthFile {
+  url: string;
+  filename: string;
+  size: number;
+  primary: boolean;
+  hashes: ModrinthHashes;
+}
+
+export interface ModrinthVersion {
+  id: string;
+  project_id: string;
+  name: string;
+  version_number: string;
+  game_versions: string[];
+  loaders: string[];
+  files: ModrinthFile[];
+}
+
+export interface ModrinthProject {
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  body: string;
+  icon_url: string | null;
+  downloads: number;
+  follows: number;
+  project_type: string | null;
+  game_versions: string[];
+  versions: string[];
+}
+
+export interface ModrinthTargets {
+  installed_versions: string[];
+  preferred_launcher: string | null;
+  world_version: string | null;
+}
+
+export interface ModrinthProvenanceEntry {
+  project_id: string;
+  version_id: string;
+  file_name: string;
+}
+
+export interface ModrinthInstallArgs {
+  projectId: string;
+  versionId: string;
+  filename: string;
+  kind: ModrinthKind;
+  /** Required for datapacks: the target world's dir name. */
+  world?: string;
+}
+
+export type ModrinthInstallOutcome =
+  | { kind: 'resourcepack'; outcome: ImportOutcome }
+  | { kind: 'datapack'; outcome: DatapackImportOutcome };

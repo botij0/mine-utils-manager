@@ -6,6 +6,15 @@ import type {
   GameDirEntry,
   GameDirState,
   LevelBackupInfo,
+  ModrinthInstallArgs,
+  ModrinthInstallOutcome,
+  ModrinthKind,
+  ModrinthProject,
+  ModrinthProvenanceEntry,
+  ModrinthSearchHit,
+  ModrinthSort,
+  ModrinthTargets,
+  ModrinthVersion,
   ResourceStack,
   StackEntry,
   Theme,
@@ -219,5 +228,219 @@ export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
     async restoreLevelBackup() {
       return dataStack();
     },
+    async searchModrinth(
+      text: string,
+      kind: ModrinthKind,
+      gameVersion?: string | null,
+      sort?: ModrinthSort,
+    ): Promise<ModrinthSearchHit[]> {
+      void gameVersion;
+      void sort;
+      if (text === '__offline__') {
+        throw new IpcError('modrinth_offline', 'Modrinth is unreachable');
+      }
+      if (text === '__boom__') {
+        throw new IpcError('modrinth_status', 'Modrinth request failed with status 500');
+      }
+      return fakeHits(kind);
+    },
+    async getModrinthProject(projectId: string): Promise<ModrinthProject> {
+      return fakeProject(projectId);
+    },
+    async listModrinthVersions(projectId: string): Promise<ModrinthVersion[]> {
+      return fakeVersions(projectId);
+    },
+    async modrinthTargets(): Promise<ModrinthTargets> {
+      return {
+        installed_versions: ['1.21', '1.21.1'],
+        preferred_launcher: '1.21.1',
+        world_version: '1.21.1',
+      };
+    },
+    async installModrinthPack(args: ModrinthInstallArgs): Promise<ModrinthInstallOutcome> {
+      if (args.filename.includes('mismatch')) {
+        throw new IpcError(
+          'download_hash_mismatch',
+          'download failed: SHA-512 mismatch (expected 00aa, got ffbb)',
+        );
+      }
+      if (args.kind === 'datapack') {
+        return { kind: 'datapack', outcome: { status: 'imported', filename: args.filename } };
+      }
+      return {
+        kind: 'resourcepack',
+        outcome: {
+          status: 'imported',
+          pack: {
+            id: args.filename,
+            name: args.filename.replace(/\.zip$/i, ''),
+            path: `/home/demo/.minecraft/resourcepacks/${args.filename}`,
+            location: 'zip',
+            kind: 'resource',
+            description: 'Installed from Modrinth.',
+            meta: {
+              pack_format: null,
+              min_format: null,
+              max_format: null,
+              supported_formats: null,
+              description: 'Installed from Modrinth.',
+            },
+            format: null,
+            format_range: null,
+            game_label: null,
+            icon: null,
+            error: null,
+            bytes_read: 0,
+          },
+        },
+      };
+    },
+    async getModrinthProvenance(): Promise<ModrinthProvenanceEntry | null> {
+      return null;
+    },
   };
+}
+
+function fakeHits(kind: ModrinthKind): ModrinthSearchHit[] {
+  if (kind === 'datapack') {
+    return [
+      {
+        project_id: 'dp1',
+        slug: 'pure-datapack',
+        title: 'Pure Datapack',
+        description: 'Only datapack files.',
+        icon_url: null,
+        downloads: 500,
+        follows: 5,
+        project_type: 'datapack',
+        versions: ['1.21.1'],
+        latest_version: 'd2',
+      },
+    ];
+  }
+  return [
+    {
+      project_id: '7q7JnQD0',
+      slug: 'fresh-animations',
+      title: 'Fresh Animations',
+      description: 'Fresh animations.',
+      icon_url: 'https://cdn.modrinth.com/icons/fresh.webp',
+      downloads: 100,
+      follows: 10,
+      project_type: 'resourcepack',
+      versions: ['1.21.1'],
+      latest_version: 'v2',
+    },
+  ];
+}
+
+function fakeProject(projectId: string): ModrinthProject {
+  const hit = fakeHits('resourcepack').find(
+    (item) => item.project_id === projectId || item.slug === projectId,
+  ) ?? {
+    project_id: projectId,
+    slug: projectId,
+    title: projectId,
+    description: '',
+    icon_url: null,
+    downloads: 0,
+    follows: 0,
+    project_type: 'resourcepack',
+    versions: [] as string[],
+    latest_version: null,
+  };
+  return {
+    id: hit.project_id,
+    slug: hit.slug,
+    title: hit.title,
+    description: hit.description,
+    body: hit.description,
+    icon_url: hit.icon_url,
+    downloads: hit.downloads,
+    follows: hit.follows,
+    project_type: hit.project_type,
+    game_versions: [...hit.versions],
+    versions: fakeVersions(hit.project_id).map((version) => version.id),
+  };
+}
+
+function fakeVersions(projectId: string): ModrinthVersion[] {
+  if (projectId === 'mm1' || projectId === 'mismatch-pack') {
+    return [
+      {
+        id: 'm1',
+        project_id: 'mm1',
+        name: 'Mismatch Pack 1.0',
+        version_number: '1.0',
+        game_versions: ['1.21.1'],
+        loaders: ['minecraft'],
+        files: [
+          {
+            url: 'https://cdn.modrinth.com/data/mm1/mismatch.zip',
+            filename: 'mismatch.zip',
+            size: 128,
+            primary: true,
+            hashes: { sha512: '00aa', sha1: '00' },
+          },
+        ],
+      },
+    ];
+  }
+  if (projectId === 'dp1' || projectId === 'pure-datapack') {
+    return [
+      {
+        id: 'd2',
+        project_id: 'dp1',
+        name: 'Pure Datapack 2.0',
+        version_number: '2.0',
+        game_versions: ['1.21.1'],
+        loaders: ['minecraft'],
+        files: [
+          {
+            url: 'https://cdn.modrinth.com/data/dp1/pure-2.0.zip',
+            filename: 'pure-2.0.zip',
+            size: 256,
+            primary: true,
+            hashes: { sha512: 'dp', sha1: 'dp1' },
+          },
+        ],
+      },
+    ];
+  }
+  return [
+    {
+      id: 'v2',
+      project_id: '7q7JnQD0',
+      name: 'Fresh Animations 1.9',
+      version_number: '1.9',
+      game_versions: ['1.21.1'],
+      loaders: ['minecraft'],
+      files: [
+        {
+          url: 'https://cdn.modrinth.com/data/7q7/fresh-1.9.zip',
+          filename: 'fresh-1.9.zip',
+          size: 1024,
+          primary: true,
+          hashes: { sha512: 'aa', sha1: 'a' },
+        },
+      ],
+    },
+    {
+      id: 'v1',
+      project_id: '7q7JnQD0',
+      name: 'Fresh Animations 1.8',
+      version_number: '1.8',
+      game_versions: ['1.20.1'],
+      loaders: ['minecraft'],
+      files: [
+        {
+          url: 'https://cdn.modrinth.com/data/7q7/fresh-1.8.zip',
+          filename: 'fresh-1.8.zip',
+          size: 900,
+          primary: true,
+          hashes: { sha512: 'bb', sha1: 'b' },
+        },
+      ],
+    },
+  ];
 }

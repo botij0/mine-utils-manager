@@ -4,11 +4,18 @@ import App from './App';
 import type { IpcClient } from './lib/ipc';
 import type { GameRunning } from './lib/types';
 import { IpcError } from './lib/types';
-import { makeFakeClient } from './test/fake-ipc';
+import { makeFakeClient, gameDir } from './test/fake-ipc';
 
 afterEach(() => {
   vi.useRealTimers();
 });
+
+/** A client past onboarding: a stored dir set active, like a returning user. */
+async function shellClient() {
+  const client = makeFakeClient([gameDir('/home/demo/.minecraft', true, true)]);
+  await client.setActiveGameDir('/home/demo/.minecraft');
+  return client;
+}
 
 function stackResponse(running: GameRunning | null) {
   return {
@@ -22,7 +29,7 @@ function stackResponse(running: GameRunning | null) {
 
 describe('App', () => {
   it('shows the startup warning and the shell', async () => {
-    const client = makeFakeClient([]);
+    const client = await shellClient();
     const withWarning: IpcClient = {
       ...client,
       getStartupWarning: async () => 'The config file could not be read.',
@@ -40,7 +47,7 @@ describe('App', () => {
     // Only the five-second poll uses timers; the rest of the page keeps real
     // timers so Testing Library can await normal UI updates.
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
-    const client = makeFakeClient([]);
+    const client = await shellClient();
     const running: GameRunning = {
       kind: 'process',
       detail: 'pid 4242 runs java',
@@ -71,7 +78,7 @@ describe('App', () => {
   });
 
   it('shows the unavailable banner when the first guard check fails', async () => {
-    const client = makeFakeClient([]);
+    const client = await shellClient();
     client.getResourceStack = async () => {
       throw new IpcError('io', 'guard read failed');
     };
@@ -84,5 +91,15 @@ describe('App', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText('Minecraft is running.')).not.toBeInTheDocument();
+  });
+
+  it('shows onboarding on first run and skips to the shell', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    const client = makeFakeClient([]);
+    render(<App client={client} />);
+
+    expect(await screen.findByText('Welcome to Mine Utils')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Skip for now' }));
+    expect(await screen.findByRole('button', { name: 'Resource Packs' })).toBeInTheDocument();
   });
 });
