@@ -29,6 +29,25 @@ export function preferModrinthVersion(
   return versions[0];
 }
 
+/** A datapack version installs as a `.zip` (the backend `data/` root check
+ *  and the `.zip` guard both require it). A version can also carry mod
+ *  `.jar` files, which can never install as a datapack. */
+export function isDatapackVersion(version: ModrinthVersion): boolean {
+  const file = version.files.find((item) => item.primary) ?? version.files[0];
+  return !!file && file.filename.toLowerCase().endsWith('.zip');
+}
+
+/** Versions visible for a tab: datapacks keep only `.zip` versions (no jar
+ *  fallback — an empty list renders the empty-versions state); resource
+ *  packs keep every version. */
+export function versionsForKind(
+  versions: ModrinthVersion[],
+  kind: ModrinthKind,
+): ModrinthVersion[] {
+  if (kind !== 'datapack') return versions;
+  return versions.filter(isDatapackVersion);
+}
+
 /** Network-level failures show the offline state; every other failure shows
  *  the inline error with a retry. */
 export function isOfflineError(err: IpcError): boolean {
@@ -193,12 +212,13 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
         ]);
         if (!mounted.current || selectToken.current !== token) return;
         setProject(loadedProject);
-        setVersions(loadedVersions);
+        const visible = versionsForKind(loadedVersions, kind);
+        setVersions(visible);
         const preferred = preferModrinthVersion(
-          loadedVersions,
+          visible,
           kind === 'datapack' ? targets?.world_version ?? null : (targets?.preferred_launcher ?? null),
         );
-        setSelectedVersionId(preferred?.id ?? loadedVersions[0]?.id ?? null);
+        setSelectedVersionId(preferred?.id ?? visible[0]?.id ?? null);
       } catch (err) {
         if (!mounted.current || selectToken.current !== token) return;
         setDetailError(toAppError(err));

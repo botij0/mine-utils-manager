@@ -330,4 +330,99 @@ describe('useModrinth', () => {
     expect(result.current.project).toBeNull();
     expect(result.current.versions).toEqual([]);
   });
+
+  it('datapack tab keeps only .zip versions and installs the zip file', async () => {
+    const client = makeFakeClient([]);
+    const zip = {
+      id: 'zip-v',
+      project_id: 'mixed-dp',
+      name: 'Mixed 2.0',
+      version_number: '2.0',
+      game_versions: ['1.21.1'],
+      loaders: ['datapack'],
+      files: [
+        {
+          url: 'https://cdn.modrinth.com/data/mixed/mixed-2.0.zip',
+          filename: 'mixed-2.0.zip',
+          size: 256,
+          primary: true,
+          hashes: { sha512: 'zz', sha1: 'z' },
+        },
+      ],
+    };
+    const jar = {
+      id: 'jar-v',
+      project_id: 'mixed-dp',
+      name: 'Mixed 1.0 fabric',
+      version_number: '1.0',
+      game_versions: ['1.21.1'],
+      loaders: ['fabric'],
+      files: [
+        {
+          url: 'https://cdn.modrinth.com/data/mixed/mixed-1.0.jar',
+          filename: 'mixed-1.0.jar',
+          size: 512,
+          primary: true,
+          hashes: { sha512: 'jj', sha1: 'j' },
+        },
+      ],
+    };
+    client.listModrinthVersions = async () => [zip, jar];
+    let sentFilename: string | null = null;
+    const origInstall = client.installModrinthPack.bind(client);
+    client.installModrinthPack = async (args) => {
+      sentFilename = args.filename;
+      return origInstall(args);
+    };
+    const { result } = renderHook(() => useModrinth(client));
+    await act(async () => {
+      result.current.setKind('datapack');
+    });
+    await act(async () => {
+      await result.current.select({ ...freshHit(), project_id: 'mixed-dp' });
+    });
+    expect(result.current.versions.map((version) => version.id)).toEqual(['zip-v']);
+    expect(result.current.selectedVersionId).toBe('zip-v');
+    await act(async () => {
+      await result.current.install();
+    });
+    expect(sentFilename).toBe('mixed-2.0.zip');
+  });
+
+  it('datapack tab with only jar versions selects nothing and blocks install', async () => {
+    const client = makeFakeClient([]);
+    client.listModrinthVersions = async () => [
+      {
+        id: 'jar-only',
+        project_id: 'jar-only',
+        name: 'Jar Only 1.0',
+        version_number: '1.0',
+        game_versions: ['1.21.1'],
+        loaders: ['fabric'],
+        files: [
+          {
+            url: 'https://cdn.modrinth.com/data/jar/jar-1.0.jar',
+            filename: 'jar-1.0.jar',
+            size: 512,
+            primary: true,
+            hashes: { sha512: 'jj', sha1: 'j' },
+          },
+        ],
+      },
+    ];
+    const { result } = renderHook(() => useModrinth(client));
+    await act(async () => {
+      result.current.setKind('datapack');
+    });
+    await act(async () => {
+      await result.current.select({ ...freshHit(), project_id: 'jar-only' });
+    });
+    expect(result.current.versions).toEqual([]);
+    expect(result.current.selectedVersionId).toBeNull();
+    await act(async () => {
+      await result.current.install();
+    });
+    expect(result.current.installResult).toBeNull();
+    expect(result.current.installError).not.toBeNull();
+  });
 });
