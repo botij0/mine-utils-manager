@@ -31,6 +31,9 @@ pub enum AppError {
     LevelBackup {
         reason: String,
     },
+    Modrinth(crate::modrinth::ModrinthError),
+    Download(crate::download::DownloadError),
+    Provenance(crate::provenance::ProvenanceError),
     Backup {
         reason: String,
     },
@@ -53,6 +56,9 @@ impl AppError {
             AppError::World { .. } => "world",
             AppError::LevelDat(err) => err.code(),
             AppError::DataStack(err) => err.code(),
+            AppError::Modrinth(err) => err.code(),
+            AppError::Download(err) => err.code(),
+            AppError::Provenance(err) => err.code(),
             AppError::Backup { .. } => "backup",
             AppError::LevelBackup { .. } => "level_backup",
             AppError::GameRunning { .. } => "game_running",
@@ -82,6 +88,9 @@ impl fmt::Display for AppError {
             AppError::World { reason } => write!(f, "world error: {reason}"),
             AppError::LevelDat(err) => write!(f, "{err}"),
             AppError::DataStack(err) => write!(f, "{err}"),
+            AppError::Modrinth(err) => write!(f, "{err}"),
+            AppError::Download(err) => write!(f, "{err}"),
+            AppError::Provenance(err) => write!(f, "{err}"),
             AppError::LevelBackup { reason } => write!(f, "level backup failed: {reason}"),
             AppError::Backup { reason } => write!(f, "backup failed: {reason}"),
             AppError::GameRunning { running } => write!(
@@ -128,6 +137,24 @@ impl From<crate::resource_stack::StackError> for AppError {
 impl From<crate::options_txt::OptionsError> for AppError {
     fn from(err: crate::options_txt::OptionsError) -> Self {
         AppError::Options(err)
+    }
+}
+
+impl From<crate::modrinth::ModrinthError> for AppError {
+    fn from(err: crate::modrinth::ModrinthError) -> Self {
+        AppError::Modrinth(err)
+    }
+}
+
+impl From<crate::download::DownloadError> for AppError {
+    fn from(err: crate::download::DownloadError) -> Self {
+        AppError::Download(err)
+    }
+}
+
+impl From<crate::provenance::ProvenanceError> for AppError {
+    fn from(err: crate::provenance::ProvenanceError) -> Self {
+        AppError::Provenance(err)
     }
 }
 
