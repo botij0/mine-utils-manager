@@ -46,7 +46,8 @@
         "bundleMediaFramework": false
       },
       "rpm": {
-        "depends": ["webkit2gtk4.1", "gtk3"]
+        "depends": ["webkit2gtk4.1", "gtk3"],
+        "desktopTemplate": "linux/mine-utils.desktop.hbs"
       }
     }
   }

@@ -37,7 +37,9 @@ release to upgrade, and verify the checksum above.
 - Node 22 and pnpm 10
 - Rust stable
 - On Linux, the Tauri system dependencies. See the `tauri` job in
-  `.github/workflows/ci.yml` for the package list.
+  `.github/workflows/ci.yml` for the package list. For the full release
+  artifacts (AppImage + RPM, `.github/workflows/release.yml`) you also need
+  `rpm`/`rpmbuild` plus the webkit/gtk dev packages in `release.yml`.
 
 ## Develop
 
@@ -136,7 +138,10 @@ Launcher and MultiMC instance dirs. A dir counts when it holds `versions`,
   and leaves nothing behind. The verified file is committed under the API
   filename without replacing an existing file, then routed through the same
   import/enable path as a manual install; a running game refuses before any
-  download starts.
+  download starts, except a locked datapack world, which still copies the new
+  datapack and leaves it disabled (`Locked`) until the lock releases. A fresh
+  game dir with no `options.txt` is refused before any download: launch
+  Minecraft once so it writes the file, then install.
 - A hash mismatch, a non-zip, or a wrong archive root is never retried.
   A 429 or 5xx is retried up to three times, honoring `Retry-After`.
 
@@ -146,8 +151,8 @@ Launcher and MultiMC instance dirs. A dir counts when it holds `versions`,
   Modrinth result icons are plain remote HTTPS and are unaffected.
 - A locked world copies a new datapack but leaves it disabled until the lock
   releases.
-- The installed `.desktop` entry lists `Categories=Utility;` only. Tauri v2
-  exposes a single `bundle.category` string and no desktop template, so
-  `Utility;Game;` cannot be expressed in `tauri.conf.json`; changing it is
-  the operator's call at packaging time.
+- The installed `.desktop` entry lists `Categories=Utility;Game;` for the RPM
+  (via `src-tauri/linux/mine-utils.desktop.hbs`). The AppImage entry remains
+  `Utility;` because the AppImage config has no template; that category is the
+  operator's call at packaging time.
 - No auto-update: watch the releases page for new versions.
