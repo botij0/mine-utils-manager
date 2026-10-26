@@ -326,5 +326,5 @@ export interface ModrinthInstallArgs {
 }
 
 export type ModrinthInstallOutcome =
-  | { kind: 'resourcepack'; outcome: ImportOutcome }
-  | { kind: 'datapack'; outcome: DatapackImportOutcome };
+  | { kind: 'resourcepack'; outcome: ImportOutcome; provenance_warning?: string | null }
+  | { kind: 'datapack'; outcome: DatapackImportOutcome; provenance_warning?: string | null };

@@ -1,4 +1,5 @@
 import type { ModrinthSearchHit } from '../../lib/types';
+import { isTrustedIconUrl } from './icon';
 
 interface ProjectGridProps {
   hits: ModrinthSearchHit[];
@@ -23,10 +24,18 @@ export default function ProjectGrid({ hits, selectedId, onSelect }: ProjectGridP
             onClick={() => onSelect(hit)}
             aria-label={`${hit.title}, ${hit.downloads} downloads`}
           >
-            {hit.icon_url ? (
+            {isTrustedIconUrl(hit.icon_url) ? (
               // Remote Modrinth CDN icons: plain HTTPS, never the local
               // asset:// icon path (see issue #8 for the installed icons).
-              <img className="pack-icon" src={hit.icon_url} alt="" loading="lazy" />
+              // Untrusted hosts render the placeholder instead of being
+              // fetched; no referrer is sent either way.
+              <img
+                className="pack-icon"
+                src={hit.icon_url}
+                alt=""
+                loading="lazy"
+                referrerPolicy="no-referrer"
+              />
             ) : (
               <span className="pack-icon-fallback" aria-hidden="true">
                 {hit.title.slice(0, 2).toUpperCase()}

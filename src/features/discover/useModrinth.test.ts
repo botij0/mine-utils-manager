@@ -176,4 +176,91 @@ describe('useModrinth', () => {
     });
     expect(calls).toBe(0);
   });
+
+  it('clears stale hits when the kind tab changes, then searches the new tab', async () => {
+    const client = makeFakeClient([]);
+    const result = await searchFor(client, 'fresh');
+    expect(result.current.hits.length).toBeGreaterThan(0);
+    expect(
+      result.current.hits.every((hit) => hit.project_type === 'resourcepack'),
+    ).toBe(true);
+    await act(async () => {
+      result.current.setKind('datapack');
+    });
+    // The old tab's hits are dropped synchronously, before the new tab's
+    // search for the same query lands.
+    expect(
+      result.current.hits.every((hit) => hit.project_type !== 'resourcepack'),
+    ).toBe(true);
+    await flushSearch();
+    expect(result.current.hits.length).toBeGreaterThan(0);
+    expect(
+      result.current.hits.every((hit) => hit.project_type === 'datapack'),
+    ).toBe(true);
+  });
+
+  it('ignores stale project responses when the selection changes fast', async () => {
+    const client = makeFakeClient([]);
+    const slowHit: ModrinthSearchHit = { ...freshHit(), project_id: 'slow', title: 'Slow' };
+    const fastHit: ModrinthSearchHit = { ...freshHit(), project_id: 'fast', title: 'Fast' };
+    let resolveSlow!: () => void;
+    const slowGate = new Promise<void>((resolve) => {
+      resolveSlow = resolve;
+    });
+    const origProject = client.getModrinthProject.bind(client);
+    const origVersions = client.listModrinthVersions.bind(client);
+    client.getModrinthProject = async (id) => {
+      if (id === 'slow') await slowGate;
+      return origProject(id);
+    };
+    client.listModrinthVersions = async (id) => {
+      if (id === 'slow') await slowGate;
+      return origVersions(id);
+    };
+    const { result } = renderHook(() => useModrinth(client));
+
+    let first!: Promise<void>;
+    await act(async () => {
+      first = result.current.select(slowHit);
+    });
+    await act(async () => {
+      await result.current.select(fastHit);
+    });
+    await act(async () => {
+      resolveSlow();
+      await first;
+    });
+    await act(async () => {});
+    expect(result.current.selected?.project_id).toBe('fast');
+    // The slow response landed last but must not overwrite the fast one.
+    expect(result.current.project?.title).toBe('fast');
+    expect(result.current.detailLoading).toBe(false);
+  });
+
+  it('re-runs the version preference when the datapack world changes', async () => {
+    const client = makeFakeClient([]);
+    const origTargets = client.modrinthTargets.bind(client);
+    client.modrinthTargets = async (world) => ({
+      ...(await origTargets(world)),
+      world_version: world === 'nether' ? '1.20.1' : '1.21.1',
+    });
+    const { result } = renderHook(() => useModrinth(client));
+    await act(async () => {
+      result.current.setKind('datapack');
+    });
+    await act(async () => {
+      result.current.setWorld('overworld');
+    });
+    await act(async () => {
+      await result.current.select(freshHit());
+    });
+    expect(result.current.selectedVersionId).toBe('v2');
+    await act(async () => {
+      result.current.setWorld('nether');
+    });
+    await act(async () => {});
+    await act(async () => {});
+    // v2 supports only 1.21.1, so the preference resets to the 1.20.1 build.
+    expect(result.current.selectedVersionId).toBe('v1');
+  });
 });

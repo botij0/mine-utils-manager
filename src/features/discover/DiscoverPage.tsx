@@ -7,7 +7,7 @@ import InstallSheet from './InstallSheet';
 import ProjectDetail from './ProjectDetail';
 import ProjectGrid from './ProjectGrid';
 import SearchBar from './SearchBar';
-import { preferModrinthVersion, useModrinth } from './useModrinth';
+import { useModrinth } from './useModrinth';
 
 interface DiscoverPageProps {
   client?: IpcClient;
@@ -15,6 +15,8 @@ interface DiscoverPageProps {
   gameRunning?: GameRunning | null;
   /** A failed guard check: unknown, so installs stay paused. */
   gameGuardUnknown?: boolean;
+  /** False when no game dir is active: installs have nowhere to go. */
+  hasGameDir?: boolean;
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
   /** Fires after a successful install so the app refreshes Packs/Worlds. */
@@ -25,6 +27,7 @@ export default function DiscoverPage({
   client = ipc,
   gameRunning,
   gameGuardUnknown = false,
+  hasGameDir = false,
   refreshGameRunning = () => {},
   onInstalled = () => {},
 }: DiscoverPageProps) {
@@ -48,19 +51,29 @@ export default function DiscoverPage({
     };
   }, [client, discover.kind]);
 
-  const writesBlocked = gameRunning !== undefined && (gameRunning !== null || gameGuardUnknown);
-  const blockedReason =
-    gameRunning != null
+  // Unknown (before the first check, or a failed check) blocks installs: the
+  // UI must never offer a write it cannot guard.
+  const writesBlocked =
+    gameRunning === undefined || gameRunning !== null || gameGuardUnknown || !hasGameDir;
+  const blockedReason = !hasGameDir
+    ? 'No game dir is active. Pick a game dir in Settings first, then install.'
+    : gameRunning != null
       ? `Minecraft is running (${gameRunning.detail}); installs are paused until it closes.`
-      : gameGuardUnknown
-        ? 'The game guard is unavailable, so installs are paused.'
+      : gameGuardUnknown || gameRunning === undefined
+        ? 'Checking whether Minecraft is running; installs are paused until the check lands.'
         : null;
 
-  const preferred = preferModrinthVersion(discover.versions, discover.targetVersion);
   const selectedVersion =
     discover.versions.find((version) => version.id === discover.selectedVersionId) ?? null;
   const selectedFile =
     selectedVersion?.files.find((item) => item.primary) ?? selectedVersion?.files[0] ?? null;
+  // The "(compatible)" label is honest: only a version whose game_versions
+  // actually contain the target gets it. A default newest pick is unlabeled.
+  const compatibleId = discover.targetVersion
+    ? (discover.versions.find((version) =>
+        version.game_versions.includes(discover.targetVersion as string),
+      )?.id ?? null)
+    : null;
 
   const openInstall = () => setInstallOpen(true);
   const closeInstall = () => {
@@ -139,21 +152,8 @@ export default function DiscoverPage({
           onSelect={(hit) => void discover.select(hit)}
         />
       ) : null}
-      {discover.selected ? (
-        <ProjectDetail
-          hit={discover.selected}
-          project={discover.project}
-          versions={discover.versions}
-          loading={discover.detailLoading}
-          error={discover.detailError}
-          selectedVersionId={discover.selectedVersionId}
-          onSelectVersion={discover.setSelectedVersionId}
-          preferredId={preferred?.id ?? null}
-          targetLabel={discover.targetVersion}
-          onInstall={openInstall}
-          onClose={discover.closeDetail}
-        />
-      ) : null}
+      {/* One dialog at a time: the install sheet replaces the detail sheet
+          instead of stacking on top of it. */}
       {installOpen && discover.selected ? (
         <InstallSheet
           open
@@ -172,10 +172,25 @@ export default function DiscoverPage({
           busy={discover.installBusy}
           writesBlocked={writesBlocked}
           blockedReason={blockedReason}
+          hasGameDir={hasGameDir}
           result={discover.installResult}
           error={discover.installError}
           onClose={closeInstall}
           onInstall={() => void onInstall()}
+        />
+      ) : discover.selected ? (
+        <ProjectDetail
+          hit={discover.selected}
+          project={discover.project}
+          versions={discover.versions}
+          loading={discover.detailLoading}
+          error={discover.detailError}
+          selectedVersionId={discover.selectedVersionId}
+          onSelectVersion={discover.setSelectedVersionId}
+          compatibleId={compatibleId}
+          targetLabel={discover.targetVersion}
+          onInstall={openInstall}
+          onClose={discover.closeDetail}
         />
       ) : null}
     </section>

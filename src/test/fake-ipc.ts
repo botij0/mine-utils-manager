@@ -10,7 +10,6 @@ import type {
   ModrinthInstallOutcome,
   ModrinthKind,
   ModrinthProject,
-  ModrinthProvenanceEntry,
   ModrinthSearchHit,
   ModrinthSort,
   ModrinthTargets,
@@ -294,9 +293,6 @@ export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
           },
         },
       };
-    },
-    async getModrinthProvenance(): Promise<ModrinthProvenanceEntry | null> {
-      return null;
     },
   };
 }

@@ -199,6 +199,7 @@ export default function App({ client = ipc }: AppProps) {
               client={client}
               gameRunning={gameRunning}
               gameGuardUnknown={gameGuardUnknown}
+              hasGameDir={config.active_game_dir != null}
               refreshGameRunning={refreshGameRunning}
               onInstalled={() => setRefreshEpoch((epoch) => epoch + 1)}
             />

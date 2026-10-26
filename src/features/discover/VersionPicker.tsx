@@ -4,8 +4,9 @@ interface VersionPickerProps {
   versions: ModrinthVersion[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  /** The version the list prefers for the active game/world, if any. */
-  preferredId: string | null;
+  /** The version compatible with the active game/world, if any. Only this
+   *  id renders "(compatible)": a default newest pick is never labeled. */
+  compatibleId: string | null;
   targetLabel: string | null;
 }
 
@@ -13,7 +14,7 @@ export default function VersionPicker({
   versions,
   selectedId,
   onSelect,
-  preferredId,
+  compatibleId,
   targetLabel,
 }: VersionPickerProps) {
   if (versions.length === 0) {
@@ -37,7 +38,7 @@ export default function VersionPicker({
             {version.game_versions.length > 0
               ? version.game_versions.join(', ')
               : 'unknown game versions'}
-            {version.id === preferredId ? ' (compatible)' : ''}
+            {version.id === compatibleId ? ' (compatible)' : ''}
           </option>
         ))}
       </select>

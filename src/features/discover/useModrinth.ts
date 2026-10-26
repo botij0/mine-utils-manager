@@ -99,6 +99,7 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
   const [installResult, setInstallResult] = useState<ModrinthInstallOutcome | null>(null);
   const [installError, setInstallError] = useState<IpcError | null>(null);
   const requestId = useRef(0);
+  const selectToken = useRef(0);
   const mounted = useRef(true);
   const [retryNonce, setRetryNonce] = useState(0);
 
@@ -147,7 +148,7 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
     requestId.current = id;
     setSearching(true);
     client
-      .searchModrinth(debouncedQuery, kind, gameVersion || null, sort, 20, 0)
+      .searchModrinth(debouncedQuery, kind, gameVersion || null, sort)
       .then((found) => {
         if (!mounted.current || requestId.current !== id) return;
         setHits(found);
@@ -171,6 +172,8 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
 
   const select = useCallback(
     async (hit: ModrinthSearchHit | null) => {
+      const token = selectToken.current + 1;
+      selectToken.current = token;
       setSelected(hit);
       setProject(null);
       setVersions([]);
@@ -185,7 +188,7 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
           client.getModrinthProject(hit.project_id),
           client.listModrinthVersions(hit.project_id),
         ]);
-        if (!mounted.current) return;
+        if (!mounted.current || selectToken.current !== token) return;
         setProject(loadedProject);
         setVersions(loadedVersions);
         const preferred = preferModrinthVersion(
@@ -194,23 +197,49 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
         );
         setSelectedVersionId(preferred?.id ?? loadedVersions[0]?.id ?? null);
       } catch (err) {
-        if (!mounted.current) return;
+        if (!mounted.current || selectToken.current !== token) return;
         setDetailError(toAppError(err));
       } finally {
-        if (mounted.current) setDetailLoading(false);
+        if (mounted.current && selectToken.current === token) setDetailLoading(false);
       }
     },
     [client, kind, targets],
   );
 
   const setKindAndClear = useCallback((next: ModrinthKind) => {
+    // A new tab is a new search: drop the old hits so a stale datapack list
+    // never renders under the resource-pack tab (and vice versa).
+    requestId.current += 1;
     setKind(next);
+    setHits([]);
+    setSearched(false);
+    setSearching(false);
+    setError(null);
+    setOffline(false);
     setSelected(null);
     setProject(null);
     setVersions([]);
     setInstallResult(null);
     setInstallError(null);
   }, []);
+
+  // When the datapack target world changes, re-run the version preference:
+  // a version picked for the old world's game version may not support the
+  // new one. A compatible manual pick is left alone; an incompatible one is
+  // reset to the compatible-first (or newest) version.
+  const worldTarget = targets?.world_version ?? null;
+  useEffect(() => {
+    if (kind !== 'datapack' || versions.length === 0) return;
+    setSelectedVersionId((current) => {
+      const picked = versions.find((version) => version.id === current) ?? null;
+      if (picked && (!worldTarget || picked.game_versions.includes(worldTarget))) {
+        return current;
+      }
+      return preferModrinthVersion(versions, worldTarget)?.id ?? current;
+    });
+    // Runs only on target-world changes, not on every versions load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, worldTarget]);
 
   const retry = useCallback(() => {
     setOffline(false);

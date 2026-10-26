@@ -761,15 +761,6 @@ export const mockClient: IpcClient = {
     const outcome: ImportOutcome = { status: 'imported', pack };
     return { kind: 'resourcepack', outcome } as ModrinthInstallOutcome;
   },
-  async getModrinthProvenance(sha256: string) {
-    await delay();
-    if (!sha256.startsWith('mock')) return null;
-    return {
-      project_id: '7q7JnQD0',
-      version_id: 'v2',
-      file_name: 'fresh-1.9.zip',
-    };
-  },
 };
 
 /** Reset the mock pack list between browser demos or tests. */
