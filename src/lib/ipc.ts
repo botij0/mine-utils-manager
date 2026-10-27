@@ -14,6 +14,14 @@ import type {
   ImportChoice,
   ImportOutcome,
   LevelBackupInfo,
+  ModrinthInstallArgs,
+  ModrinthInstallOutcome,
+  ModrinthKind,
+  ModrinthProject,
+  ModrinthSearchHit,
+  ModrinthSort,
+  ModrinthTargets,
+  ModrinthVersion,
   Pack,
   PackListing,
   PackMeta,
@@ -61,7 +69,22 @@ export interface BackupsClient {
   restoreLevelBackup(world: string, backup: string): Promise<DataStack>;
 }
 
-export interface IpcClient extends PackClient, WorldsClient {
+/** The Modrinth discovery surface. Search fires only from the Discover page:
+ *  the local tabs never trigger a network request. */
+export interface DiscoverClient {
+  searchModrinth(
+    text: string,
+    kind: ModrinthKind,
+    gameVersion?: string | null,
+    sort?: ModrinthSort,
+  ): Promise<ModrinthSearchHit[]>;
+  getModrinthProject(projectId: string): Promise<ModrinthProject>;
+  listModrinthVersions(projectId: string): Promise<ModrinthVersion[]>;
+  modrinthTargets(world?: string | null): Promise<ModrinthTargets>;
+  installModrinthPack(args: ModrinthInstallArgs): Promise<ModrinthInstallOutcome>;
+}
+
+export interface IpcClient extends PackClient, WorldsClient, DiscoverClient {
   listGameDirs(): Promise<GameDirEntry[]>;
   addGameDir(path: string): Promise<GameDirState>;
   removeGameDir(path: string): Promise<GameDirState>;
@@ -196,6 +219,37 @@ const tauriClient: IpcClient = {
   listAllLevelBackups: () => call<LevelBackupInfo[]>('list_all_level_backups'),
   restoreLevelBackup: (world, backup) =>
     call<DataStack>('restore_level_backup', { world, backup }),
+  searchModrinth: (text, kind, gameVersion, sort) =>
+    call<ModrinthSearchHit[]>('search_modrinth', {
+      query: text,
+      kind,
+      gameVersion: gameVersion ?? null,
+      sort: sort ?? 'relevance',
+    }),
+  getModrinthProject: (projectId) =>
+    call<ModrinthProject>('get_modrinth_project', { projectId }),
+  listModrinthVersions: (projectId) =>
+    call<ModrinthVersion[]>('list_modrinth_versions', { projectId }),
+  modrinthTargets: (world) =>
+    call<ModrinthTargets>('modrinth_targets', { world: world ?? null }),
+  installModrinthPack: async (args) => {
+    const outcome = await call<ModrinthInstallOutcome>('install_modrinth_pack', {
+      projectId: args.projectId,
+      versionId: args.versionId,
+      filename: args.filename,
+      kind: args.kind,
+      world: args.world ?? null,
+    });
+    // The resource outcome carries a server-side icon path; convert it to a
+    // URL exactly like a manual Packs import. The wire kind is `resourcepack`.
+    if (outcome.kind === 'resourcepack') {
+      return {
+        ...outcome,
+        outcome: outcomeWithIconUrl(outcome.outcome as WireImportOutcome),
+      };
+    }
+    return outcome;
+  },
 };
 
 export function worldWithIconUrl(world: WireWorld): World {
@@ -242,6 +296,12 @@ export const ipc: IpcClient = {
   listLevelBackups: (world) => pick().listLevelBackups(world),
   listAllLevelBackups: () => pick().listAllLevelBackups(),
   restoreLevelBackup: (world, backup) => pick().restoreLevelBackup(world, backup),
+  searchModrinth: (text, kind, gameVersion, sort) =>
+    pick().searchModrinth(text, kind, gameVersion, sort),
+  getModrinthProject: (projectId) => pick().getModrinthProject(projectId),
+  listModrinthVersions: (projectId) => pick().listModrinthVersions(projectId),
+  modrinthTargets: (world) => pick().modrinthTargets(world),
+  installModrinthPack: (args) => pick().installModrinthPack(args),
 };
 
 function pick(): IpcClient {

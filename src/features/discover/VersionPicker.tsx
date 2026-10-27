@@ -1,0 +1,50 @@
+import type { ModrinthVersion } from '../../lib/types';
+
+interface VersionPickerProps {
+  versions: ModrinthVersion[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  /** The version compatible with the active game/world, if any. Only this
+   *  id renders "(compatible)": a default newest pick is never labeled. */
+  compatibleId: string | null;
+  targetLabel: string | null;
+}
+
+export default function VersionPicker({
+  versions,
+  selectedId,
+  onSelect,
+  compatibleId,
+  targetLabel,
+}: VersionPickerProps) {
+  if (versions.length === 0) {
+    return <p className="empty-note">No versions published yet.</p>;
+  }
+  return (
+    <div className="field">
+      <label htmlFor="discover-version-picker">
+        Version
+        {compatibleId && targetLabel ? ` (compatible with ${targetLabel} preselected)` : null}
+      </label>
+      {targetLabel && !compatibleId ? (
+        <p className="empty-note">No published version lists {targetLabel}; the backend rejects a mismatch on install.</p>
+      ) : null}
+      <select
+        id="discover-version-picker"
+        value={selectedId ?? ''}
+        onChange={(event) => onSelect(event.target.value)}
+      >
+        {versions.map((version) => (
+          <option key={version.id} value={version.id}>
+            {version.version_number || version.name || version.id}
+            {' — '}
+            {version.game_versions.length > 0
+              ? version.game_versions.join(', ')
+              : 'unknown game versions'}
+            {version.id === compatibleId ? ' (compatible)' : ''}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}

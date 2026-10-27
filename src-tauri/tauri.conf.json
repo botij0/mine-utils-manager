@@ -30,13 +30,25 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["appimage", "rpm"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "category": "Utility",
+    "shortDescription": "Manage Minecraft resource packs and datapacks",
+    "longDescription": "Mine Utils lists and imports Minecraft Java resource packs and world datapacks, toggles them through the resource and data stacks, and discovers new packs on Modrinth. Game folders stay the source of truth; writes are blocked while the game runs and every write keeps a backup. No signing and no auto-update: install a new release to upgrade.",
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      },
+      "rpm": {
+        "depends": ["webkit2gtk4.1", "gtk3"],
+        "desktopTemplate": "linux/mine-utils.desktop.hbs"
+      }
+    }
   }
 }

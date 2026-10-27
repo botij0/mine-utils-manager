@@ -2,9 +2,11 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use mine_utils_core::{
-    backup, data_format_table, data_stack, discover_game_dirs, entry_for, home_dir, import_pack,
-    level_backup, resource_stack, scan_packs, world, AppPaths, DataPaths, GameDirEntry, HashCache,
-    IconCache, ImportChoice, ImportOutcome, PackListing, ResourceStack, StackPaths, WorldPaths,
+    backup, data_format_table, data_stack, discover_game_dirs, entry_for, finish_modrinth_install,
+    home_dir, import_pack, level_backup, prepare_modrinth_install, primary_file, resource_stack,
+    scan_packs, world, AppPaths, DataPaths, GameDirEntry, HashCache, IconCache, ImportChoice,
+    ImportOutcome, ModrinthClient, PackListing, ReqwestTransport, ResourceStack, SearchKind,
+    SearchQuery, SearchSort, StackPaths, WorldPaths, ZipRoot,
 };
 
 fn main() {
@@ -191,6 +193,122 @@ fn run() -> Result<String, String> {
             }))
             .map_err(|err| err.to_string())
         }
+        Some("search-modrinth") => {
+            let query = args
+                .next()
+                .ok_or_else(|| format!("search-modrinth needs a query\n{USAGE}"))?;
+            let kind = match args.next().as_deref() {
+                None | Some("resourcepack") => SearchKind::ResourcePack,
+                Some("datapack") => SearchKind::Datapack,
+                Some(other) => return Err(format!("unknown kind {other}\n{USAGE}")),
+            };
+            let game_version = args.next();
+            let client =
+                ModrinthClient::new(ReqwestTransport::new().map_err(|err| err.to_string())?);
+            let started = Instant::now();
+            let hits = client
+                .search(&SearchQuery {
+                    text: query,
+                    kind,
+                    game_version,
+                    sort: SearchSort::Relevance,
+                    limit: 20,
+                    offset: 0,
+                })
+                .map_err(|err| err.to_string())?;
+            serde_json::to_string_pretty(&serde_json::json!({
+                "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+                "count": hits.len(),
+                "hits": hits,
+            }))
+            .map_err(|err| err.to_string())
+        }
+        Some("install-modrinth") => {
+            let project = args
+                .next()
+                .ok_or_else(|| format!("install-modrinth needs a project id\n{USAGE}"))?;
+            let version = args
+                .next()
+                .ok_or_else(|| format!("install-modrinth needs a version id\n{USAGE}"))?;
+            let kind = match args.next().as_deref() {
+                Some("resourcepack") => (SearchKind::ResourcePack, ZipRoot::Assets),
+                Some("datapack") => (SearchKind::Datapack, ZipRoot::Data),
+                _ => {
+                    return Err(format!(
+                        "install-modrinth needs resourcepack|datapack\n{USAGE}"
+                    ))
+                }
+            };
+            let world_arg = args.next();
+            let (world_name, game_dir) = match kind.0 {
+                SearchKind::ResourcePack => {
+                    // No world for resource packs: the next positional is the
+                    // game dir, and it is required — never ~/.minecraft.
+                    (None, require_game_dir(world_arg)?)
+                }
+                SearchKind::Datapack => {
+                    let name = world_arg
+                        .ok_or_else(|| format!("datapack install needs a world\n{USAGE}"))?;
+                    let game = require_game_dir(args.next())?;
+                    // Resolve the world eagerly so a typo fails before any
+                    // download starts.
+                    WorldPaths::for_world(&game, &name).map_err(|err| err.to_string())?;
+                    (Some(name), game)
+                }
+            };
+            let paths = AppPaths::resolve().map_err(|err| err.to_string())?;
+            let client =
+                ModrinthClient::new(ReqwestTransport::new().map_err(|err| err.to_string())?);
+            let started = Instant::now();
+            // The same two-phase routine the Tauri command runs: metadata and
+            // download first, then commit/import/enable/provenance.
+            let prepared = prepare_modrinth_install(
+                &client,
+                &game_dir,
+                world_name.as_deref(),
+                &project,
+                &version,
+                // The filename comes from the version metadata, not the CLI:
+                // resolve it the same way the app does.
+                &version_filename(&client, &project, &version)?,
+                match kind.0 {
+                    SearchKind::ResourcePack => "resourcepack",
+                    SearchKind::Datapack => "datapack",
+                },
+            )
+            .map_err(|err| err.to_string())?;
+            let config = mine_utils_core::load_config(&paths.config_file()).unwrap_or_default();
+            let stack_paths =
+                StackPaths::for_game_dir(&game_dir, &paths.data_dir, config.backups.clone());
+            let data_paths = match &world_name {
+                Some(name) => {
+                    let resolved =
+                        WorldPaths::for_world(&game_dir, name).map_err(|err| err.to_string())?;
+                    Some(DataPaths::for_world(
+                        &game_dir,
+                        &resolved.world_dir,
+                        &paths.data_dir,
+                        config.backups,
+                    ))
+                }
+                None => None,
+            };
+            let icons = icon_cache()?;
+            let outcome = finish_modrinth_install(
+                prepared,
+                &stack_paths,
+                data_paths.as_ref(),
+                &paths.data_dir,
+                &icons,
+                &HashCache::new(),
+            )
+            .map_err(|err| err.to_string())?;
+            serde_json::to_string_pretty(&serde_json::json!({
+                "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+                "outcome": outcome_summary(&outcome),
+            }))
+            .map_err(|err| err.to_string())
+        }
         Some(other) => Err(format!("unknown subcommand {other}\n{USAGE}")),
         None => Err(USAGE.to_string()),
     }
@@ -226,6 +344,60 @@ fn game_dir(argument: Option<String>) -> Result<PathBuf, String> {
         return Err(format!("game dir {} does not exist", path.display()));
     }
     Ok(path)
+}
+
+/// `install-modrinth` never falls through to `~/.minecraft`: the game dir
+/// must come from the positional argument or `MINE_UTILS_GAME_DIR`.
+fn require_game_dir(argument: Option<String>) -> Result<PathBuf, String> {
+    let path = argument
+        .or_else(|| std::env::var("MINE_UTILS_GAME_DIR").ok())
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("install-modrinth needs a game dir argument\n{USAGE}"))?;
+    if !path.is_dir() {
+        return Err(format!("game dir {} does not exist", path.display()));
+    }
+    Ok(path)
+}
+
+/// The filename the app would install: the version's primary file, else its
+/// first file. Mirrors the Discover picker's selection.
+fn version_filename(
+    client: &ModrinthClient<ReqwestTransport>,
+    project: &str,
+    version: &str,
+) -> Result<String, String> {
+    let versions = client.versions(project).map_err(|err| err.to_string())?;
+    let found = versions
+        .iter()
+        .find(|v| v.id == version)
+        .ok_or_else(|| format!("version {version} not in project {project}"))?;
+    primary_file(found)
+        .or_else(|| found.files.first())
+        .map(|file| file.filename.clone())
+        .ok_or_else(|| format!("version {version} of {project} has no downloadable file"))
+}
+
+/// A short human summary of the shared install outcome for probe output.
+fn outcome_summary(outcome: &mine_utils_core::CoreInstallOutcome) -> serde_json::Value {
+    use mine_utils_core::CoreInstallOutcome as O;
+    match outcome {
+        O::ResourcePack {
+            outcome,
+            provenance_warning,
+        } => serde_json::json!({
+            "kind": "resourcepack",
+            "outcome": outcome,
+            "provenance_warning": provenance_warning,
+        }),
+        O::Datapack {
+            outcome,
+            provenance_warning,
+        } => serde_json::json!({
+            "kind": "datapack",
+            "outcome": outcome,
+            "provenance_warning": provenance_warning,
+        }),
+    }
 }
 
 fn icon_cache() -> Result<IconCache, String> {
@@ -268,4 +440,7 @@ const USAGE: &str = "usage: mine-utils-probe <subcommand>\n\
   toggle-datapack <world> <filename> <enable|disable> [game-dir]\n\
   list-level-backups <world> [game-dir]\n\
   restore-level-backup <world> <backup-file-name> [game-dir]\n\
-game-dir defaults to $MINE_UTILS_GAME_DIR or ~/.minecraft";
+  search-modrinth <query> [resourcepack|datapack] [game-version]\n\
+  install-modrinth <project> <version> <resourcepack|datapack> [world] <game-dir>\n\
+game-dir defaults to $MINE_UTILS_GAME_DIR or ~/.minecraft
+install-modrinth needs an explicit game dir (positional or $MINE_UTILS_GAME_DIR)";

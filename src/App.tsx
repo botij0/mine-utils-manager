@@ -5,6 +5,7 @@ import type { AppError, Config, GameRunning, Theme } from './lib/types';
 import { defaultConfig } from './lib/types';
 import { toAppError } from './lib/ipc';
 import DiscoverPage from './features/discover/DiscoverPage';
+import Onboarding from './features/onboarding/Onboarding';
 import PacksPage from './features/packs/PacksPage';
 import SettingsPage from './features/settings/SettingsPage';
 import WorldsPage from './features/worlds/WorldsPage';
@@ -51,7 +52,13 @@ export default function App({ client = ipc }: AppProps) {
   // A failed check is unknown, not evidence the game stopped. The last known
   // running value stays and writes stay paused until a check succeeds.
   const [gameGuardUnknown, setGameGuardUnknown] = useState(false);
-
+  // True once the stored config lands, so onboarding only shows for a real
+  // first run and never for the default placeholder.
+  const [configReady, setConfigReady] = useState(false);
+  // Dismissed by choosing a dir or skipping; Settings stays open for later.
+  const [onboarded, setOnboarded] = useState(false);
+  // Bumped after a Discover install so Packs/Worlds refetch on return.
+  const [refreshEpoch, setRefreshEpoch] = useState(0);
 
   useEffect(() => {
     window.location.hash = page;
@@ -60,8 +67,14 @@ export default function App({ client = ipc }: AppProps) {
   useEffect(() => {
     client
       .getConfig()
-      .then(setConfig)
-      .catch((err: unknown) => setError(toAppError(err)));
+      .then((loaded) => {
+        setConfig(loaded);
+        setConfigReady(true);
+      })
+      .catch((err: unknown) => {
+        setError(toAppError(err));
+        setConfigReady(true);
+      });
   }, [client]);
 
   const refreshGameRunning = useCallback(async () => {
@@ -100,6 +113,26 @@ export default function App({ client = ipc }: AppProps) {
   }, [config.theme]);
 
   const activeLabel = config.active_game_dir ?? 'No game dir selected';
+  const showOnboarding =
+    configReady && !onboarded && !config.active_game_dir && !error;
+
+  const finishOnboarding = useCallback(() => {
+    setOnboarded(true);
+    client
+      .getConfig()
+      .then(setConfig)
+      .catch((err: unknown) => setError(toAppError(err)));
+  }, [client]);
+
+  if (showOnboarding) {
+    return (
+      <div className="app">
+        <main className="content">
+          <Onboarding client={client} onDone={finishOnboarding} />
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -145,6 +178,7 @@ export default function App({ client = ipc }: AppProps) {
           ) : null}
           {page === 'packs' ? (
             <PacksPage
+              key={`packs-${refreshEpoch}`}
               client={client}
               gameRunning={gameRunning}
               gameGuardUnknown={gameGuardUnknown}
@@ -153,13 +187,23 @@ export default function App({ client = ipc }: AppProps) {
           ) : null}
           {page === 'worlds' ? (
             <WorldsPage
+              key={`worlds-${refreshEpoch}`}
               client={client}
               gameRunning={gameRunning}
               gameGuardUnknown={gameGuardUnknown}
               refreshGameRunning={refreshGameRunning}
             />
           ) : null}
-          {page === 'discover' ? <DiscoverPage /> : null}
+          {page === 'discover' ? (
+            <DiscoverPage
+              client={client}
+              gameRunning={gameRunning}
+              gameGuardUnknown={gameGuardUnknown}
+              hasGameDir={config.active_game_dir != null}
+              refreshGameRunning={refreshGameRunning}
+              onInstalled={() => setRefreshEpoch((epoch) => epoch + 1)}
+            />
+          ) : null}
           {page === 'settings' ? (
             <SettingsPage
               client={client}

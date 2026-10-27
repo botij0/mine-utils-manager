@@ -1,0 +1,292 @@
+//! Modrinth discovery and install. No request fires before the Discover
+//! tab calls in: search runs only from the search page, downloads only from
+//! `https://cdn.modrinth.com`, and every write goes through the existing
+//! pack/datapack import paths so duplicates, locks, and guards behave as one.
+
+use std::sync::Arc;
+
+use mine_utils_core::{
+    finish_modrinth_install, installed_game_versions, parse_install_kind,
+    preferred_launcher_version, prepare_modrinth_install, world, AppError, CoreInstallOutcome,
+    DatapackImportOutcome, ImportOutcome, ModrinthClient, ModrinthError, ModrinthProject,
+    ModrinthVersion, ReqwestTransport, SearchHit, SearchKind, SearchQuery, SearchSort,
+};
+use tauri::State;
+
+use super::game_dirs::AppState;
+use super::packs::PackState;
+use super::resource_stack::StackState;
+
+/// One shared HTTP client. `Arc` lets every command clone it into a blocking
+/// thread without rebuilding connection pools.
+pub struct ModrinthState {
+    client: Arc<ModrinthClient<ReqwestTransport>>,
+}
+
+impl ModrinthState {
+    pub fn new() -> Self {
+        ModrinthState {
+            client: Arc::new(ModrinthClient::new(ReqwestTransport::default())),
+        }
+    }
+}
+
+impl Default for ModrinthState {
+    fn default() -> Self {
+        ModrinthState::new()
+    }
+}
+
+fn join_error(err: impl std::error::Error + Send + Sync + 'static) -> AppError {
+    AppError::Io(std::io::Error::other(err))
+}
+
+fn parse_kind(kind: &str) -> Result<SearchKind, ModrinthError> {
+    parse_install_kind(kind)
+}
+
+fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
+    match sort {
+        "relevance" => Ok(SearchSort::Relevance),
+        "downloads" => Ok(SearchSort::Downloads),
+        "follows" => Ok(SearchSort::Follows),
+        "newest" => Ok(SearchSort::Newest),
+        "updated" => Ok(SearchSort::Updated),
+        other => Err(ModrinthError::Parse {
+            reason: format!("unknown sort {other:?}"),
+        }),
+    }
+}
+
+/// Search Modrinth. Runs only when the Discover page calls it; nothing
+/// prefetches, and the local tabs never trigger a request. One page of 20
+/// hits: there is no pagination UI, so offset is always zero.
+#[tauri::command]
+pub async fn search_modrinth(
+    state: State<'_, AppState>,
+    mods: State<'_, ModrinthState>,
+    query: String,
+    kind: String,
+    game_version: Option<String>,
+    sort: Option<String>,
+) -> Result<Vec<SearchHit>, AppError> {
+    state.note_ipc();
+    let client = Arc::clone(&mods.client);
+    tauri::async_runtime::spawn_blocking(move || {
+        let found = client.search(&SearchQuery {
+            text: query,
+            kind: parse_kind(&kind)?,
+            game_version,
+            sort: parse_sort(sort.as_deref().unwrap_or("relevance"))?,
+            limit: 20,
+            offset: 0,
+        })?;
+        Ok(found)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Project metadata for the detail sheet.
+#[tauri::command]
+pub async fn get_modrinth_project(
+    state: State<'_, AppState>,
+    mods: State<'_, ModrinthState>,
+    project_id: String,
+) -> Result<ModrinthProject, AppError> {
+    state.note_ipc();
+    let client = Arc::clone(&mods.client);
+    tauri::async_runtime::spawn_blocking(move || {
+        client.project(&project_id).map_err(AppError::from)
+    })
+    .await
+    .map_err(join_error)?
+}
+/// Every version of a project, newest first. The picker shows all of them;
+// the UI preselects the compatible one.
+#[tauri::command]
+pub async fn list_modrinth_versions(
+    state: State<'_, AppState>,
+    mods: State<'_, ModrinthState>,
+    project_id: String,
+) -> Result<Vec<ModrinthVersion>, AppError> {
+    state.note_ipc();
+    let client = Arc::clone(&mods.client);
+    tauri::async_runtime::spawn_blocking(move || {
+        client.versions(&project_id).map_err(AppError::from)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// What the Discover install sheet offers as defaults: the installed game
+/// versions, the launcher's selected version, and the world's version for
+/// datapacks. Nothing here is a filter; the picker lists every version.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModrinthTargets {
+    pub installed_versions: Vec<String>,
+    pub preferred_launcher: Option<String>,
+    pub world_version: Option<String>,
+}
+
+#[tauri::command]
+pub async fn modrinth_targets(
+    state: State<'_, AppState>,
+    packs: State<'_, PackState>,
+    world: Option<String>,
+) -> Result<ModrinthTargets, AppError> {
+    state.note_ipc();
+    let game_dir = state.active_game_dir().ok_or(AppError::NoActiveGameDir)?;
+    let icons = packs.icons();
+    tauri::async_runtime::spawn_blocking(move || {
+        let installed_versions = installed_game_versions(&game_dir);
+        let preferred_launcher = preferred_launcher_version(&game_dir);
+        let world_version = world
+            .map(|name| {
+                world::scan_worlds(&game_dir, &icons)
+                    .into_iter()
+                    .find(|w| w.dir_name == name)
+                    .and_then(|w| w.version.map(|v| v.name))
+            })
+            .unwrap_or(None);
+        Ok(ModrinthTargets {
+            installed_versions,
+            preferred_launcher,
+            world_version,
+        })
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// What an install did. Resource outcomes match the Packs page; datapack
+/// outcomes match the Worlds page, including `locked` when a running game
+/// or a locked world keeps the pack disabled. The wire kind is `resourcepack`
+/// (one word, matching the Modrinth project type and the TS union), not the
+/// default `resource_pack` snake_case. `provenance_warning` is set when the
+/// file installed fine but the provenance record write failed; it never
+/// fails the install.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ModrinthInstallOutcome {
+    #[serde(rename = "resourcepack")]
+    ResourcePack {
+        outcome: ImportOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provenance_warning: Option<String>,
+    },
+    Datapack {
+        outcome: DatapackImportOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provenance_warning: Option<String>,
+    },
+}
+
+impl From<CoreInstallOutcome> for ModrinthInstallOutcome {
+    fn from(outcome: CoreInstallOutcome) -> Self {
+        match outcome {
+            CoreInstallOutcome::ResourcePack {
+                outcome,
+                provenance_warning,
+            } => ModrinthInstallOutcome::ResourcePack {
+                outcome,
+                provenance_warning,
+            },
+            CoreInstallOutcome::Datapack {
+                outcome,
+                provenance_warning,
+            } => ModrinthInstallOutcome::Datapack {
+                outcome,
+                provenance_warning,
+            },
+        }
+    }
+}
+
+/// Download a version file from the CDN, verify it, commit it under the API
+/// filename, and route it through the existing import paths so duplicates,
+/// collisions, locks, and the game guard behave exactly like a manual
+/// import. The metadata fetch and download run with no game lock held; only
+/// the commit/import/enable/provenance phase takes the per-game-dir lock.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn install_modrinth_pack(
+    state: State<'_, AppState>,
+    packs: State<'_, PackState>,
+    stack: State<'_, StackState>,
+    mods: State<'_, ModrinthState>,
+    project_id: String,
+    version_id: String,
+    filename: String,
+    kind: String,
+    world: Option<String>,
+) -> Result<ModrinthInstallOutcome, AppError> {
+    state.note_ipc();
+    // One snapshot: the game dir, stack paths, and backup policy are read
+    // once, not three times across the install.
+    let snapshot = state.install_snapshot()?;
+    let data_paths = match world.clone() {
+        Some(name) => Some(snapshot.world_data_paths(&name)?),
+        None => None,
+    };
+    let guard = stack.lock_for(&snapshot.game_dir);
+    let data_dir = state.data_dir();
+    let icons = packs.icons();
+    let hashes = packs.hashes();
+    let client = Arc::clone(&mods.client);
+    tauri::async_runtime::spawn_blocking(move || {
+        let prepared = prepare_modrinth_install(
+            &client,
+            &snapshot.game_dir,
+            world.as_deref(),
+            &project_id,
+            &version_id,
+            &filename,
+            &kind,
+        )?;
+        let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
+        finish_modrinth_install(
+            prepared,
+            &snapshot.stack_paths,
+            data_paths.as_ref(),
+            &data_dir,
+            &icons,
+            &hashes,
+        )
+        .map(ModrinthInstallOutcome::from)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Locks the wire contract that caused the original `Installed undefined`
+    /// bug: the Tauri command serializes the outcome kind as `resourcepack`
+    /// (one word, matching the Modrinth project type), never `resource_pack`.
+    #[test]
+    fn install_outcome_kind_is_one_word_on_the_wire() {
+        let resource = ModrinthInstallOutcome::ResourcePack {
+            outcome: ImportOutcome::Skipped,
+            provenance_warning: None,
+        };
+        let wire = serde_json::to_value(&resource).expect("serializes");
+        assert_eq!(
+            wire.get("kind").and_then(|k| k.as_str()),
+            Some("resourcepack")
+        );
+
+        let data = ModrinthInstallOutcome::Datapack {
+            outcome: DatapackImportOutcome::Skipped,
+            provenance_warning: Some("w".to_string()),
+        };
+        let wire = serde_json::to_value(&data).expect("serializes");
+        assert_eq!(wire.get("kind").and_then(|k| k.as_str()), Some("datapack"));
+        // A `resource_pack` payload must never silently render as a datapack.
+        let legacy: Result<ModrinthInstallOutcome, _> =
+            serde_json::from_str(r#"{"kind":"resource_pack","outcome":{"status":"skipped"}}"#);
+        assert!(legacy.is_err(), "snake_case kind must not deserialize");
+    }
+}

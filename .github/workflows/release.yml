@@ -1,0 +1,81 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  # Manual dispatch is post-merge/main-only: this workflow file is new in the
+  # Discover PR, so `workflow_dispatch` is unavailable until it lands on the
+  # default branch. A dispatch never publishes a GitHub release; it only
+  # builds and uploads the collect step as a workflow artifact (dry run).
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: sudo apt-get update
+      - run: >-
+          sudo apt-get install -y
+          libwebkit2gtk-4.1-dev
+          libayatana-appindicator3-dev
+          librsvg2-dev
+          libxdo-dev
+          libssl-dev
+          patchelf
+          rpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm tauri build
+      - name: Resolve version
+        id: version
+        run: |
+          set -eu
+          app_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          test -n "$app_version"
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            test "$tag_version" = "$app_version" || { echo "tag $GITHUB_REF_NAME != app $app_version"; exit 1; }
+            version="$app_version"
+          else
+            version="$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9._-' '_')"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "artifact=mine-utils_${version}_linux" >> "$GITHUB_OUTPUT"
+      - name: Collect artifacts
+        run: |
+          set -eu
+          # The workspace writes target/release/bundle/..., not
+          # src-tauri/target/release/bundle/...: collect from the real path.
+          ls -la target/release/bundle/appimage target/release/bundle/rpm
+          shopt -s nullglob
+          appimages=(target/release/bundle/appimage/*.AppImage)
+          rpms=(target/release/bundle/rpm/*.rpm)
+          [ "${#appimages[@]}" -eq 1 ] || { echo "expected one AppImage, found ${#appimages[@]}"; exit 1; }
+          [ "${#rpms[@]}" -eq 1 ] || { echo "expected one RPM, found ${#rpms[@]}"; exit 1; }
+          mkdir -p dist-release
+          # Stable, shell-friendly names. On a tag push the version is the app
+          # version (verified above); on a manual dispatch the ref name is
+          # sanitized so branch slashes never break the upload artifact name.
+          cp "${appimages[0]}" "dist-release/mine-utils_${{ steps.version.outputs.version }}_amd64.AppImage"
+          cp "${rpms[0]}" "dist-release/mine-utils-${{ steps.version.outputs.version }}-1.x86_64.rpm"
+          (cd dist-release && sha256sum ./* > SHA256SUMS.txt)
+          cat dist-release/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.artifact }}
+          path: dist-release/
+      - name: Publish the release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-release/*
+          generate_release_notes: true
