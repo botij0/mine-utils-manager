@@ -59,10 +59,17 @@ export default function GameRunningBanner({
   }
 
   if (staleLocks.length > 0) {
+    const [first, ...rest] = staleLocks;
     return (
       <div className="banner" role="status" aria-label="Stale session lock">
-        A stale session lock at {staleLocks.join(', ')} holds no process. Writes
-        are allowed.
+        <div>
+          A stale session lock at <span className="banner-path">{first}</span>{' '}
+          holds no process.
+          {rest.length > 0
+            ? ` ${rest.length} more stale lock${rest.length === 1 ? '' : 's'}.`
+            : ''}{' '}
+          Writes are allowed.
+        </div>
       </div>
     );
   }
