@@ -52,25 +52,17 @@ export function kindFilterLabel(kind: PackKind | 'all'): string {
 
 /** Unique format ranges, sorted by their lowest format number. */
 export function formatFilterOptions(packs: Pack[]): string[] {
-  const seen = new Set<string>();
+  const lowEndByLabel = new Map<string, { major: number; minor: number }>();
   for (const pack of packs) {
-    if (pack.format_range) seen.add(formatRangeLabel(pack.format_range));
+    if (!pack.format_range) continue;
+    const label = formatRangeLabel(pack.format_range);
+    if (lowEndByLabel.has(label)) continue;
+    const bound = pack.format_range.min ?? pack.format_range.max;
+    lowEndByLabel.set(label, { major: bound?.major ?? 0, minor: bound?.minor ?? 0 });
   }
-  const lowEnd = (subject: Pack) => {
-    const bound = subject.format_range?.min ?? subject.format_range?.max;
-    return { major: bound?.major ?? 0, minor: bound?.minor ?? 0 };
-  };
-  return [...seen].sort((left, right) => {
-    const first = packs.find(
-      (pack) => pack.format_range && formatRangeLabel(pack.format_range) === left,
-    );
-    const second = packs.find(
-      (pack) => pack.format_range && formatRangeLabel(pack.format_range) === right,
-    );
-    const a = first ? lowEnd(first) : { major: 0, minor: 0 };
-    const b = second ? lowEnd(second) : { major: 0, minor: 0 };
-    return a.major - b.major || a.minor - b.minor;
-  });
+  return [...lowEndByLabel.entries()]
+    .sort(([, left], [, right]) => left.major - right.major || left.minor - right.minor)
+    .map(([label]) => label);
 }
 
 export function matchesSearch(pack: Pack, query: string): boolean {

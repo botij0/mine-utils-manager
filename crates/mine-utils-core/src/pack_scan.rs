@@ -376,7 +376,7 @@ fn error_pack(path: &Path, location: PackLocation, err: PackError, bytes_read: u
     )
 }
 
-fn display_name(path: &Path) -> String {
+pub(crate) fn display_name(path: &Path) -> String {
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -748,17 +748,14 @@ fn hash_source(path: &Path, location: PackLocation) -> Result<String, AppError> 
     }
 }
 
+/// Chunk size for pack content hashing. Shared by `hash_file` and `hash_dir`
+/// via `feed_hasher`.
+const HASH_CHUNK_BYTES: usize = 64 * 1024;
+
 fn hash_file(path: &Path) -> Result<String, AppError> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
+    feed_hasher(&mut file, &mut hasher)?;
     Ok(hex::encode(hasher.finalize()))
 }
 
@@ -773,16 +770,26 @@ fn hash_dir(root: &Path) -> Result<String, AppError> {
         hasher.update(relative.to_string_lossy().as_bytes());
         hasher.update([0u8]);
         let mut file = File::open(root.join(&relative))?;
-        let mut buffer = vec![0u8; 64 * 1024];
-        loop {
-            let read = file.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-        }
+        feed_hasher(&mut file, &mut hasher)?;
     }
     Ok(hex::encode(hasher.finalize()))
+}
+
+/// The one chunked-read loop for pack content hashing. Both `hash_file` and
+/// `hash_dir` pump through here, so the 64KiB pattern has a single owner.
+/// `install::hash_file` stays separate: it hashes SHA-512 and SHA-256 in one
+/// pass for the install commit. `download` stays separate: it hashes while
+/// writing and enforcing the byte cap.
+fn feed_hasher(reader: &mut impl Read, hasher: &mut Sha256) -> Result<(), AppError> {
+    let mut buffer = vec![0u8; HASH_CHUNK_BYTES];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(())
 }
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), AppError> {

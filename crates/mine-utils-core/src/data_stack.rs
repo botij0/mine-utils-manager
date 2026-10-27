@@ -21,7 +21,8 @@ use crate::level_backup::{self, LevelBackupOutcome};
 use crate::level_dat::{self, LevelDatError};
 use crate::pack::{ImportChoice, PackError};
 use crate::pack_scan::{
-    self, HashCache, PackListing, SystemTrash, TrashService, MAX_META_BYTES, MAX_ZIP_ENTRIES,
+    self, display_name, HashCache, PackListing, SystemTrash, TrashService, MAX_META_BYTES,
+    MAX_ZIP_ENTRIES,
 };
 use crate::resource_stack::{SystemGuard, WriteGuard};
 
@@ -595,12 +596,6 @@ fn source_location(source: &Path) -> Result<crate::pack::PackLocation, AppError>
         name: display_name(source),
     }
     .into())
-}
-
-fn display_name(path: &Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// A datapack must carry a `data` root and a `pack.mcmeta`. A resource-only

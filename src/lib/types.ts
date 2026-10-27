@@ -145,20 +145,24 @@ export interface GameRunning {
   command: string | null;
 }
 
+/** The game-running guard shared by both stacks. The wire shape is unchanged. */
+export interface GameGuard {
+  running: GameRunning | null;
+  /** Stale `session.lock` files. They never block a write. */
+  stale_locks: string[];
+  /** False where POSIX lock probing is unsupported. */
+  detection_supported: boolean;
+}
+
 /**
  * The enabled stack. `entries` is the `resourcePacks` array in load order,
  * low to high: the last entry wins. The UI shows the reverse, so the top card
  * is the highest priority and loads last. Foreign entries such as `vanilla`
  * and `fabric` are locked to their indices and never move.
  */
-export interface ResourceStack {
+export interface ResourceStack extends GameGuard {
   entries: StackEntry[];
   incompatible: string[];
-  running: GameRunning | null;
-  /** Stale `session.lock` files. They never block a write. */
-  stale_locks: string[];
-  /** False where POSIX lock probing is unsupported. */
-  detection_supported: boolean;
 }
 
 /** What the UI rendered, so a write against a changed file set is refused. */
@@ -183,16 +187,11 @@ export type DataStackEntry =
  * top card is the highest priority. Foreign entries such as `vanilla` are
  * locked to their indices and never move.
  */
-export interface DataStack {
+export interface DataStack extends GameGuard {
   enabled: DataStackEntry[];
   disabled: DataStackEntry[];
-  running: GameRunning | null;
   /** The lock on this world's own `session.lock`, when held. */
   world_locked: GameRunning | null;
-  /** Stale `session.lock` files. They never block a write. */
-  stale_locks: string[];
-  /** False where POSIX lock probing is unsupported. */
-  detection_supported: boolean;
 }
 
 /** What the UI rendered, so a write against a changed file set is refused. */

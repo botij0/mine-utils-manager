@@ -9,7 +9,7 @@ use mine_utils_core::{
     finish_modrinth_install, installed_game_versions, parse_install_kind,
     preferred_launcher_version, prepare_modrinth_install, world, AppError, CoreInstallOutcome,
     DatapackImportOutcome, ImportOutcome, ModrinthClient, ModrinthError, ModrinthProject,
-    ModrinthVersion, ReqwestTransport, SearchHit, SearchKind, SearchQuery, SearchSort,
+    ModrinthVersion, ReqwestTransport, SearchHit, SearchQuery, SearchSort,
 };
 use tauri::State;
 
@@ -36,10 +36,6 @@ impl Default for ModrinthState {
     fn default() -> Self {
         ModrinthState::new()
     }
-}
-
-fn parse_kind(kind: &str) -> Result<SearchKind, ModrinthError> {
-    parse_install_kind(kind)
 }
 
 fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
@@ -72,7 +68,7 @@ pub async fn search_modrinth(
     tauri::async_runtime::spawn_blocking(move || {
         let found = client.search(&SearchQuery {
             text: query,
-            kind: parse_kind(&kind)?,
+            kind: parse_install_kind(&kind)?,
             game_version,
             sort: parse_sort(sort.as_deref().unwrap_or("relevance"))?,
             limit: 20,

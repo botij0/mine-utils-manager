@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatFilterOptions,
   formatRangeLabel,
   formatVersionLabel,
   matchesFormat,
@@ -100,5 +101,22 @@ describe('format labels', () => {
     expect(matchesFormat(subject, 'all')).toBe(true);
     expect(matchesFormat(subject, '34 to 94.1')).toBe(true);
     expect(matchesFormat(subject, '34 to 69')).toBe(false);
+  });
+
+  it('orders unique format options by lowest format number', () => {
+    const subjects = [
+      pack({ format_range: { min: version(48), max: null } }),
+      pack({ format_range: { min: version(34), max: null } }),
+      pack({ format_range: { min: version(34), max: version(69) } }),
+      pack({ format_range: { min: version(34), max: version(69) } }),
+      pack({ format_range: null, format: null }),
+      pack({ format_range: { min: null, max: version(42) } }),
+    ];
+    expect(formatFilterOptions(subjects)).toEqual([
+      '34 and up',
+      '34 to 69',
+      'up to 42',
+      '48 and up',
+    ]);
   });
 });

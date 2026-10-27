@@ -8,6 +8,9 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     plugins: { 'react-hooks': reactHooks },
-    rules: reactHooks.configs.recommended.rules,
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+      'no-console': 'error',
+    },
   },
 );

@@ -11,7 +11,8 @@ export default defineConfig({
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
     target: 'es2022',
-    sourcemap: true,
+    // No sourcemaps in the bundle; they double dist size for no Tauri runtime benefit.
+    sourcemap: false,
   },
   test: {
     environment: 'jsdom',
