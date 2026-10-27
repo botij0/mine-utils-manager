@@ -1,14 +1,11 @@
 import type { Pack } from '../../lib/types';
 import { packFormatLabel, packGameLabel, packKindLabel, shortDescription } from '../../lib/format';
+import { packInitials } from '../../lib/avatar';
 
 interface PackCardProps {
   pack: Pack;
   selected: boolean;
   onSelect: (pack: Pack) => void;
-}
-
-function initials(name: string): string {
-  return name.replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || 'PK';
 }
 
 export default function PackCard({ pack, selected, onSelect }: PackCardProps) {
@@ -29,7 +26,7 @@ export default function PackCard({ pack, selected, onSelect }: PackCardProps) {
           <img src={pack.icon.url} alt="" loading="lazy" />
         ) : (
           <span className="pack-icon-fallback" aria-hidden="true">
-            {broken ? '!' : initials(pack.name)}
+            {broken ? '!' : packInitials(pack.name)}
           </span>
         )}
       </span>

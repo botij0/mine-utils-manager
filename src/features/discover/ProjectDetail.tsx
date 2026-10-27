@@ -6,7 +6,7 @@ import type {
 } from '../../lib/types';
 import DialogShell from './DialogShell';
 import VersionPicker from './VersionPicker';
-import { formatCount } from './ProjectGrid';
+import { formatCount } from '../../lib/avatar';
 import { isTrustedIconUrl } from './icon';
 
 interface ProjectDetailProps {

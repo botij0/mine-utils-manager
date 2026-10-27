@@ -14,6 +14,7 @@ use mine_utils_core::{
 use tauri::State;
 
 use super::game_dirs::AppState;
+use super::join_error;
 use super::packs::PackState;
 use super::resource_stack::StackState;
 
@@ -35,10 +36,6 @@ impl Default for ModrinthState {
     fn default() -> Self {
         ModrinthState::new()
     }
-}
-
-fn join_error(err: impl std::error::Error + Send + Sync + 'static) -> AppError {
-    AppError::Io(std::io::Error::other(err))
 }
 
 fn parse_kind(kind: &str) -> Result<SearchKind, ModrinthError> {

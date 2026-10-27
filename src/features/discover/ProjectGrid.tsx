@@ -1,16 +1,11 @@
 import type { ModrinthSearchHit } from '../../lib/types';
+import { formatCount } from '../../lib/avatar';
 import { isTrustedIconUrl } from './icon';
 
 interface ProjectGridProps {
   hits: ModrinthSearchHit[];
   selectedId: string | null;
   onSelect: (hit: ModrinthSearchHit) => void;
-}
-
-export function formatCount(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
-  return `${count}`;
 }
 
 export default function ProjectGrid({ hits, selectedId, onSelect }: ProjectGridProps) {

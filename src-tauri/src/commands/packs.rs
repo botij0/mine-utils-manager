@@ -8,6 +8,7 @@ use mine_utils_core::{
 use tauri::State;
 
 use super::game_dirs::AppState;
+use super::join_error;
 
 /// Pack commands share the config store but keep the icon cache next to the
 /// app cache dir, separate from the game dir. The hash cache is shared the same
@@ -37,10 +38,6 @@ impl PackState {
 fn resourcepacks(state: &AppState) -> Result<PathBuf, AppError> {
     let game_dir = state.active_game_dir().ok_or(AppError::NoActiveGameDir)?;
     Ok(game_dir.join("resourcepacks"))
-}
-
-fn join_error(err: impl std::error::Error + Send + Sync + 'static) -> AppError {
-    AppError::Io(std::io::Error::other(err))
 }
 
 /// Scanning reads files, so it runs on a blocking thread instead of the UI

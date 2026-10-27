@@ -1,4 +1,5 @@
 import type { World } from '../../lib/types';
+import { hideBrokenImage, worldInitials } from '../../lib/avatar';
 
 interface WorldRailProps {
   worlds: World[];
@@ -37,9 +38,9 @@ export default function WorldRail({ worlds, loading, selected, onSelect }: World
             >
               <span className="world-rail-icon" aria-hidden="true">
                 {world.icon ? (
-                  <img src={world.icon.url} alt="" onError={hideBrokenRailIcon} />
+                  <img src={world.icon.url} alt="" onError={hideBrokenImage} />
                 ) : (
-                  <span className="world-rail-fallback">{initials(world.level_name)}</span>
+                  <span className="world-rail-fallback">{worldInitials(world.level_name)}</span>
                 )}
               </span>
               <span className="world-rail-text">
@@ -59,17 +60,4 @@ export default function WorldRail({ worlds, loading, selected, onSelect }: World
       </ul>
     </nav>
   );
-}
-
-function initials(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) return '?';
-  return trimmed.slice(0, 2).toUpperCase();
-}
-
-/** The #8 asset-scheme issue can blank `<img>` without firing an error the
- *  page can see; when an error does fire, hide the image so the gradient tile
- *  underneath shows instead of a broken glyph. */
-function hideBrokenRailIcon(event: React.SyntheticEvent<HTMLImageElement>) {
-  event.currentTarget.style.display = 'none';
 }
