@@ -268,6 +268,24 @@ describe('ActiveStack', () => {
     expect(within(card('Alpha')).getByRole('checkbox')).toBeEnabled();
   });
 
+  it('summarizes many stale session locks instead of printing every path', async () => {
+    const staleLocks = Array.from(
+      { length: 18 },
+      (_, index) => `/home/demo/.minecraft/saves/world-${index}/session.lock`,
+    );
+    const client = makeStackClient({ staleLocks });
+    render(<PacksPage client={client} />);
+
+    const note = await screen.findByRole('status', { name: 'Stale session lock' });
+    expect(note).toHaveTextContent(
+      'A stale session lock at /home/demo/.minecraft/saves/world-0/session.lock',
+    );
+    expect(note).toHaveTextContent('17 more stale locks');
+    expect(note).toHaveTextContent('Writes are allowed');
+    expect(note).not.toHaveTextContent('world-17');
+    expect(within(card('Alpha')).getByRole('checkbox')).toBeEnabled();
+  });
+
   it('refreshes the stack after a backup restore', async () => {
     const user = userEvent.setup();
     const client = makeStackClient({ resource: ['vanilla', 'file/Beta.zip'] });
