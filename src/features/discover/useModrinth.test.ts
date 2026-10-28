@@ -100,6 +100,14 @@ describe('useModrinth', () => {
     expect(outcome && outcome.kind).toBe('resourcepack');
     expect(result.current.installError).toBeNull();
     expect(result.current.installResult?.kind).toBe('resourcepack');
+    if (outcome && outcome.kind === 'resourcepack' && outcome.outcome.status === 'imported') {
+      expect(outcome.outcome.pack.path).toBe(
+        `/home/demo/.minecraft/resourcepacks/${outcome.outcome.pack.name}.zip`,
+      );
+      expect(outcome.outcome.pack.path).not.toContain('.zip.zip');
+    } else {
+      expect.unreachable('expected an imported resourcepack outcome');
+    }
   });
 
   it('reports a hash mismatch with the expected and actual hashes', async () => {

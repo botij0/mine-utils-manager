@@ -34,6 +34,12 @@ pub struct FormatTable {
     data_formats: HashMap<String, FormatVersion>,
 }
 
+/// The data format for a world version name such as `1.21.10`, or `None` when
+/// the table does not cover it.
+pub fn data_format_for_version(version: &str) -> Option<FormatVersion> {
+    FormatTable::embedded().data_format_for_version(version)
+}
+
 impl FormatTable {
     pub fn embedded() -> &'static FormatTable {
         static TABLE: OnceLock<FormatTable> = OnceLock::new();

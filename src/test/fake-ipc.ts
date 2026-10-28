@@ -321,8 +321,9 @@ export function makeFakeClient(
         return { kind: 'datapack', outcome: { status: 'imported', filename: args.filename } };
       }
       const installed = pack(args.filename, {
-        id: args.filename,
+        id: `/home/demo/.minecraft/resourcepacks/${args.filename}`,
         name: stripZip(args.filename),
+        path: `/home/demo/.minecraft/resourcepacks/${args.filename}`,
         description: 'Installed from Modrinth.',
         meta: {
           pack_format: null,

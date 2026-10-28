@@ -185,9 +185,22 @@ impl From<stack_core::EntryError> for DataStackError {
     }
 }
 
+/// The exact `file/<filename>` value Minecraft writes.
+pub fn file_value(filename: &str) -> Result<String, DataStackError> {
+    stack_core::file_value(filename).map_err(DataStackError::from)
+}
+
 /// Enable: drop `file/<filename>` from `Disabled`, append to `Enabled` when
 /// absent. Idempotent. Foreign entries are untouched.
 pub fn enable(
+    enabled: &mut Vec<String>,
+    disabled: &mut Vec<String>,
+    filename: &str,
+) -> Result<bool, DataStackError> {
+    enable_entry(enabled, disabled, filename).map_err(DataStackError::from)
+}
+
+fn enable_entry(
     enabled: &mut Vec<String>,
     disabled: &mut Vec<String>,
     filename: &str,
@@ -660,7 +673,7 @@ fn enable_lists(
     lists: &mut stack_core::Lists,
     filename: &str,
 ) -> Result<bool, stack_core::EntryError> {
-    enable(&mut lists.primary, &mut lists.secondary, filename)
+    enable_entry(&mut lists.primary, &mut lists.secondary, filename)
 }
 
 fn disable_lists(lists: &mut stack_core::Lists, filename: &str) -> bool {

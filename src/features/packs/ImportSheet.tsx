@@ -55,7 +55,11 @@ export default function ImportSheet({
   if (prompt) {
     const duplicate = prompt.status === 'duplicate';
     return (
-      <DialogShell label={duplicate ? 'Duplicate pack' : 'Pack name in use'} onClose={onClose}>
+      <DialogShell
+        label={duplicate ? 'Duplicate pack' : 'Pack name in use'}
+        onClose={onClose}
+        dismissOnEscape={!busy}
+      >
         <h2>{duplicate ? 'That pack is already installed' : 'A pack with that name exists'}</h2>
         <p>
           <strong>{prompt.name}</strong>{' '}
@@ -100,7 +104,7 @@ export default function ImportSheet({
   }
 
   return (
-    <DialogShell label="Import pack" onClose={onClose}>
+    <DialogShell label="Import pack" onClose={onClose} dismissOnEscape={!busy}>
       <h2>Import a resource pack</h2>
       <p className="sheet-note">
         Choose a zip or a folder that contains pack.mcmeta. A folder pack is copied into the

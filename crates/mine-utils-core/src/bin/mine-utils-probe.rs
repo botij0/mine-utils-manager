@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use mine_utils_core::{
-    backup, data_format_table, data_stack, discover_game_dirs, entry_for, finish_modrinth_install,
-    home_dir, import_pack, level_backup, prepare_modrinth_install, primary_file, resource_stack,
-    scan_packs, world, AppPaths, DataPaths, GameDirEntry, HashCache, IconCache, ImportChoice,
-    ImportOutcome, ModrinthClient, PackListing, ReqwestTransport, ResourceStack, SearchKind,
-    SearchQuery, SearchSort, StackPaths, WorldPaths, ZipRoot,
+    backup, data_stack, discover_game_dirs, entry_for, finish_modrinth_install, home_dir,
+    import_pack, level_backup, prepare_modrinth_install, primary_file, resource_stack, scan_packs,
+    world, AppPaths, DataPaths, GameDirEntry, HashCache, IconCache, ImportChoice, ImportOutcome,
+    ModrinthClient, PackListing, ReqwestTransport, ResourceStack, SearchKind, SearchQuery,
+    SearchSort, StackPaths, WorldPaths, ZipRoot,
 };
 
 fn main() {
@@ -425,7 +425,7 @@ fn data_paths(game_dir: PathBuf, world_name: &str) -> Result<DataPaths, String> 
 fn world_format_name(paths: &DataPaths) -> Option<String> {
     let bytes = std::fs::read(&paths.level_dat_path).ok()?;
     let view = mine_utils_core::level_dat::parse(&bytes).ok()?;
-    data_format_table::data_format_for_version(&view.version_name).map(|format| format.label())
+    mine_utils_core::data_format_for_version(&view.version_name).map(|format| format.label())
 }
 
 const USAGE: &str = "usage: mine-utils-probe <subcommand>\n\

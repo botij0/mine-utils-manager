@@ -9,6 +9,9 @@ export function worldInitials(name: string): string {
 }
 
 export function hideBrokenImage(event: { currentTarget: HTMLImageElement }): void {
+  // The asset-scheme issue can blank an <img> without firing an error the
+  // page can see. When an error does fire, hide the image so the gradient
+  // tile underneath shows instead of a broken glyph.
   event.currentTarget.style.display = 'none';
 }
 

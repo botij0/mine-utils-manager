@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::data_format_table::data_format_for_version;
+use crate::format_table::data_format_for_version;
 use crate::game_lock::{self, GameRunning};
 use crate::icon_cache::IconCache;
 use crate::level_dat;
