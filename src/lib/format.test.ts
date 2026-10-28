@@ -9,20 +9,18 @@ import {
   packGameLabel,
   shortDescription,
 } from './format';
-import type { FormatVersion, Pack } from './types';
+import type { Pack } from './types';
+import { formatVersion as version, pack as makePack } from '../test/fake-packs';
 
-function version(major: number, minor = 0): FormatVersion {
-  return { major, minor };
-}
+const FORMAT_RANGE = {
+  min: version(34),
+  max: version(94, 1),
+};
 
-function pack(overrides: Partial<Pack> = {}): Pack {
-  const formatRange = { min: version(34), max: version(94, 1) };
-  return {
+function formatPack(overrides: Partial<Pack> = {}): Pack {
+  return makePack('Pack', {
     id: 'pack',
-    name: 'Pack',
     path: '/packs/Pack.zip',
-    location: 'zip',
-    kind: 'resource',
     description: 'A pack',
     meta: {
       pack_format: version(34),
@@ -31,14 +29,11 @@ function pack(overrides: Partial<Pack> = {}): Pack {
       supported_formats: null,
       description: 'A pack',
     },
-    format: formatRange.min,
-    format_range: formatRange,
+    format: FORMAT_RANGE.min,
+    format_range: FORMAT_RANGE,
     game_label: '1.21 to 1.21.11',
-    icon: null,
-    error: null,
-    bytes_read: 512,
     ...overrides,
-  };
+  });
 }
 
 describe('format labels', () => {
@@ -55,7 +50,7 @@ describe('format labels', () => {
     expect(formatRangeLabel({ min: version(48), max: null })).toBe('48 and up');
     expect(formatRangeLabel({ min: null, max: version(42) })).toBe('up to 42');
     expect(formatRangeLabel({ min: null, max: null })).toBe('Unknown format');
-    const open = pack({
+    const open = formatPack({
       format_range: { min: version(48), max: null },
       game_label: null,
     });
@@ -64,20 +59,20 @@ describe('format labels', () => {
   });
 
   it('labels unknown format numbers without inventing a version', () => {
-    const unknown = pack({
+    const unknown = formatPack({
       format_range: { min: version(999), max: version(999) },
       game_label: null,
     });
     expect(packFormatLabel(unknown)).toBe('Format 999');
     expect(packGameLabel(unknown)).toBe('Untested on 999');
 
-    const empty = pack({ format_range: null, format: null, game_label: null });
+    const empty = formatPack({ format_range: null, format: null, game_label: null });
     expect(packFormatLabel(empty)).toBe('Unknown format');
     expect(packGameLabel(empty)).toBe('Unknown game version');
   });
 
   it('uses the backend game label when present', () => {
-    expect(packGameLabel(pack())).toBe('1.21 to 1.21.11');
+    expect(packGameLabel(formatPack())).toBe('1.21 to 1.21.11');
   });
 
   it('caps long descriptions for cards but not detail text', () => {
@@ -89,7 +84,7 @@ describe('format labels', () => {
   });
 
   it('matches search across name and description', () => {
-    const subject = pack({ name: 'Autumn', description: 'Seasonal recipes' });
+    const subject = formatPack({ name: 'Autumn', description: 'Seasonal recipes' });
     expect(matchesSearch(subject, 'aut')).toBe(true);
     expect(matchesSearch(subject, 'RECIPE')).toBe(true);
     expect(matchesSearch(subject, 'winter')).toBe(false);
@@ -97,7 +92,7 @@ describe('format labels', () => {
   });
 
   it('matches format labels exactly', () => {
-    const subject = pack();
+    const subject = formatPack();
     expect(matchesFormat(subject, 'all')).toBe(true);
     expect(matchesFormat(subject, '34 to 94.1')).toBe(true);
     expect(matchesFormat(subject, '34 to 69')).toBe(false);
@@ -105,12 +100,12 @@ describe('format labels', () => {
 
   it('orders unique format options by lowest format number', () => {
     const subjects = [
-      pack({ format_range: { min: version(48), max: null } }),
-      pack({ format_range: { min: version(34), max: null } }),
-      pack({ format_range: { min: version(34), max: version(69) } }),
-      pack({ format_range: { min: version(34), max: version(69) } }),
-      pack({ format_range: null, format: null }),
-      pack({ format_range: { min: null, max: version(42) } }),
+      formatPack({ format_range: { min: version(48), max: null } }),
+      formatPack({ format_range: { min: version(34), max: null } }),
+      formatPack({ format_range: { min: version(34), max: version(69) } }),
+      formatPack({ format_range: { min: version(34), max: version(69) } }),
+      formatPack({ format_range: null, format: null }),
+      formatPack({ format_range: { min: null, max: version(42) } }),
     ];
     expect(formatFilterOptions(subjects)).toEqual([
       '34 and up',

@@ -4,66 +4,9 @@ import { userEvent } from '@testing-library/user-event';
 import InstallSheet from './InstallSheet';
 import ProjectDetail from './ProjectDetail';
 import VersionPicker from './VersionPicker';
-import type {
-  ModrinthInstallOutcome,
-  ModrinthSearchHit,
-  ModrinthVersion,
-} from '../../lib/types';
+import type { ModrinthInstallOutcome } from '../../lib/types';
+import { fakeVersions, freshHit } from '../../test/fake-packs';
 import { isTrustedIconUrl } from './icon';
-
-function hit(): ModrinthSearchHit {
-  return {
-    project_id: '7q7JnQD0',
-    slug: 'fresh-animations',
-    title: 'Fresh Animations',
-    description: 'Fresh animations.',
-    icon_url: 'https://cdn.modrinth.com/icons/fresh.webp',
-    downloads: 100,
-    follows: 10,
-    project_type: 'resourcepack',
-    versions: ['1.21.1'],
-    latest_version: 'v2',
-  };
-}
-
-function versions(): ModrinthVersion[] {
-  return [
-    {
-      id: 'v2',
-      project_id: '7q7JnQD0',
-      name: 'Fresh Animations 1.9',
-      version_number: '1.9',
-      game_versions: ['1.21.1'],
-      loaders: ['minecraft'],
-      files: [
-        {
-          url: 'https://cdn.modrinth.com/data/7q7/fresh-1.9.zip',
-          filename: 'fresh-1.9.zip',
-          size: 1024,
-          primary: true,
-          hashes: { sha512: 'aa', sha1: 'a' },
-        },
-      ],
-    },
-    {
-      id: 'v1',
-      project_id: '7q7JnQD0',
-      name: 'Fresh Animations 1.8',
-      version_number: '1.8',
-      game_versions: ['1.20.1'],
-      loaders: ['minecraft'],
-      files: [
-        {
-          url: 'https://cdn.modrinth.com/data/7q7/fresh-1.8.zip',
-          filename: 'fresh-1.8.zip',
-          size: 900,
-          primary: true,
-          hashes: { sha512: 'bb', sha1: 'b' },
-        },
-      ],
-    },
-  ];
-}
 
 function importedOutcome(): ModrinthInstallOutcome {
   return {
@@ -118,7 +61,7 @@ describe('discover dialogs', () => {
   it('labels only the compatible version, not the default newest', () => {
     render(
       <VersionPicker
-        versions={versions()}
+        versions={fakeVersions('7q7JnQD0')}
         selectedId="v2"
         onSelect={() => {}}
         compatibleId="v1"
@@ -133,7 +76,7 @@ describe('discover dialogs', () => {
   it('shows no compatible label when nothing matches the target', () => {
     render(
       <VersionPicker
-        versions={versions()}
+        versions={fakeVersions('7q7JnQD0')}
         selectedId="v2"
         onSelect={() => {}}
         compatibleId={null}
@@ -148,7 +91,7 @@ describe('discover dialogs', () => {
   it('claims a preselected compatible version only when one exists', () => {
     const { rerender } = render(
       <VersionPicker
-        versions={versions()}
+        versions={fakeVersions('7q7JnQD0')}
         selectedId="v2"
         onSelect={() => {}}
         compatibleId="v2"
@@ -158,7 +101,7 @@ describe('discover dialogs', () => {
     expect(screen.getByText(/compatible with 1\.21\.1 preselected/)).toBeInTheDocument();
     rerender(
       <VersionPicker
-        versions={versions()}
+        versions={fakeVersions('7q7JnQD0')}
         selectedId="v2"
         onSelect={() => {}}
         compatibleId={null}
@@ -190,9 +133,9 @@ describe('discover dialogs', () => {
     const onClose = vi.fn();
     const { container } = render(
       <ProjectDetail
-        hit={hit()}
+        hit={freshHit()}
         project={null}
-        versions={versions()}
+        versions={fakeVersions('7q7JnQD0')}
         loading={false}
         error={null}
         selectedVersionId="v2"

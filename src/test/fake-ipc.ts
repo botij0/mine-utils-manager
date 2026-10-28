@@ -1,10 +1,13 @@
-import type { IpcClient } from '../lib/ipc';
+import type { IpcClient, WorldsClient } from '../lib/ipc';
 import type {
   BackupInfo,
   Config,
   DataStack,
   GameDirEntry,
   GameDirState,
+  GameRunning,
+  ImportChoice,
+  ImportOutcome,
   LevelBackupInfo,
   ModrinthInstallArgs,
   ModrinthInstallOutcome,
@@ -14,76 +17,105 @@ import type {
   ModrinthSort,
   ModrinthTargets,
   ModrinthVersion,
+  Pack,
   ResourceStack,
-  StackEntry,
   Theme,
 } from '../lib/types';
 import { defaultConfig, IpcError } from '../lib/types';
+import {
+  assertDownloadHash,
+  datapack,
+  fakeHits,
+  fakeProject,
+  fakeVersions,
+  gameDir,
+  modrinthTargets,
+  pack,
+  stack,
+  stackEntry,
+  withActiveGameDir,
+  withGameDirAdded,
+  withGameDirRemoved,
+  world,
+} from './fake-packs';
 
 export interface FakeClient extends IpcClient {
   readonly config: Config;
   readonly entries: GameDirEntry[];
   readonly stack: ResourceStack;
+  readonly packs: Pack[];
+  readonly choices: ImportChoice[];
+  readonly imports: string[];
+  readonly toggles: Array<{ filename: string; enabled: boolean }>;
+  readonly reorders: string[][];
+  readonly restores: string[];
+  readonly levelRestores: string[];
+  restoredStack: ResourceStack | null;
 }
 
-export function gameDir(
-  path: string,
-  present = true,
-  stored = true,
-): GameDirEntry {
-  return {
-    path,
-    source: stored ? 'manual' : 'std',
-    present,
-    stored,
-  };
+export interface FakeClientOptions {
+  gameDirs?: GameDirEntry[];
+  packs?: Pack[];
+  resource?: string[];
+  running?: GameRunning | null;
+  staleLocks?: string[];
+  backups?: BackupInfo[];
+  levelBackups?: LevelBackupInfo[];
+  backupsError?: IpcError | null;
+  restoredStack?: ResourceStack | null;
 }
 
-function entry(value: string): StackEntry {
-  return value.startsWith('file/')
-    ? { kind: 'file', value, filename: value.slice('file/'.length) }
-    : { kind: 'foreign', value };
+export { gameDir, pack, datapack, world, stack } from './fake-packs';
+
+function stripZip(name: string): string {
+  return name.replace(/\.zip$/i, '');
 }
 
 function dataStack(): DataStack {
-  return {
-    enabled: ['vanilla'].map((value) => ({
-      kind: 'foreign' as const,
-      value,
-    })),
+  return stack({
+    enabled: [{ kind: 'foreign', value: 'vanilla' }],
     disabled: [],
-    running: null,
-    world_locked: null,
-    stale_locks: [],
-    detection_supported: true,
-  };
+  });
 }
 
-function looksLikeGameDir(path: string): boolean {
-  return (
-    path.includes('.minecraft') ||
-    /\/(saves|versions|resourcepacks)(\/|$)/.test(path)
-  );
-}
-
-export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
-  let entries = [...initial];
+/**
+ * The in-memory client for component tests. It is synchronous and records
+ * writes; `ipc.mock` stays the browser demo with localStorage and latency.
+ */
+export function makeFakeClient(
+  initial: GameDirEntry[] | FakeClientOptions = [],
+): FakeClient {
+  const options = Array.isArray(initial) ? { gameDirs: initial } : initial;
+  let entries = [...(options.gameDirs ?? [])];
   let config: Config = {
     ...defaultConfig(),
-    game_dirs: initial
+    game_dirs: (options.gameDirs ?? [])
       .filter((item) => item.stored)
       .map((item) => ({ path: item.path, source: item.source })),
   };
-  let stack: ResourceStack = {
-    entries: ['vanilla', 'fabric'].map(entry),
-    incompatible: [],
-    running: null,
-    stale_locks: [],
-    detection_supported: true,
-  };
-  const backups: BackupInfo[] = [];
+  let packs = [...(options.packs ?? [])];
+  let resource = [...(options.resource ?? ['vanilla', 'fabric'])];
+  let restoredStack = options.restoredStack ?? null;
+  const running = options.running ?? null;
+  const staleLocks = [...(options.staleLocks ?? [])];
+  const backups = [...(options.backups ?? [])];
+  const levelBackups = [...(options.levelBackups ?? [])];
+  const backupsError = options.backupsError ?? null;
+  const choices: ImportChoice[] = [];
+  const imports: string[] = [];
+  const toggles: Array<{ filename: string; enabled: boolean }> = [];
+  const reorders: string[][] = [];
+  const restores: string[] = [];
+  const levelRestores: string[] = [];
 
   const state = (): GameDirState => ({ config, entries });
+  const currentStack = (): ResourceStack => ({
+    entries: resource.map(stackEntry),
+    incompatible: [],
+    running,
+    stale_locks: [...staleLocks],
+    detection_supported: true,
+  });
 
   return {
     get config() {
@@ -93,54 +125,52 @@ export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
       return entries;
     },
     get stack() {
-      return stack;
+      return currentStack();
+    },
+    get packs() {
+      return packs;
+    },
+    get choices() {
+      return choices;
+    },
+    get imports() {
+      return imports;
+    },
+    get toggles() {
+      return toggles;
+    },
+    get reorders() {
+      return reorders;
+    },
+    get restores() {
+      return restores;
+    },
+    get levelRestores() {
+      return levelRestores;
+    },
+    get restoredStack() {
+      return restoredStack;
+    },
+    set restoredStack(value) {
+      restoredStack = value;
     },
     async listGameDirs() {
       return entries;
     },
     async addGameDir(path: string) {
-      if (!looksLikeGameDir(path)) {
-        throw new IpcError(
-          'invalid_game_dir',
-          `invalid game dir ${path}: expected one of versions, saves, or resourcepacks`,
-        );
-      }
+      config = withGameDirAdded(config, path);
       if (!entries.some((item) => item.path === path)) {
         entries = [...entries, gameDir(path, true, true)];
-      }
-      if (!config.game_dirs.some((dir) => dir.path === path)) {
-        config = {
-          ...config,
-          game_dirs: [...config.game_dirs, { path, source: 'manual' }],
-        };
       }
       return state();
     },
     async removeGameDir(path: string) {
-      if (!config.game_dirs.some((dir) => dir.path === path)) {
-        throw new IpcError('unknown_game_dir', `unknown game dir ${path}`);
-      }
+      config = withGameDirRemoved(config, path);
       entries = entries.filter((item) => item.path !== path);
-      config = {
-        ...config,
-        game_dirs: config.game_dirs.filter((dir) => dir.path !== path),
-        active_game_dir:
-          config.active_game_dir === path ? null : config.active_game_dir,
-      };
       return state();
     },
     async setActiveGameDir(path: string) {
-      const target = entries.find((candidate) => candidate.path === path);
-      if (!target) {
-        throw new IpcError('unknown_game_dir', `unknown game dir ${path}`);
-      }
-      if (!target.present) {
-        throw new IpcError(
-          'invalid_game_dir',
-          `invalid game dir ${path}: expected one of versions, saves, or resourcepacks`,
-        );
-      }
-      config = { ...config, active_game_dir: path };
+      config = withActiveGameDir(config, entries, path);
       return state();
     },
     async getConfig() {
@@ -154,45 +184,75 @@ export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
       return null;
     },
     async listResourcePacks() {
-      return { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 };
+      return {
+        packs: packs.map((item) => ({ ...item })),
+        count: packs.length,
+        bytes_read: packs.reduce((total, item) => total + item.bytes_read, 0),
+        elapsed_ms: 4,
+      };
     },
-    async importResourcePack() {
-      throw new IpcError('pack_unknown_kind', 'fake client has no pack importer');
+    async importResourcePack(
+      path: string,
+      choice: ImportChoice = 'default',
+    ): Promise<ImportOutcome> {
+      imports.push(path);
+      choices.push(choice);
+      const base = path.split('/').filter(Boolean).at(-1) ?? path;
+      const lower = base.toLowerCase();
+      if (lower.includes('broken') || lower.includes('corrupt')) {
+        throw new IpcError(
+          'pack_broken_archive',
+          `${base} is not a readable pack: invalid Zip archive`,
+        );
+      }
+      if (lower.includes('duplicate')) {
+        if (choice === 'skip') return { status: 'skipped' };
+        if (choice !== 'replace') {
+          return {
+            status: 'duplicate',
+            name: base,
+            sha256: 'abc123',
+            existing: packs[0]?.path ?? '/packs/existing.zip',
+          };
+        }
+      }
+      const imported = pack(stripZip(base));
+      packs = [...packs, imported];
+      return { status: 'imported', pack: imported };
     },
-    async deleteResourcePack() {
-      throw new IpcError('pack_not_found', 'fake client has no pack store');
+    async deleteResourcePack(path: string) {
+      if (!packs.some((item) => item.path === path)) {
+        throw new IpcError('pack_not_found', `pack ${path} does not exist`);
+      }
+      packs = packs.filter((item) => item.path !== path);
     },
     async getResourceStack() {
-      return stack;
+      return currentStack();
     },
     async setResourcePackEnabled(filename: string, enabled: boolean) {
+      toggles.push({ filename, enabled });
       const value = `file/${filename}`;
       if (enabled) {
-        stack = {
-          ...stack,
-          entries: [...stack.entries, entry(value)],
-        };
+        if (!resource.includes(value)) resource = [...resource, value];
       } else {
-        stack = {
-          ...stack,
-          entries: stack.entries.filter((item) => item.value !== value),
-          incompatible: stack.incompatible.filter((item) => item !== value),
-        };
+        resource = resource.filter((item) => item !== value);
       }
-      return stack;
+      return currentStack();
     },
     async reorderResourceStack(order: string[]) {
-      stack = {
-        ...stack,
-        entries: order.map(entry),
-      };
-      return stack;
+      // The fake records the order the UI sends. The demo mock and core
+      // enforce the locked foreign entries; this fake does not.
+      reorders.push(order);
+      resource = [...order];
+      return currentStack();
     },
     async listOptionsBackups() {
+      if (backupsError) throw backupsError;
       return backups;
     },
-    async restoreOptionsBackup() {
-      return stack;
+    async restoreOptionsBackup(backup: string) {
+      restores.push(backup);
+      return restoredStack ?? currentStack();
     },
     async listWorlds() {
       return [];
@@ -218,14 +278,15 @@ export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
     async reorderDatapacks() {
       return dataStack();
     },
-    async listLevelBackups(): Promise<LevelBackupInfo[]> {
-      return [];
+    async listLevelBackups(worldName: string): Promise<LevelBackupInfo[]> {
+      return levelBackups.filter((entry) => entry.world === worldName);
     },
     async listAllLevelBackups(): Promise<LevelBackupInfo[]> {
-      return [];
+      return [...levelBackups];
     },
-    async restoreLevelBackup() {
-      return dataStack();
+    async restoreLevelBackup(worldName: string, backup: string) {
+      levelRestores.push(`${worldName}/${backup}`);
+      return stack({ enabled: [], disabled: [] });
     },
     async searchModrinth(
       text: string,
@@ -235,6 +296,8 @@ export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
     ): Promise<ModrinthSearchHit[]> {
       void gameVersion;
       void sort;
+      // Exact sentinels leave a real query containing "offline" searchable;
+      // the demo mock matches the substring so it can be poked by typing.
       if (text === '__offline__') {
         throw new IpcError('modrinth_offline', 'Modrinth is unreachable');
       }
@@ -250,193 +313,54 @@ export function makeFakeClient(initial: GameDirEntry[]): FakeClient {
       return fakeVersions(projectId);
     },
     async modrinthTargets(): Promise<ModrinthTargets> {
-      return {
-        installed_versions: ['1.21', '1.21.1'],
-        preferred_launcher: '1.21.1',
-        world_version: '1.21.1',
-      };
+      return modrinthTargets();
     },
     async installModrinthPack(args: ModrinthInstallArgs): Promise<ModrinthInstallOutcome> {
-      if (args.filename.includes('mismatch')) {
-        throw new IpcError(
-          'download_hash_mismatch',
-          'download failed: SHA-512 mismatch (expected 00aa, got ffbb)',
-        );
-      }
+      assertDownloadHash(args.filename);
       if (args.kind === 'datapack') {
         return { kind: 'datapack', outcome: { status: 'imported', filename: args.filename } };
       }
+      const installed = pack(args.filename, {
+        id: args.filename,
+        name: stripZip(args.filename),
+        description: 'Installed from Modrinth.',
+        meta: {
+          pack_format: null,
+          min_format: null,
+          max_format: null,
+          supported_formats: null,
+          description: 'Installed from Modrinth.',
+        },
+        format: null,
+        format_range: null,
+        game_label: null,
+        bytes_read: 0,
+      });
       return {
         kind: 'resourcepack',
-        outcome: {
-          status: 'imported',
-          pack: {
-            id: args.filename,
-            name: args.filename.replace(/\.zip$/i, ''),
-            path: `/home/demo/.minecraft/resourcepacks/${args.filename}`,
-            location: 'zip',
-            kind: 'resource',
-            description: 'Installed from Modrinth.',
-            meta: {
-              pack_format: null,
-              min_format: null,
-              max_format: null,
-              supported_formats: null,
-              description: 'Installed from Modrinth.',
-            },
-            format: null,
-            format_range: null,
-            game_label: null,
-            icon: null,
-            error: null,
-            bytes_read: 0,
-          },
-        },
+        outcome: { status: 'imported', pack: installed },
       };
     },
   };
 }
 
-function fakeHits(kind: ModrinthKind): ModrinthSearchHit[] {
-  if (kind === 'datapack') {
-    return [
-      {
-        project_id: 'dp1',
-        slug: 'pure-datapack',
-        title: 'Pure Datapack',
-        description: 'Only datapack files.',
-        icon_url: null,
-        downloads: 500,
-        follows: 5,
-        project_type: 'datapack',
-        versions: ['1.21.1'],
-        latest_version: 'd2',
-      },
-    ];
-  }
-  return [
-    {
-      project_id: '7q7JnQD0',
-      slug: 'fresh-animations',
-      title: 'Fresh Animations',
-      description: 'Fresh animations.',
-      icon_url: 'https://cdn.modrinth.com/icons/fresh.webp',
-      downloads: 100,
-      follows: 10,
-      project_type: 'resourcepack',
-      versions: ['1.21.1'],
-      latest_version: 'v2',
-    },
-  ];
-}
-
-function fakeProject(projectId: string): ModrinthProject {
-  const hit = fakeHits('resourcepack').find(
-    (item) => item.project_id === projectId || item.slug === projectId,
-  ) ?? {
-    project_id: projectId,
-    slug: projectId,
-    title: projectId,
-    description: '',
-    icon_url: null,
-    downloads: 0,
-    follows: 0,
-    project_type: 'resourcepack',
-    versions: [] as string[],
-    latest_version: null,
-  };
+export function worldsClient(
+  overrides: Partial<WorldsClient> = {},
+): WorldsClient {
   return {
-    id: hit.project_id,
-    slug: hit.slug,
-    title: hit.title,
-    description: hit.description,
-    body: hit.description,
-    icon_url: hit.icon_url,
-    downloads: hit.downloads,
-    follows: hit.follows,
-    project_type: hit.project_type,
-    game_versions: [...hit.versions],
-    versions: fakeVersions(hit.project_id).map((version) => version.id),
+    listWorlds: async () => [world()],
+    listDatapacks: async () => ({
+      packs: { packs: [datapack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
+      stack: stack(),
+    }),
+    importDatapack: async () => ({ status: 'skipped' }),
+    deleteDatapack: async () => ({ removed_references: true, stack: stack() }),
+    removeDatapackReference: async () => stack(),
+    setDatapackEnabled: async () => stack(),
+    reorderDatapacks: async () => stack(),
+    listLevelBackups: async () => [],
+    listAllLevelBackups: async () => [],
+    restoreLevelBackup: async () => stack(),
+    ...overrides,
   };
-}
-
-function fakeVersions(projectId: string): ModrinthVersion[] {
-  if (projectId === 'mm1' || projectId === 'mismatch-pack') {
-    return [
-      {
-        id: 'm1',
-        project_id: 'mm1',
-        name: 'Mismatch Pack 1.0',
-        version_number: '1.0',
-        game_versions: ['1.21.1'],
-        loaders: ['minecraft'],
-        files: [
-          {
-            url: 'https://cdn.modrinth.com/data/mm1/mismatch.zip',
-            filename: 'mismatch.zip',
-            size: 128,
-            primary: true,
-            hashes: { sha512: '00aa', sha1: '00' },
-          },
-        ],
-      },
-    ];
-  }
-  if (projectId === 'dp1' || projectId === 'pure-datapack') {
-    return [
-      {
-        id: 'd2',
-        project_id: 'dp1',
-        name: 'Pure Datapack 2.0',
-        version_number: '2.0',
-        game_versions: ['1.21.1'],
-        loaders: ['minecraft'],
-        files: [
-          {
-            url: 'https://cdn.modrinth.com/data/dp1/pure-2.0.zip',
-            filename: 'pure-2.0.zip',
-            size: 256,
-            primary: true,
-            hashes: { sha512: 'dp', sha1: 'dp1' },
-          },
-        ],
-      },
-    ];
-  }
-  return [
-    {
-      id: 'v2',
-      project_id: '7q7JnQD0',
-      name: 'Fresh Animations 1.9',
-      version_number: '1.9',
-      game_versions: ['1.21.1'],
-      loaders: ['minecraft'],
-      files: [
-        {
-          url: 'https://cdn.modrinth.com/data/7q7/fresh-1.9.zip',
-          filename: 'fresh-1.9.zip',
-          size: 1024,
-          primary: true,
-          hashes: { sha512: 'aa', sha1: 'a' },
-        },
-      ],
-    },
-    {
-      id: 'v1',
-      project_id: '7q7JnQD0',
-      name: 'Fresh Animations 1.8',
-      version_number: '1.8',
-      game_versions: ['1.20.1'],
-      loaders: ['minecraft'],
-      files: [
-        {
-          url: 'https://cdn.modrinth.com/data/7q7/fresh-1.8.zip',
-          filename: 'fresh-1.8.zip',
-          size: 900,
-          primary: true,
-          hashes: { sha512: 'bb', sha1: 'b' },
-        },
-      ],
-    },
-  ];
 }

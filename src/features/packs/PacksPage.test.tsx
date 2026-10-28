@@ -2,173 +2,16 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { PackClient } from '../../lib/ipc';
-import type {
-  BackupInfo,
-  FormatRange,
-  FormatVersion,
-  ImportChoice,
-  GameRunning,
-  ImportOutcome,
-  Pack,
-  PackListing,
-  ResourceStack,
-} from '../../lib/types';
+import type { GameRunning } from '../../lib/types';
 import { IpcError } from '../../lib/types';
+import { makeFakeClient, type FakeClient } from '../../test/fake-ipc';
+import {
+  AUTUMN_PACK,
+  BROKEN_PACK,
+  SYMLINK_PACK,
+  VANILLA_PACK,
+} from '../../test/fake-packs';
 import PacksPage from './PacksPage';
-
-function version(major: number, minor = 0): FormatVersion {
-  return { major, minor };
-}
-
-function formatRange(min: number, max: number): FormatRange {
-  return { min: version(min), max: version(max) };
-}
-
-function pack(
-  name: string,
-  overrides: Partial<Pack> = {},
-): Pack {
-  return {
-    id: `/home/demo/.minecraft/resourcepacks/${name}`,
-    name,
-    path: `/home/demo/.minecraft/resourcepacks/${name}.zip`,
-    location: 'zip',
-    kind: 'resource',
-    description: 'A synthetic pack',
-    meta: {
-      pack_format: version(34),
-      min_format: null,
-      max_format: null,
-      supported_formats: null,
-      description: 'A synthetic pack',
-    },
-    format: version(34),
-    format_range: formatRange(34, 42),
-    game_label: '1.21 to 1.21.3',
-    icon: null,
-    error: null,
-    bytes_read: 512,
-    ...overrides,
-  };
-}
-
-const AUTUMN = pack('Autumn', {
-  kind: 'data',
-  description: 'Seasonal recipes for a server',
-  format_range: formatRange(48, 57),
-  game_label: '1.21 to 1.21.3',
-});
-const VANILLA = pack('Vanilla', {
-  description: 'Small UI tweaks',
-  format_range: formatRange(34, 69),
-  game_label: '1.21 to 1.21.10',
-});
-const BROKEN = pack('Broken', {
-  kind: 'unknown',
-  format_range: null,
-  format: null,
-  game_label: null,
-  error: {
-    code: 'pack_broken_archive',
-    message: 'Broken is not a readable pack: invalid Zip archive',
-  },
-});
-const SYMLINK = pack('Linked', {
-  path: '/home/demo/.minecraft/resourcepacks/Linked',
-  location: 'directory',
-  kind: 'unknown',
-  format_range: null,
-  format: null,
-  game_label: null,
-  error: {
-    code: 'pack_symlink',
-    message: 'Linked is a symlink; Mine Utils does not follow links',
-  },
-});
-
-interface FakeClient extends PackClient {
-  current: Pack[];
-  choices: ImportChoice[];
-  imports: string[];
-}
-
-function makeFakeClient(initial: Pack[]): FakeClient {
-  let current = [...initial];
-  const choices: ImportChoice[] = [];
-  const imports: string[] = [];
-  const client: FakeClient = {
-    get current() {
-      return current;
-    },
-    choices,
-    imports,
-    async listResourcePacks(): Promise<PackListing> {
-      return {
-        packs: [...current],
-        count: current.length,
-        bytes_read: current.reduce((total, item) => total + item.bytes_read, 0),
-        elapsed_ms: 4,
-      };
-    },
-    async importResourcePack(
-      path: string,
-      choice: ImportChoice = 'default',
-    ): Promise<ImportOutcome> {
-      imports.push(path);
-      choices.push(choice);
-      const base = path.split('/').filter(Boolean).at(-1) ?? path;
-      if (base.toLowerCase().includes('duplicate')) {
-        if (choice === 'skip') return { status: 'skipped' };
-        if (choice !== 'replace') {
-          return {
-            status: 'duplicate',
-            name: base,
-            sha256: 'abc123',
-            existing: current[0]?.path ?? '/packs/existing.zip',
-          };
-        }
-      }
-      if (base.toLowerCase().includes('broken')) {
-        throw new IpcError(
-          'pack_broken_archive',
-          `${base} is not a readable pack: invalid Zip archive`,
-        );
-      }
-      const name = base.replace(/\.zip$/i, '');
-      const imported = pack(name);
-      current = [...current, imported];
-      return { status: 'imported', pack: imported };
-    },
-    async deleteResourcePack(path: string) {
-      current = current.filter((item) => item.path !== path);
-    },
-    async getResourceStack(): Promise<ResourceStack> {
-      return {
-        entries: [
-          { kind: 'foreign', value: 'vanilla' },
-          { kind: 'foreign', value: 'fabric' },
-        ],
-        incompatible: [],
-        running: null,
-        stale_locks: [],
-        detection_supported: true,
-      };
-    },
-    async setResourcePackEnabled(): Promise<ResourceStack> {
-      return this.getResourceStack();
-    },
-    async reorderResourceStack(): Promise<ResourceStack> {
-      return this.getResourceStack();
-    },
-    async listOptionsBackups(): Promise<BackupInfo[]> {
-      return [];
-    },
-    async restoreOptionsBackup(): Promise<ResourceStack> {
-      return this.getResourceStack();
-    },
-  };
-  return client;
-}
 
 function renderPage(client: FakeClient) {
   return render(<PacksPage client={client} />);
@@ -177,7 +20,7 @@ function renderPage(client: FakeClient) {
 describe('PacksPage', () => {
   it('lists packs with descriptions, chips, icons, and an isolated error card', async () => {
     const icon = { sha256: 'icon', url: 'data:image/png;base64,abc' };
-    const client = makeFakeClient([{ ...VANILLA, icon }, AUTUMN, BROKEN]);
+    const client = makeFakeClient({ packs: [{ ...VANILLA_PACK, icon }, AUTUMN_PACK, BROKEN_PACK] });
     renderPage(client);
 
     expect(await screen.findByText('Vanilla')).toBeInTheDocument();
@@ -191,7 +34,7 @@ describe('PacksPage', () => {
 
   it('filters by search and clears filters from the empty state', async () => {
     const user = userEvent.setup();
-    renderPage(makeFakeClient([VANILLA, AUTUMN]));
+    renderPage(makeFakeClient({ packs: [VANILLA_PACK, AUTUMN_PACK] }));
 
     await screen.findByText('Vanilla');
     await user.type(screen.getByLabelText('Search packs'), 'autumn');
@@ -207,7 +50,7 @@ describe('PacksPage', () => {
 
   it('filters by kind and by format', async () => {
     const user = userEvent.setup();
-    renderPage(makeFakeClient([VANILLA, AUTUMN]));
+    renderPage(makeFakeClient({ packs: [VANILLA_PACK, AUTUMN_PACK] }));
 
     await screen.findByText('Vanilla');
     await user.selectOptions(screen.getByLabelText('Kind'), 'data');
@@ -222,7 +65,7 @@ describe('PacksPage', () => {
 
   it('imports a pack, adds a card, and opens the detail panel', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     renderPage(client);
 
     await screen.findByText('Vanilla');
@@ -241,7 +84,7 @@ describe('PacksPage', () => {
 
   it('offers Skip and Replace on a duplicate and skip leaves one entry', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     renderPage(client);
 
     await screen.findByText('Vanilla');
@@ -260,13 +103,13 @@ describe('PacksPage', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(client.choices).toContain('skip');
-    expect(client.current).toHaveLength(1);
+    expect(client.packs).toHaveLength(1);
     expect(screen.getAllByText('Vanilla')).toHaveLength(1);
   });
 
   it('replaces on a duplicate prompt', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     renderPage(client);
 
     await screen.findByText('Vanilla');
@@ -285,7 +128,7 @@ describe('PacksPage', () => {
 
   it('deletes a pack after confirmation and removes the card', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA, AUTUMN]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK, AUTUMN_PACK] });
     renderPage(client);
 
     await user.click(await screen.findByRole('button', { name: /^Autumn,/ }));
@@ -297,12 +140,12 @@ describe('PacksPage', () => {
       expect(screen.queryByRole('button', { name: /^Autumn,/ })).not.toBeInTheDocument(),
     );
     expect(screen.getByText('Vanilla')).toBeInTheDocument();
-    expect(client.current).toHaveLength(1);
+    expect(client.packs).toHaveLength(1);
   });
 
   it('refreshes the banner and disabled controls after a game_running delete', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     const running: GameRunning = {
       kind: 'process',
       detail: 'pid 4242 runs java',
@@ -337,7 +180,7 @@ describe('PacksPage', () => {
 
   it('offers no delete for a symlink pack and says how to remove it', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([SYMLINK]);
+    const client = makeFakeClient({ packs: [SYMLINK_PACK] });
     renderPage(client);
 
     await user.click(await screen.findByRole('button', { name: /^Linked,/ }));
@@ -352,7 +195,7 @@ describe('PacksPage', () => {
 
   it('shows an import failure inside the import sheet', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     renderPage(client);
 
     await screen.findByText('Vanilla');
@@ -372,7 +215,7 @@ describe('PacksPage', () => {
   });
 
   it('opens the sheet on the first dropped path and reports the rest', async () => {
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     const { container } = renderPage(client);
     await screen.findByText('Vanilla');
 
@@ -397,7 +240,7 @@ describe('PacksPage', () => {
 
   it('imports a folder picked with the folder picker', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     const picked: boolean[] = [];
     const pickPath = async (directory: boolean) => {
       picked.push(directory);
@@ -421,7 +264,7 @@ describe('PacksPage', () => {
 
   it('renders a distinct stack error with the launch hint and a retry action', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     let failing = true;
     client.getResourceStack = async () => {
       if (failing) {
@@ -454,7 +297,7 @@ describe('PacksPage', () => {
   });
 
   it('lets a malformed options.txt speak without a second launch hint', async () => {
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     client.getResourceStack = async () => {
       throw new IpcError(
         'options_txt',
@@ -473,7 +316,7 @@ describe('PacksPage', () => {
 
   it('pauses writes and explains an unknown guard', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     client.getResourceStack = async () => ({
       entries: [{ kind: 'file', value: 'file/Vanilla.zip', filename: 'Vanilla.zip' }],
       incompatible: [],
@@ -498,7 +341,7 @@ describe('PacksPage', () => {
 
   it('refreshes the stack and shows the banner after a game_running toggle error', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     const running: GameRunning = {
       kind: 'session_lock',
       detail: '/games/one/saves/world/session.lock is locked by pid 4242',
@@ -533,7 +376,7 @@ describe('PacksPage', () => {
 
   it('rechecks both the stack and the app guard from the banner', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     let stackReads = 0;
     let guardChecks = 0;
     client.getResourceStack = async () => {
@@ -569,7 +412,7 @@ describe('PacksPage', () => {
   });
 
   it('lets a fresh null app guard clear a stale stack banner', async () => {
-    const client = makeFakeClient([VANILLA]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
     client.getResourceStack = async () => ({
       entries: [{ kind: 'file', value: 'file/Vanilla.zip', filename: 'Vanilla.zip' }],
       incompatible: [],
@@ -592,7 +435,7 @@ describe('PacksPage', () => {
 
   it('does not offer the stack toggle for a data pack', async () => {
     const user = userEvent.setup();
-    const client = makeFakeClient([VANILLA, AUTUMN]);
+    const client = makeFakeClient({ packs: [VANILLA_PACK, AUTUMN_PACK] });
     renderPage(client);
 
     await user.click(await screen.findByRole('button', { name: /^Autumn,/ }));

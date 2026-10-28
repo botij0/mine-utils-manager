@@ -2,34 +2,35 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorldsClient } from '../../lib/ipc';
-import { IpcError, type World } from '../../lib/types';
+import { IpcError } from '../../lib/types';
+import { worldsClient } from '../../test/fake-ipc';
+import { datapack, stack, stackEntry, world } from '../../test/fake-packs';
 import WorldsPage from './WorldsPage';
 
-function world(overrides: Partial<World> = {}): World {
-  return {
-    dir_name: 'Survival 1_17',
-    path: '/home/demo/.minecraft/saves/Survival 1_17',
-    level_name: 'Survival 1.17',
-    version: { name: '1.21.10', data_format: { major: 88, minor: 0 } },
-    icon: null,
-    running: null,
-    world_locked: null,
-    stale_lock: false,
-    detection_supported: true,
-    issue: null,
-    ...overrides,
-  };
-}
+const BROKEN_DATAPACK = datapack('broken.zip', null, null, {
+  id: '/saves/Survival/broken.zip',
+  name: 'broken',
+  path: '/saves/Survival/datapacks/broken.zip',
+  description: '',
+  meta: {
+    pack_format: null,
+    min_format: null,
+    max_format: null,
+    supported_formats: null,
+    description: '',
+  },
+  error: { code: 'pack_broken_archive', message: 'broken.zip is not readable' },
+  bytes_read: 8,
+});
 
-function baseClient(overrides: Partial<WorldsClient> = {}): WorldsClient {
-  return {
+function pageClient(overrides: Partial<WorldsClient> = {}): WorldsClient {
+  return worldsClient({
     listWorlds: async () => [
       world(),
       world({
         dir_name: 'Creative Flat',
         path: '/home/demo/.minecraft/saves/Creative Flat',
         level_name: 'Creative Flat',
-        version: { name: '1.21.10', data_format: { major: 88, minor: 0 } },
       }),
       world({
         dir_name: 'Broken World',
@@ -41,120 +42,48 @@ function baseClient(overrides: Partial<WorldsClient> = {}): WorldsClient {
     ],
     listDatapacks: async (name: string) => {
       if (name === 'Broken World') throw new Error('level.dat is not valid gzip');
-      const enabled =
+      const enabled = (
         name === 'Survival 1_17'
-          ? [
-              { kind: 'foreign' as const, value: 'vanilla' },
-              { kind: 'file' as const, value: 'file/a.zip', filename: 'a.zip' },
-              { kind: 'foreign' as const, value: 'fabric' },
-              { kind: 'foreign' as const, value: 'fabric-convention-tags-v2' },
-            ]
-          : [{ kind: 'foreign' as const, value: 'vanilla' }];
+          ? ['vanilla', 'file/a.zip', 'fabric', 'fabric-convention-tags-v2']
+          : ['vanilla']
+      ).map(stackEntry);
       return {
         packs: {
           packs: [
-            {
+            datapack('a.zip', 7, 7, {
               id: `/saves/${name}/datapacks/a.zip`,
               name: 'a',
               path: `/saves/${name}/datapacks/a.zip`,
-              location: 'zip' as const,
-              kind: 'data' as const,
-              description: 'A datapack',
-              meta: {
-                pack_format: null,
-                min_format: { major: 7, minor: 0 },
-                max_format: { major: 7, minor: 0 },
-                supported_formats: null,
-                description: 'A datapack',
-              },
-              format: { major: 7, minor: 0 },
-              format_range: { min: { major: 7, minor: 0 }, max: { major: 7, minor: 0 } },
-              game_label: '1.17 to 1.17.1',
-              icon: null,
-              error: null,
               bytes_read: 64,
-            },
+            }),
           ],
           count: 1,
           bytes_read: 64,
           elapsed_ms: 1,
         },
-        stack: {
-          enabled,
-          disabled: [],
-          running: null,
-          world_locked: null,
-          stale_locks: [],
-          detection_supported: true,
-        },
+        stack: stack({ enabled, disabled: [] }),
       };
     },
-    importDatapack: async () => ({ status: 'skipped' }),
-    deleteDatapack: async () => ({
-      removed_references: true,
-      stack: {
-        enabled: [],
-        disabled: [],
-        running: null,
-        world_locked: null,
-        stale_locks: [],
-        detection_supported: true,
-      },
-    }),
-    setDatapackEnabled: async () => ({
-      enabled: [],
-      disabled: [],
-      running: null,
-      world_locked: null,
-      stale_locks: [],
-      detection_supported: true,
-    }),
-    reorderDatapacks: async () => ({
-      enabled: [],
-      disabled: [],
-      running: null,
-      world_locked: null,
-      stale_locks: [],
-      detection_supported: true,
-    }),
-    listLevelBackups: async () => [],
-    listAllLevelBackups: async () => [],
-    removeDatapackReference: async () => ({
-      enabled: [],
-      disabled: [],
-      running: null,
-      world_locked: null,
-      stale_locks: [],
-      detection_supported: true,
-    }),
-    restoreLevelBackup: async () => ({
-      enabled: [],
-      disabled: [],
-      running: null,
-      world_locked: null,
-      stale_locks: [],
-      detection_supported: true,
-    }),
     ...overrides,
-  };
+  });
 }
 
 describe('WorldsPage', () => {
   it('lists worlds with icons and versions', async () => {
-    render(<WorldsPage client={baseClient()} />);
+    render(<WorldsPage client={pageClient()} />);
     expect(await screen.findAllByText('Survival 1.17')).toHaveLength(2);
     expect(screen.getByText('Creative Flat')).toBeInTheDocument();
     expect(screen.getAllByText('1.21.10', { selector: '.world-rail-version' })).toHaveLength(2);
   });
 
   it('renders datapacks with a compatibility warning', async () => {
-    render(<WorldsPage client={baseClient()} />);
+    render(<WorldsPage client={pageClient()} />);
     await screen.findAllByText('Survival 1.17');
     expect(await screen.findByText('May not load on this world')).toBeInTheDocument();
   });
 
   it('keeps foreign entries locked', async () => {
-    render(<WorldsPage client={baseClient()} />);
+    render(<WorldsPage client={pageClient()} />);
     await screen.findAllByText('Survival 1.17');
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     const locks = within(grid).getAllByText('Locked');
@@ -163,7 +92,7 @@ describe('WorldsPage', () => {
 
   it('hides write controls for a corrupt level.dat', async () => {
     const user = userEvent.setup();
-    render(<WorldsPage client={baseClient()} />);
+    render(<WorldsPage client={pageClient()} />);
     await user.click(await screen.findByRole('button', { name: /Broken World/ }));
     expect(await screen.findByText(/This world is read-only/)).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Datapack stack' })).not.toBeInTheDocument();
@@ -179,18 +108,15 @@ describe('WorldsPage', () => {
         command: null,
       },
     });
-    const lockedClient = baseClient({
+    const lockedClient = pageClient({
       listWorlds: async () => [lockedWorld],
       listDatapacks: async () => ({
         packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
-        stack: {
-          enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
-          disabled: [{ kind: 'file' as const, value: 'file/a.zip', filename: 'a.zip' }],
-          running: null,
+        stack: stack({
+          enabled: [{ kind: 'foreign', value: 'vanilla' }],
+          disabled: [{ kind: 'file', value: 'file/a.zip', filename: 'a.zip' }],
           world_locked: lockedWorld.world_locked,
-          stale_locks: [],
-          detection_supported: true,
-        },
+        }),
       }),
     });
     render(<WorldsPage client={lockedClient} />);
@@ -201,35 +127,29 @@ describe('WorldsPage', () => {
 
   it('toggles a datapack and refreshes the stack', async () => {
     const user = userEvent.setup();
-    const setEnabled = vi.fn(async () => ({
-      enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
-      disabled: [{ kind: 'file' as const, value: 'file/a.zip', filename: 'a.zip' }],
-      running: null,
-      world_locked: null,
-      stale_locks: [],
-      detection_supported: true,
-    }));
-    render(<WorldsPage client={baseClient({ setDatapackEnabled: setEnabled })} />);
+    const setEnabled = vi.fn(async () =>
+      stack({
+        enabled: [{ kind: 'foreign', value: 'vanilla' }],
+        disabled: [{ kind: 'file', value: 'file/a.zip', filename: 'a.zip' }],
+      }),
+    );
+    render(<WorldsPage client={pageClient({ setDatapackEnabled: setEnabled })} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     await user.click(within(grid).getByRole('button', { name: 'Disable' }));
     await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('Survival 1_17', 'a.zip', false));
   });
 
   it('keys duplicate entries by position so both cards render', async () => {
-    const dupClient = baseClient({
+    const dupClient = pageClient({
       listDatapacks: async () => ({
         packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
-        stack: {
+        stack: stack({
           enabled: [
-            { kind: 'file' as const, value: 'file/dup.zip', filename: 'dup.zip' },
-            { kind: 'file' as const, value: 'file/dup.zip', filename: 'dup.zip' },
+            { kind: 'file', value: 'file/dup.zip', filename: 'dup.zip' },
+            { kind: 'file', value: 'file/dup.zip', filename: 'dup.zip' },
           ],
           disabled: [],
-          running: null,
-          world_locked: null,
-          stale_locks: [],
-          detection_supported: true,
-        },
+        }),
       }),
     });
     render(<WorldsPage client={dupClient} />);
@@ -239,29 +159,18 @@ describe('WorldsPage', () => {
 
   it('moves by row index so a duplicate card swaps with its neighbor', async () => {
     const user = userEvent.setup();
-    const reorder = vi.fn(async () => ({
-      enabled: [],
-      disabled: [],
-      running: null,
-      world_locked: null,
-      stale_locks: [],
-      detection_supported: true,
-    }));
-    const orderClient = baseClient({
+    const reorder = vi.fn(async () => stack({ enabled: [], disabled: [] }));
+    const orderClient = pageClient({
       reorderDatapacks: reorder,
       listDatapacks: async () => ({
         packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
-        stack: {
+        stack: stack({
           enabled: [
-            { kind: 'file' as const, value: 'file/a.zip', filename: 'a.zip' },
-            { kind: 'file' as const, value: 'file/b.zip', filename: 'b.zip' },
+            { kind: 'file', value: 'file/a.zip', filename: 'a.zip' },
+            { kind: 'file', value: 'file/b.zip', filename: 'b.zip' },
           ],
           disabled: [],
-          running: null,
-          world_locked: null,
-          stale_locks: [],
-          detection_supported: true,
-        },
+        }),
       }),
     });
     render(<WorldsPage client={orderClient} />);
@@ -279,25 +188,21 @@ describe('WorldsPage', () => {
 
   it('shows an installed-but-unlisted pack with an Enable action', async () => {
     const user = userEvent.setup();
-    const setEnabled = vi.fn(async () => ({
-      enabled: [{ kind: 'file' as const, value: 'file/hand.zip', filename: 'hand.zip' }],
-      disabled: [],
-      running: null,
-      world_locked: null,
-      stale_locks: [],
-      detection_supported: true,
-    }));
-    const handClient = baseClient({
+    const setEnabled = vi.fn(async () =>
+      stack({
+        enabled: [{ kind: 'file', value: 'file/hand.zip', filename: 'hand.zip' }],
+        disabled: [],
+      }),
+    );
+    const handClient = pageClient({
       setDatapackEnabled: setEnabled,
       listDatapacks: async () => ({
         packs: {
           packs: [
-            {
+            datapack('hand.zip', null, null, {
               id: '/saves/Survival/hand.zip',
               name: 'hand',
               path: '/saves/Survival/datapacks/hand.zip',
-              location: 'zip' as const,
-              kind: 'data' as const,
               description: 'Hand-dropped',
               meta: {
                 pack_format: null,
@@ -306,26 +211,14 @@ describe('WorldsPage', () => {
                 supported_formats: null,
                 description: 'Hand-dropped',
               },
-              format: null,
-              format_range: null,
-              game_label: null,
-              icon: null,
-              error: null,
               bytes_read: 8,
-            },
+            }),
           ],
           count: 1,
           bytes_read: 8,
           elapsed_ms: 1,
         },
-        stack: {
-          enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
-          disabled: [],
-          running: null,
-          world_locked: null,
-          stale_locks: [],
-          detection_supported: true,
-        },
+        stack: stack({ enabled: [{ kind: 'foreign', value: 'vanilla' }], disabled: [] }),
       }),
     });
     render(<WorldsPage client={handClient} />);
@@ -337,26 +230,20 @@ describe('WorldsPage', () => {
 
   it('disables Enable for a missing file and offers to remove the reference', async () => {
     const user = userEvent.setup();
-    const remove = vi.fn(async () => ({
-      enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
-      disabled: [],
-      running: null,
-      world_locked: null,
-      stale_locks: [],
-      detection_supported: true,
-    }));
-    const missingClient = baseClient({
+    const remove = vi.fn(async () =>
+      stack({
+        enabled: [{ kind: 'foreign', value: 'vanilla' }],
+        disabled: [],
+      }),
+    );
+    const missingClient = pageClient({
       removeDatapackReference: remove,
       listDatapacks: async () => ({
         packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
-        stack: {
-          enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
-          disabled: [{ kind: 'file' as const, value: 'file/gone.zip', filename: 'gone.zip' }],
-          running: null,
-          world_locked: null,
-          stale_locks: [],
-          detection_supported: true,
-        },
+        stack: stack({
+          enabled: [{ kind: 'foreign', value: 'vanilla' }],
+          disabled: [{ kind: 'file', value: 'file/gone.zip', filename: 'gone.zip' }],
+        }),
       }),
     });
     render(<WorldsPage client={missingClient} />);
@@ -369,44 +256,18 @@ describe('WorldsPage', () => {
   });
 
   it('renders a broken datapack as an error card', async () => {
-    const brokenClient = baseClient({
+    const brokenClient = pageClient({
       listDatapacks: async () => ({
         packs: {
-          packs: [
-            {
-              id: '/saves/Survival/broken.zip',
-              name: 'broken',
-              path: '/saves/Survival/datapacks/broken.zip',
-              location: 'zip' as const,
-              kind: 'data' as const,
-              description: '',
-              meta: {
-                pack_format: null,
-                min_format: null,
-                max_format: null,
-                supported_formats: null,
-                description: '',
-              },
-              format: null,
-              format_range: null,
-              game_label: null,
-              icon: null,
-              error: { code: 'pack_broken_archive', message: 'broken.zip is not readable' },
-              bytes_read: 8,
-            },
-          ],
+          packs: [BROKEN_DATAPACK],
           count: 1,
           bytes_read: 8,
           elapsed_ms: 1,
         },
-        stack: {
-          enabled: [{ kind: 'file' as const, value: 'file/broken.zip', filename: 'broken.zip' }],
+        stack: stack({
+          enabled: [{ kind: 'file', value: 'file/broken.zip', filename: 'broken.zip' }],
           disabled: [],
-          running: null,
-          world_locked: null,
-          stale_locks: [],
-          detection_supported: true,
-        },
+        }),
       }),
     });
     render(<WorldsPage client={brokenClient} />);
@@ -417,47 +278,20 @@ describe('WorldsPage', () => {
 
   it('keeps Disable on an enabled broken pack', async () => {
     const user = userEvent.setup();
-    const setEnabled = vi.fn(async () => ({
-      enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
-      disabled: [{ kind: 'file' as const, value: 'file/broken.zip', filename: 'broken.zip' }],
-      running: null,
-      world_locked: null,
-      stale_locks: [],
-      detection_supported: true,
-    }));
-    const brokenPack = {
-      id: '/saves/Survival/broken.zip',
-      name: 'broken',
-      path: '/saves/Survival/datapacks/broken.zip',
-      location: 'zip' as const,
-      kind: 'data' as const,
-      description: '',
-      meta: {
-        pack_format: null,
-        min_format: null,
-        max_format: null,
-        supported_formats: null,
-        description: '',
-      },
-      format: null,
-      format_range: null,
-      game_label: null,
-      icon: null,
-      error: { code: 'pack_broken_archive', message: 'broken.zip is not readable' },
-      bytes_read: 8,
-    };
-    const actionable = baseClient({
+    const setEnabled = vi.fn(async () =>
+      stack({
+        enabled: [{ kind: 'foreign', value: 'vanilla' }],
+        disabled: [{ kind: 'file', value: 'file/broken.zip', filename: 'broken.zip' }],
+      }),
+    );
+    const actionable = pageClient({
       setDatapackEnabled: setEnabled,
       listDatapacks: async () => ({
-        packs: { packs: [brokenPack], count: 1, bytes_read: 8, elapsed_ms: 1 },
-        stack: {
-          enabled: [{ kind: 'file' as const, value: 'file/broken.zip', filename: 'broken.zip' }],
+        packs: { packs: [BROKEN_DATAPACK], count: 1, bytes_read: 8, elapsed_ms: 1 },
+        stack: stack({
+          enabled: [{ kind: 'file', value: 'file/broken.zip', filename: 'broken.zip' }],
           disabled: [],
-          running: null,
-          world_locked: null,
-          stale_locks: [],
-          detection_supported: true,
-        },
+        }),
       }),
     });
     render(<WorldsPage client={actionable} />);
@@ -475,44 +309,13 @@ describe('WorldsPage', () => {
   });
 
   it('leaves a disabled broken pack as an error badge with no actions', async () => {
-    const badgeClient = baseClient({
+    const badgeClient = pageClient({
       listDatapacks: async () => ({
-        packs: {
-          packs: [
-            {
-              id: '/saves/Survival/broken.zip',
-              name: 'broken',
-              path: '/saves/Survival/datapacks/broken.zip',
-              location: 'zip' as const,
-              kind: 'data' as const,
-              description: '',
-              meta: {
-                pack_format: null,
-                min_format: null,
-                max_format: null,
-                supported_formats: null,
-                description: '',
-              },
-              format: null,
-              format_range: null,
-              game_label: null,
-              icon: null,
-              error: { code: 'pack_broken_archive', message: 'broken.zip is not readable' },
-              bytes_read: 8,
-            },
-          ],
-          count: 1,
-          bytes_read: 8,
-          elapsed_ms: 1,
-        },
-        stack: {
-          enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
-          disabled: [{ kind: 'file' as const, value: 'file/broken.zip', filename: 'broken.zip' }],
-          running: null,
-          world_locked: null,
-          stale_locks: [],
-          detection_supported: true,
-        },
+        packs: { packs: [BROKEN_DATAPACK], count: 1, bytes_read: 8, elapsed_ms: 1 },
+        stack: stack({
+          enabled: [{ kind: 'foreign', value: 'vanilla' }],
+          disabled: [{ kind: 'file', value: 'file/broken.zip', filename: 'broken.zip' }],
+        }),
       }),
     });
     render(<WorldsPage client={badgeClient} />);
@@ -524,16 +327,14 @@ describe('WorldsPage', () => {
 
   it('explains the removal step for a symlinked pack', async () => {
     const user = userEvent.setup();
-    const linkClient = baseClient({
+    const linkClient = pageClient({
       listDatapacks: async () => ({
         packs: {
           packs: [
-            {
+            datapack('linked.zip', null, null, {
               id: '/saves/Survival/linked.zip',
               name: 'linked',
               path: '/saves/Survival/datapacks/linked.zip',
-              location: 'zip' as const,
-              kind: 'data' as const,
               description: '',
               meta: {
                 pack_format: null,
@@ -542,26 +343,18 @@ describe('WorldsPage', () => {
                 supported_formats: null,
                 description: '',
               },
-              format: null,
-              format_range: null,
-              game_label: null,
-              icon: null,
               error: { code: 'pack_symlink', message: 'linked.zip is a symlink and is never followed' },
               bytes_read: 8,
-            },
+            }),
           ],
           count: 1,
           bytes_read: 8,
           elapsed_ms: 1,
         },
-        stack: {
-          enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
-          disabled: [{ kind: 'file' as const, value: 'file/linked.zip', filename: 'linked.zip' }],
-          running: null,
-          world_locked: null,
-          stale_locks: [],
-          detection_supported: true,
-        },
+        stack: stack({
+          enabled: [{ kind: 'foreign', value: 'vanilla' }],
+          disabled: [{ kind: 'file', value: 'file/linked.zip', filename: 'linked.zip' }],
+        }),
       }),
     });
     render(<WorldsPage client={linkClient} />);
@@ -580,18 +373,16 @@ describe('WorldsPage', () => {
         command: null,
       },
     });
-    const staleWhileLocked = baseClient({
+    const staleWhileLocked = pageClient({
       listWorlds: async () => [lockedWorld],
       listDatapacks: async () => ({
         packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
-        stack: {
-          enabled: [{ kind: 'foreign' as const, value: 'vanilla' }],
+        stack: stack({
+          enabled: [{ kind: 'foreign', value: 'vanilla' }],
           disabled: [],
-          running: null,
           world_locked: lockedWorld.world_locked,
           stale_locks: ['/home/demo/.minecraft/saves/Survival 1_17/session.lock'],
-          detection_supported: true,
-        },
+        }),
       }),
     });
     render(<WorldsPage client={staleWhileLocked} />);
@@ -603,9 +394,9 @@ describe('WorldsPage', () => {
 
   it('offers a Retry that refreshes after a stale stack error', async () => {
     const user = userEvent.setup();
-    const inner = baseClient();
+    const inner = pageClient();
     const listSpy = vi.fn((name: string) => inner.listDatapacks(name));
-    const staleClient = baseClient({
+    const staleClient = pageClient({
       listDatapacks: listSpy,
       setDatapackEnabled: async () => {
         throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
@@ -623,14 +414,14 @@ describe('WorldsPage', () => {
 
   it('shows the new loading state with no stale cards after a world switch', async () => {
     const user = userEvent.setup();
-    const inner = baseClient();
+    const inner = pageClient();
     let resolveCreative!: (value: Awaited<ReturnType<WorldsClient['listDatapacks']>>) => void;
     const creativeListing = new Promise<Awaited<ReturnType<WorldsClient['listDatapacks']>>>(
       (resolve) => {
         resolveCreative = resolve;
       },
     );
-    const switching = baseClient({
+    const switching = pageClient({
       listDatapacks: (name: string) =>
         name === 'Creative Flat' ? creativeListing : inner.listDatapacks(name),
     });
@@ -647,14 +438,7 @@ describe('WorldsPage', () => {
     await act(async () => {
       resolveCreative({
         packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
-        stack: {
-          enabled: [],
-          disabled: [],
-          running: null,
-          world_locked: null,
-          stale_locks: [],
-          detection_supported: true,
-        },
+        stack: stack({ enabled: [], disabled: [] }),
       });
       await creativeListing;
     });
