@@ -34,6 +34,11 @@ jobs:
           patchelf
           rpm
       - run: pnpm install --frozen-lockfile
+      # A tag must not publish a build that failed the same checks CI runs.
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: cargo test --workspace
       - run: pnpm tauri build
       - name: Resolve version
         id: version

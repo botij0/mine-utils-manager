@@ -3,7 +3,8 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'node_modules', 'target', 'src-tauri'] },
+  { ignores: ['dist/**', 'node_modules/**', 'target/**', 'src-tauri/**'] },
+  { linterOptions: { reportUnusedDisableDirectives: 'error' } },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -11,6 +12,8 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       'no-console': 'error',
+      'no-else-return': 'error',
+      'prefer-const': 'error',
     },
   },
 );

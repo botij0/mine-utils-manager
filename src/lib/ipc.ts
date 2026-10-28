@@ -25,7 +25,6 @@ import type {
   Pack,
   PackIcon,
   PackListing,
-  PackMeta,
   ResourceStack,
   StackSnapshot,
   Theme,
@@ -322,15 +321,4 @@ export async function pickPackPath(
   });
   if (Array.isArray(selected)) return selected[0] ?? null;
   return selected;
-}
-
-/** Empty meta for mock fixtures and tests. */
-export function emptyMeta(description = ''): PackMeta {
-  return {
-    pack_format: null,
-    min_format: null,
-    max_format: null,
-    supported_formats: null,
-    description,
-  };
 }

@@ -151,6 +151,16 @@ Launcher and MultiMC instance dirs. A dir counts when it holds `versions`,
   Modrinth result icons are plain remote HTTPS and are unaffected.
 - A locked world copies a new datapack but leaves it disabled until the lock
   releases.
+- The production bundle ships without sourcemaps (`build.sourcemap: false` in
+  `vite.config.ts`), so a stack trace points at minified code.
+- Pack zips must use Stored or Deflate compression. The `zip` crate is built
+  with only the `deflate` feature, so bzip2, zstd, and lzma archives read as
+  broken packs.
+- Modrinth HTTP uses `reqwest::blocking` clients. Each search or install holds
+  one blocking thread until the request or download finishes; the UI stays
+  responsive because the commands run it through `spawn_blocking`.
+- The browser mock never touches disk or network and ignores the stale-stack
+  snapshot on resource reorders; the Tauri backend enforces both.
 - The installed `.desktop` entry lists `Categories=Utility;Game;` for the RPM
   (via `src-tauri/linux/mine-utils.desktop.hbs`). The AppImage entry remains
   `Utility;` because the AppImage config has no template; that category is the

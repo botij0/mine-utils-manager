@@ -1,5 +1,4 @@
 import type { IpcClient } from './ipc';
-import { emptyMeta } from './ipc';
 import { defaultConfig, IpcError } from './types';
 import type {
   BackupInfo,
@@ -29,6 +28,7 @@ import type {
 import {
   MOCK_PROJECTS,
   assertDownloadHash,
+  emptyMeta,
   findMockProject,
   formatRange,
   iconDataUrl,

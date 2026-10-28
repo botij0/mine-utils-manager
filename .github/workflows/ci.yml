@@ -31,7 +31,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy -p mine-utils-core --all-targets -- -D warnings
       # MINE_UTILS_REAL_OPTIONS stays unset so the real-file roundtrip test skips.
-      # Scoped to -p mine-utils-core here; --workspace coverage lives in tauri clippy below.
+      # Core tests run here without the webkit deps; the Tauri crate's own tests
+      # run in the tauri job, which already installs them.
       - run: cargo test -p mine-utils-core
 
   tauri:
@@ -58,4 +59,5 @@ jobs:
           patchelf
       - run: pnpm install --frozen-lockfile
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test -p mine-utils
       - run: pnpm tauri build --no-bundle

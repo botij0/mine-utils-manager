@@ -10,6 +10,7 @@ import type {
   ModrinthTargets,
   ModrinthVersion,
   Pack,
+  PackMeta,
   ResourceStack,
   StackEntry,
   World,
@@ -27,6 +28,16 @@ export function formatVersion(major: number, minor = 0): FormatVersion {
 
 export function formatRange(min: number, max: number): FormatRange {
   return { min: formatVersion(min), max: formatVersion(max) };
+}
+
+export function emptyMeta(description = ''): PackMeta {
+  return {
+    pack_format: null,
+    min_format: null,
+    max_format: null,
+    supported_formats: null,
+    description,
+  };
 }
 
 export function stackEntry(value: string): StackEntry {
