@@ -1,4 +1,5 @@
 import type { Pack } from '../../lib/types';
+import { StatusNote } from '../packs/PackEmptyState';
 import CompatibilityChip from './CompatibilityChip';
 
 interface DatapackDetailProps {
@@ -31,7 +32,7 @@ export default function DatapackDetail({
   onRemoveReference,
 }: DatapackDetailProps) {
   if (!filename) {
-    return <p className="empty-note">Select a datapack to see its details.</p>;
+    return <StatusNote>Select a datapack to see its details.</StatusNote>;
   }
   if (locked) {
     return (
@@ -82,10 +83,10 @@ export default function DatapackDetail({
     return (
       <section className="datapack-detail" aria-label="Datapack details">
         <h3>{filename}</h3>
-        <p className="empty-note">
+        <StatusNote>
           This entry points at a file that is no longer in datapacks. Enabling it would only write
           a dead reference.
-        </p>
+        </StatusNote>
         <div className="datapack-detail-actions">
           <button
             type="button"
@@ -122,7 +123,7 @@ export default function DatapackDetail({
           </div>
         </dl>
       ) : (
-        <p className="empty-note">Select a datapack to see its details.</p>
+        <StatusNote>Select a datapack to see its details.</StatusNote>
       )}
       <CompatibilityChip warning={warning} />
       {warning ? <p className="panel-note">{warning}</p> : null}

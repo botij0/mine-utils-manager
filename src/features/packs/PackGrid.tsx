@@ -1,6 +1,6 @@
 import type { Pack } from '../../lib/types';
 import PackCard from './PackCard';
-import PackEmptyState from './PackEmptyState';
+import { EmptyState } from './PackEmptyState';
 
 interface PackGridProps {
   packs: Pack[];
@@ -22,17 +22,31 @@ export default function PackGrid({
   onClearFilters,
 }: PackGridProps) {
   if (loading && packs.length === 0) {
-    return <PackEmptyState variant="loading" />;
+    return <EmptyState>Reading the resourcepacks folder.</EmptyState>;
   }
   if (noGameDir) {
-    return <PackEmptyState variant="no-dir" />;
+    return (
+      <EmptyState title="No active game dir">
+        Pick a game dir in Settings before listing resource packs.
+      </EmptyState>
+    );
   }
   if (packs.length === 0) {
-    return (
-      <PackEmptyState
-        variant={hasFilters ? 'no-results' : 'empty'}
-        onClearFilters={onClearFilters}
-      />
+    return hasFilters ? (
+      <EmptyState
+        title="No packs match those filters"
+        action={
+          <button type="button" className="button" onClick={onClearFilters}>
+            Clear filters
+          </button>
+        }
+      >
+        Search by name or description, or reset the kind and format filters.
+      </EmptyState>
+    ) : (
+      <EmptyState title="No resource packs yet">
+        Drop a zip or a pack folder here, or use Import pack.
+      </EmptyState>
     );
   }
   return (

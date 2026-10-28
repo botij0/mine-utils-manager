@@ -1,4 +1,5 @@
 import type { DataStackEntry, Pack } from '../../lib/types';
+import { StatusNote } from '../packs/PackEmptyState';
 import CompatibilityChip from './CompatibilityChip';
 
 export interface DatapackRow {
@@ -43,10 +44,10 @@ export default function DatapackGrid({
   onMove,
 }: DatapackGridProps) {
   if (loading && rows.length === 0) {
-    return <p className="empty-note">Loading datapacks…</p>;
+    return <StatusNote>Loading datapacks…</StatusNote>;
   }
   if (rows.length === 0) {
-    return <p className="empty-note">No datapacks yet. Import a zip or a folder to add one.</p>;
+    return <StatusNote>No datapacks yet. Import a zip or a folder to add one.</StatusNote>;
   }
   return (
     <ul className="datapack-grid" aria-label="Datapack stack" aria-busy={loading}>
