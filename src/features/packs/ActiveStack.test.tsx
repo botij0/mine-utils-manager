@@ -160,7 +160,7 @@ describe('ActiveStack', () => {
       { length: 18 },
       (_, index) => `/home/demo/.minecraft/saves/world-${index}/session.lock`,
     );
-    const client = makeStackClient({ staleLocks });
+    const client = stackClient({ staleLocks });
     render(<PacksPage client={client} />);
 
     const note = await screen.findByRole('status', { name: 'Stale session lock' });
