@@ -125,11 +125,13 @@ export interface PackListing {
 
 export type ImportChoice = 'default' | 'replace' | 'skip';
 
-export type ImportOutcome =
-  | { status: 'imported'; pack: Pack }
+/** The no-copy arms shared by both import surfaces. */
+export type ImportRefusal =
   | { status: 'duplicate'; name: string; sha256: string; existing: string }
   | { status: 'collision'; name: string }
   | { status: 'skipped' };
+
+export type ImportOutcome = { status: 'imported'; pack: Pack } | ImportRefusal;
 
 export type StackEntry =
   | { kind: 'file'; value: string; filename: string }
@@ -177,9 +179,8 @@ export interface BackupInfo {
   display: string;
 }
 
-export type DataStackEntry =
-  | { kind: 'file'; value: string; filename: string }
-  | { kind: 'foreign'; value: string };
+/** The datapack stack uses the same entry shape. */
+export type DataStackEntry = StackEntry;
 
 /**
  * The datapack stack. `enabled` is the `Data.DataPacks.Enabled` array in load
@@ -233,9 +234,7 @@ export interface DatapackListing {
 export type DatapackImportOutcome =
   | { status: 'imported'; filename: string }
   | { status: 'locked'; filename: string; detail: string }
-  | { status: 'duplicate'; name: string; sha256: string; existing: string }
-  | { status: 'collision'; name: string }
-  | { status: 'skipped' };
+  | ImportRefusal;
 
 export interface DatapackDeleteOutcome {
   removed_references: boolean;

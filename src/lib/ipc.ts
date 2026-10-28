@@ -61,14 +61,11 @@ export interface WorldsClient {
 /** The narrow surface `BackupsPanel` needs: options backups, the game guard,
  *  and every world's `level.dat` backups in one batch call. Tests fake this
  *  instead of the whole `IpcClient`. */
-export interface BackupsClient {
-  listOptionsBackups(): Promise<BackupInfo[]>;
-  restoreOptionsBackup(backup: string): Promise<ResourceStack>;
-  getResourceStack(): Promise<ResourceStack>;
-  listLevelBackups(world: string): Promise<LevelBackupInfo[]>;
-  listAllLevelBackups(): Promise<LevelBackupInfo[]>;
-  restoreLevelBackup(world: string, backup: string): Promise<DataStack>;
-}
+export type BackupsClient = Pick<
+  PackClient,
+  'listOptionsBackups' | 'restoreOptionsBackup' | 'getResourceStack'
+> &
+  Pick<WorldsClient, 'listLevelBackups' | 'listAllLevelBackups' | 'restoreLevelBackup'>;
 
 /** The Modrinth discovery surface. Search fires only from the Discover page:
  *  the local tabs never trigger a network request. */
