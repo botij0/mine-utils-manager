@@ -4,9 +4,10 @@ import type {
   ModrinthSearchHit,
   ModrinthVersion,
 } from '../../lib/types';
+import { StatusNote } from '../packs/PackEmptyState';
 import DialogShell from './DialogShell';
 import VersionPicker from './VersionPicker';
-import { formatCount } from './ProjectGrid';
+import { formatCount } from '../../lib/avatar';
 import { isTrustedIconUrl } from './icon';
 
 interface ProjectDetailProps {
@@ -63,11 +64,7 @@ export default function ProjectDetail({
         </button>
       </div>
       <p className="pack-detail-desc">{project?.body || hit.description}</p>
-      {loading ? (
-        <p className="empty-note" role="status">
-          Loading versions…
-        </p>
-      ) : null}
+      {loading ? <StatusNote role="status">Loading versions…</StatusNote> : null}
       {error ? (
         <p className="error" role="alert">
           {error.message}

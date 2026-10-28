@@ -1,41 +1,36 @@
-interface PackEmptyStateProps {
-  variant: 'loading' | 'no-dir' | 'empty' | 'no-results';
-  onClearFilters?: () => void;
+import type { ReactNode } from 'react';
+
+interface EmptyStateProps {
+  /** Omit for a single-line panel, as in the loading state. */
+  title?: string;
+  children: ReactNode;
+  action?: ReactNode;
 }
 
-export default function PackEmptyState({ variant, onClearFilters }: PackEmptyStateProps) {
-  if (variant === 'loading') {
-    return (
-      <p className="packs-empty">
-        Reading the resourcepacks folder.
-      </p>
-    );
-  }
-  if (variant === 'no-dir') {
-    return (
-      <div className="packs-empty">
-        <h3>No active game dir</h3>
-        <p>Pick a game dir in Settings before listing resource packs.</p>
-      </div>
-    );
-  }
-  if (variant === 'no-results') {
-    return (
-      <div className="packs-empty">
-        <h3>No packs match those filters</h3>
-        <p>Search by name or description, or reset the kind and format filters.</p>
-        {onClearFilters ? (
-          <button type="button" className="button" onClick={onClearFilters}>
-            Clear filters
-          </button>
-        ) : null}
-      </div>
-    );
+/** The dashed panel for an empty or loading list. */
+export function EmptyState({ title, children, action }: EmptyStateProps) {
+  if (!title) {
+    return <p className="packs-empty">{children}</p>;
   }
   return (
     <div className="packs-empty">
-      <h3>No resource packs yet</h3>
-      <p>Drop a zip or a pack folder here, or use Import pack.</p>
+      <h3>{title}</h3>
+      <p>{children}</p>
+      {action}
     </div>
+  );
+}
+
+interface StatusNoteProps {
+  children: ReactNode;
+  role?: 'status';
+}
+
+/** Muted inline copy for an empty list, a status line, or a blocking reason. */
+export function StatusNote({ children, role }: StatusNoteProps) {
+  return (
+    <p className="empty-note" role={role}>
+      {children}
+    </p>
   );
 }

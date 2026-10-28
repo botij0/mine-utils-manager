@@ -6,6 +6,7 @@ use mine_utils_core::{backup, resource_stack, AppError, BackupInfo, ResourceStac
 use tauri::State;
 
 use super::game_dirs::AppState;
+use super::join_error;
 
 /// One write mutex per active game dir. Every `options.txt` write, restore,
 /// and delete cleanup takes the mutex for its game dir, so no two writes ever
@@ -25,10 +26,6 @@ impl StackState {
         let mut locks = self.locks.lock().unwrap_or_else(|err| err.into_inner());
         Arc::clone(locks.entry(key).or_default())
     }
-}
-
-fn join_error(err: impl std::error::Error + Send + Sync + 'static) -> AppError {
-    AppError::Io(std::io::Error::other(err))
 }
 
 /// The whole stack. Reads never block, even while the game runs.

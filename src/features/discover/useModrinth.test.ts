@@ -2,7 +2,8 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IpcClient } from '../../lib/ipc';
 import type { ModrinthInstallOutcome, ModrinthSearchHit } from '../../lib/types';
-import { gameDir, makeFakeClient } from '../../test/fake-ipc';
+import { makeFakeClient } from '../../test/fake-ipc';
+import { freshHit, gameDir, mismatchHit } from '../../test/fake-packs';
 import {
   SEARCH_DEBOUNCE_MS,
   isOfflineError,
@@ -17,30 +18,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
 });
-
-function freshHit(): ModrinthSearchHit {
-  return {
-    project_id: '7q7JnQD0',
-    slug: 'fresh-animations',
-    title: 'Fresh Animations',
-    description: 'Fresh animations.',
-    icon_url: 'https://cdn.modrinth.com/icons/fresh.webp',
-    downloads: 100,
-    follows: 10,
-    project_type: 'resourcepack',
-    versions: ['1.21.1'],
-    latest_version: 'v2',
-  };
-}
-
-function mismatchHit(): ModrinthSearchHit {
-  return {
-    ...freshHit(),
-    project_id: 'mm1',
-    slug: 'mismatch-pack',
-    title: 'Mismatch Pack',
-  };
-}
 
 async function flushSearch() {
   // One pass fires the debounce timer; the next passes settle the search
@@ -123,6 +100,14 @@ describe('useModrinth', () => {
     expect(outcome && outcome.kind).toBe('resourcepack');
     expect(result.current.installError).toBeNull();
     expect(result.current.installResult?.kind).toBe('resourcepack');
+    if (outcome && outcome.kind === 'resourcepack' && outcome.outcome.status === 'imported') {
+      expect(outcome.outcome.pack.path).toBe(
+        `/home/demo/.minecraft/resourcepacks/${outcome.outcome.pack.name}.zip`,
+      );
+      expect(outcome.outcome.pack.path).not.toContain('.zip.zip');
+    } else {
+      expect.unreachable('expected an imported resourcepack outcome');
+    }
   });
 
   it('reports a hash mismatch with the expected and actual hashes', async () => {

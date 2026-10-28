@@ -118,6 +118,19 @@ export function useWorlds(client: WorldsClient): WorldsState {
     };
   }, []);
 
+  const isCurrentRequest = useCallback(
+    (world: string, request: number) =>
+      mounted.current && selectedRef.current === world && request === requestId.current,
+    [],
+  );
+
+  const beginAction = useCallback(() => {
+    const request = (requestId.current += 1);
+    setBusy(true);
+    setActionError(null);
+    return request;
+  }, []);
+
   const reload = useCallback(async () => {
     setLoading(true);
     try {
@@ -165,14 +178,12 @@ export function useWorlds(client: WorldsClient): WorldsState {
     setStackError(null);
     try {
       const listing = await client.listDatapacks(world);
-      if (!mounted.current) return;
-      if (selectedRef.current !== world || request !== requestId.current) return;
+      if (!isCurrentRequest(world, request)) return;
       setPacks(listing.packs.packs);
       setStack(listing.stack);
       setListingWorld(world);
     } catch (err) {
-      if (!mounted.current) return;
-      if (selectedRef.current !== world || request !== requestId.current) return;
+      if (!isCurrentRequest(world, request)) return;
       const appError = toAppError(err);
       setPacks([]);
       setStack(null);
@@ -180,12 +191,12 @@ export function useWorlds(client: WorldsClient): WorldsState {
       setPacksError(appError);
       setStackError(appError);
     } finally {
-      if (mounted.current && selectedRef.current === world && request === requestId.current) {
+      if (isCurrentRequest(world, request)) {
         setPacksLoading(false);
         setStackLoading(false);
       }
     }
-  }, [client, selectedName]);
+  }, [client, selectedName, isCurrentRequest]);
 
   useEffect(() => {
     void refreshListing();
@@ -214,74 +225,58 @@ export function useWorlds(client: WorldsClient): WorldsState {
     async (filename: string, enabled: boolean) => {
       if (!selectedName) return;
       const world = selectedName;
-      const request = (requestId.current += 1);
-      setBusy(true);
-      setActionError(null);
+      const request = beginAction();
       try {
         // No pre-toggle fetch: the backend re-reads `level.dat` anyway, and
         // the extra round-trip only flashes the loading state.
         const next = await client.setDatapackEnabled(world, filename, enabled);
-        if (!mounted.current) return;
-        if (selectedRef.current !== world || request !== requestId.current) return;
+        if (!isCurrentRequest(world, request)) return;
         setStack(next);
       } catch (err) {
-        if (!mounted.current) return;
-        if (selectedRef.current !== world || request !== requestId.current) return;
+        if (!isCurrentRequest(world, request)) return;
         setActionError(toAppError(err));
         throw err;
       } finally {
-        if (mounted.current && selectedRef.current === world && request === requestId.current) {
-          setBusy(false);
-        }
+        if (isCurrentRequest(world, request)) setBusy(false);
       }
     },
-    [client, selectedName],
+    [client, selectedName, beginAction, isCurrentRequest],
   );
 
   const reorderDatapacks = useCallback(
     async (order: string[]) => {
       if (!selectedName) return;
       const world = selectedName;
-      const request = (requestId.current += 1);
-      setBusy(true);
-      setActionError(null);
+      const request = beginAction();
       try {
         // Build `expected` from the fresh listing, not from a possibly stale
         // `stack`: the previous code snapshotted first and refreshed after,
         // so the guard compared against the wrong file set.
         const fresh = await client.listDatapacks(world);
-        if (!mounted.current) return;
-        if (selectedRef.current !== world || request !== requestId.current) return;
+        if (!isCurrentRequest(world, request)) return;
         setPacks(fresh.packs.packs);
         setStack(fresh.stack);
         const expected = dataSnapshotOf(fresh.stack);
         const next = await client.reorderDatapacks(world, order, expected);
-        if (!mounted.current) return;
-        if (selectedRef.current !== world || request !== requestId.current) return;
+        if (!isCurrentRequest(world, request)) return;
         setStack(next);
       } catch (err) {
-        if (!mounted.current) return;
-        if (selectedRef.current !== world || request !== requestId.current) return;
+        if (!isCurrentRequest(world, request)) return;
         setActionError(toAppError(err));
         throw err;
       } finally {
-        if (mounted.current && selectedRef.current === world && request === requestId.current) {
-          setBusy(false);
-        }
+        if (isCurrentRequest(world, request)) setBusy(false);
       }
     },
-    [client, selectedName],
+    [client, selectedName, beginAction, isCurrentRequest],
   );
 
   const importDatapack = useCallback(
     async (world: string, path: string, choice: ImportChoice = 'default') => {
-      const request = (requestId.current += 1);
-      setBusy(true);
-      setActionError(null);
+      const request = beginAction();
       try {
         const outcome = await client.importDatapack(world, path, choice);
-        if (!mounted.current) return outcome;
-        if (selectedRef.current !== world || request !== requestId.current) return outcome;
+        if (!isCurrentRequest(world, request)) return outcome;
         if (outcome.status === 'imported' || outcome.status === 'locked') {
           await refreshListing();
         }
@@ -292,66 +287,51 @@ export function useWorlds(client: WorldsClient): WorldsState {
         }
       }
     },
-    [client, refreshListing],
+    [client, refreshListing, beginAction, isCurrentRequest],
   );
 
   const deleteDatapack = useCallback(
     async (path: string): Promise<DatapackDeleteOutcomeSummary> => {
       if (!selectedName) return { removedReferences: false };
       const world = selectedName;
-      const request = (requestId.current += 1);
-      setBusy(true);
-      setActionError(null);
+      const request = beginAction();
       try {
         const outcome = await client.deleteDatapack(world, path);
-        if (!mounted.current) return { removedReferences: outcome.removed_references };
-        if (selectedRef.current !== world || request !== requestId.current) {
+        if (!isCurrentRequest(world, request)) {
           return { removedReferences: outcome.removed_references };
         }
         await refreshListing();
-        if (selectedRef.current !== world || request !== requestId.current) {
-          return { removedReferences: outcome.removed_references };
-        }
         return { removedReferences: outcome.removed_references };
       } catch (err) {
-        if (!mounted.current) throw err;
-        if (selectedRef.current !== world || request !== requestId.current) throw err;
+        if (!isCurrentRequest(world, request)) throw err;
         setActionError(toAppError(err));
         throw err;
       } finally {
-        if (mounted.current && selectedRef.current === world && request === requestId.current) {
-          setBusy(false);
-        }
+        if (isCurrentRequest(world, request)) setBusy(false);
       }
     },
-    [client, selectedName, refreshListing],
+    [client, selectedName, refreshListing, beginAction, isCurrentRequest],
   );
 
   const removeDatapackReference = useCallback(
     async (filename: string) => {
       if (!selectedName) return;
       const world = selectedName;
-      const request = (requestId.current += 1);
-      setBusy(true);
-      setActionError(null);
+      const request = beginAction();
       try {
         const next = await client.removeDatapackReference(world, filename);
-        if (!mounted.current) return;
-        if (selectedRef.current !== world || request !== requestId.current) return;
+        if (!isCurrentRequest(world, request)) return;
         setStack(next);
         await refreshListing();
       } catch (err) {
-        if (!mounted.current) return;
-        if (selectedRef.current !== world || request !== requestId.current) return;
+        if (!isCurrentRequest(world, request)) return;
         setActionError(toAppError(err));
         throw err;
       } finally {
-        if (mounted.current && selectedRef.current === world && request === requestId.current) {
-          setBusy(false);
-        }
+        if (isCurrentRequest(world, request)) setBusy(false);
       }
     },
-    [client, selectedName, refreshListing],
+    [client, selectedName, refreshListing, beginAction, isCurrentRequest],
   );
 
   const clearActionError = useCallback(() => setActionError(null), []);

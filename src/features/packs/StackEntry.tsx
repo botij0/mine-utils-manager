@@ -1,6 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Pack, StackEntry as StackEntryData } from '../../lib/types';
+import { packInitials } from '../../lib/avatar';
 
 interface StackEntryProps {
   id: string;
@@ -11,10 +12,6 @@ interface StackEntryProps {
   canMoveDown: boolean;
   onToggle: (enabled: boolean) => void;
   onMove: (direction: -1 | 1) => void;
-}
-
-function initials(name: string): string {
-  return name.replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || 'PK';
 }
 
 function LockIcon() {
@@ -91,7 +88,7 @@ export default function StackEntry({
         {pack?.icon ? (
           <img src={pack.icon.url} alt="" />
         ) : (
-          <span className="stack-icon-fallback">{missing ? '!' : initials(label)}</span>
+          <span className="stack-icon-fallback">{missing ? '!' : packInitials(label)}</span>
         )}
       </span>
       <span className="stack-body">

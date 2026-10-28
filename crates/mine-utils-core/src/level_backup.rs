@@ -6,21 +6,81 @@
 //! `Config.backups.keep` files survive per world. The world directory name is
 //! safe and unique within one game dir.
 //!
-//! The machinery mirrors `backup.rs`: write to a hidden temp file, `fsync`
-//! it, publish it with `hard_link` (no clobber), `fsync` the directory, and
-//! rotate. A backup is only restorable when it decompresses as gzip and holds
-//! NBT with `Data.DataPacks`.
+//! A backup is only restorable when it decompresses as gzip and holds NBT with
+//! `Data.DataPacks`.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use sha2::Digest;
-
+use crate::backup::core as backup_core;
 use crate::config::BackupsConfig;
 use crate::error::AppError;
 use crate::level_dat;
+
+const LEVEL_SUFFIX: &str = "-level.dat";
+
+struct LevelScheme<'a> {
+    world: &'a str,
+}
+
+impl backup_core::Scheme for LevelScheme<'_> {
+    fn is_kind(&self, file_name: &str) -> bool {
+        is_level_backup(file_name)
+    }
+
+    fn display(&self, file_name: &str) -> String {
+        level_display(file_name)
+    }
+
+    fn error(&self, reason: String) -> AppError {
+        backup_error(reason)
+    }
+}
+
+impl backup_core::Naming for LevelScheme<'_> {
+    fn name(&self, stamp: &str) -> String {
+        format!("{stamp}-{}-level.dat", self.world)
+    }
+}
+
+struct AllLevels;
+
+impl backup_core::Scheme for AllLevels {
+    fn is_kind(&self, file_name: &str) -> bool {
+        is_level_backup(file_name)
+    }
+
+    fn display(&self, file_name: &str) -> String {
+        level_display(file_name)
+    }
+
+    fn error(&self, reason: String) -> AppError {
+        backup_error(reason)
+    }
+}
+
+fn is_level_backup(name: &str) -> bool {
+    name.ends_with(LEVEL_SUFFIX)
+}
+
+fn level_display(file_name: &str) -> String {
+    backup_core::display_stamp(
+        file_name
+            .split_once('-')
+            .map(|(stamp, _)| stamp)
+            .unwrap_or(file_name),
+    )
+}
+
+fn world_of(file_name: &str) -> Option<&str> {
+    let rest = file_name.strip_suffix(LEVEL_SUFFIX)?;
+    // The stamp is `YYYYMMDDTHHMMSS.fraction`, which holds no `-`, so the
+    // first `-` separates the stamp from the world name.
+    let (stamp, world) = rest.split_once('-')?;
+    if stamp.len() < 9 || world.is_empty() || world.contains('/') {
+        return None;
+    }
+    Some(world)
+}
 
 /// One `level.dat` backup as the UI lists it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -45,33 +105,19 @@ fn backup_error(reason: impl std::fmt::Display) -> AppError {
     }
 }
 
+fn level_info(stored: backup_core::Stored, world: &str) -> LevelBackupInfo {
+    LevelBackupInfo {
+        file_name: stored.file_name,
+        world: world.to_string(),
+        bytes: stored.bytes,
+        display: stored.display,
+    }
+}
+
 /// The backup folder for one game dir: a stable hash of its canonical path.
 /// Shared with the `options.txt` backups, so one folder holds both kinds.
 pub fn root_for(data_dir: &Path, game_dir: &Path) -> PathBuf {
-    let canonical = std::fs::canonicalize(game_dir).unwrap_or_else(|_| game_dir.to_path_buf());
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(canonical.to_string_lossy().as_bytes());
-    let digest = hex::encode(hasher.finalize());
-    data_dir.join("backups").join(&digest[..16])
-}
-
-fn file_name(stamp: &str, world: &str) -> String {
-    format!("{stamp}-{world}-level.dat")
-}
-
-fn is_level_backup(name: &str) -> bool {
-    name.ends_with("-level.dat")
-}
-
-fn world_of(file_name: &str) -> Option<&str> {
-    let rest = file_name.strip_suffix("-level.dat")?;
-    // The stamp is `YYYYMMDDTHHMMSS.fraction`, which holds no `-`, so the
-    // first `-` separates the stamp from the world name.
-    let (stamp, world) = rest.split_once('-')?;
-    if stamp.len() < 9 || world.is_empty() || world.contains('/') {
-        return None;
-    }
-    Some(world)
+    backup_core::root_for(data_dir, game_dir)
 }
 
 /// Copy `previous` bytes into a new timestamped backup and rotate that
@@ -83,60 +129,41 @@ pub fn create(
     previous: &[u8],
     config: &BackupsConfig,
 ) -> Result<LevelBackupOutcome, AppError> {
-    if !config.enabled {
-        return Ok(LevelBackupOutcome {
-            created: None,
-            skipped: true,
-        });
-    }
-    std::fs::create_dir_all(root)
-        .map_err(|err| backup_error(format!("{}: {err}", root.display())))?;
-    let info = write_unique(root, world, previous)?;
-    rotate(root, world, config.keep.max(1))?;
+    let scheme = LevelScheme { world };
+    let stored = backup_core::create(root, previous, config, &scheme, |name| {
+        world_of(name) == Some(world)
+    })?;
     Ok(LevelBackupOutcome {
-        created: Some(info),
-        skipped: false,
+        skipped: stored.is_none(),
+        created: stored.map(|stored| level_info(stored, world)),
     })
 }
 
 /// List one world's backups, newest first.
 pub fn list(root: &Path, world: &str) -> Result<Vec<LevelBackupInfo>, AppError> {
-    let mut names = backup_names(root, world)?;
-    names.sort();
-    names.reverse();
-    Ok(names
-        .into_iter()
-        .filter_map(|file_name| {
-            let path = root.join(&file_name);
-            let bytes = std::fs::symlink_metadata(&path).ok()?.len();
-            Some(LevelBackupInfo {
-                display: display_timestamp(&file_name),
-                file_name,
-                world: world.to_string(),
-                bytes,
-            })
-        })
-        .collect())
+    let scheme = LevelScheme { world };
+    Ok(
+        backup_core::list(root, &scheme, |name| world_of(name) == Some(world))?
+            .into_iter()
+            .map(|stored| level_info(stored, world))
+            .collect(),
+    )
 }
 
 /// List every `level.dat` backup in the folder, newest first, for the UI
 /// section that groups backups by world.
 pub fn list_all(root: &Path) -> Result<Vec<LevelBackupInfo>, AppError> {
-    let mut names = all_backup_names(root)?;
-    names.sort();
-    names.reverse();
-    Ok(names
+    Ok(backup_core::list(root, &AllLevels, is_level_backup)?
         .into_iter()
-        .filter_map(|file_name| {
-            let path = root.join(&file_name);
-            let bytes = std::fs::symlink_metadata(&path).ok()?.len();
+        .filter_map(|stored| {
             // Stray names with no world (a bare `-level.dat`) form no group,
             // so they are skipped instead of surfacing as an empty row.
+            let world = world_of(&stored.file_name)?.to_string();
             Some(LevelBackupInfo {
-                display: display_timestamp(&file_name),
-                world: world_of(&file_name)?.to_string(),
-                file_name,
-                bytes,
+                display: stored.display,
+                world,
+                file_name: stored.file_name,
+                bytes: stored.bytes,
             })
         })
         .collect())
@@ -159,24 +186,31 @@ where
     F: FnOnce() -> Result<(), AppError>,
 {
     let source = validated_backup(root, world, file_name)?;
-    let bytes = std::fs::read(&source).map_err(|err| backup_error(format!("{err}")))?;
-    validate_backup_bytes(file_name, &bytes)?;
-
-    let outcome = match std::fs::read(level_dat_path) {
-        Ok(current) => create(root, world, &current, config)?,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => LevelBackupOutcome {
-            created: None,
-            skipped: !config.enabled,
+    let scheme = LevelScheme { world };
+    let restored = backup_core::restore(
+        backup_core::RestoreFiles {
+            root,
+            source: &source,
+            target: level_dat_path,
+            file_name,
         },
-        Err(err) => return Err(AppError::Io(err)),
-    };
-
-    before_write()?;
-    level_dat::write_level_dat(
-        level_dat_path.parent().unwrap_or_else(|| Path::new(".")),
-        &bytes,
+        config,
+        &scheme,
+        |name| world_of(name) == Some(world),
+        validate_backup_bytes,
+        |bytes| {
+            level_dat::write_level_dat(
+                level_dat_path.parent().unwrap_or_else(|| Path::new(".")),
+                bytes,
+            )?;
+            Ok(())
+        },
+        before_write,
     )?;
-    Ok(outcome)
+    Ok(LevelBackupOutcome {
+        created: restored.backup.map(|stored| level_info(stored, world)),
+        skipped: restored.skipped,
+    })
 }
 
 /// A backup is only restorable when it decompresses as gzip and parses as a
@@ -189,224 +223,27 @@ fn validate_backup_bytes(file_name: &str, bytes: &[u8]) -> Result<(), AppError> 
 }
 
 fn validated_backup(root: &Path, world: &str, file_name: &str) -> Result<PathBuf, AppError> {
-    if file_name.is_empty()
-        || file_name == "."
-        || file_name == ".."
-        || file_name.contains("..")
-        || file_name.contains('/')
-        || file_name.contains('\\')
-        || file_name.contains('\0')
-    {
-        return Err(backup_error(format!(
+    let scheme = LevelScheme { world };
+    backup_core::validated_name(root, file_name, &scheme, |name| {
+        world_of(name) == Some(world)
+    })
+    .map_err(|err| match err {
+        backup_core::NameError::Unsafe => backup_error(format!(
             "{file_name} is not a backup name in {}",
             root.display()
-        )));
-    }
-    if !is_level_backup(file_name) {
-        return Err(backup_error(format!(
-            "{file_name} is not a level.dat backup"
-        )));
-    }
-    if world_of(file_name) != Some(world) {
-        return Err(backup_error(format!(
-            "{file_name} is not a backup of world {world}"
-        )));
-    }
-    let path = root.join(file_name);
-    let metadata = std::fs::symlink_metadata(&path)
-        .map_err(|_| backup_error(format!("no backup named {file_name}")))?;
-    if !metadata.is_file() {
-        return Err(backup_error(format!(
+        )),
+        backup_core::NameError::WrongKind => {
+            backup_error(format!("{file_name} is not a level.dat backup"))
+        }
+        backup_core::NameError::NotOwned => {
+            backup_error(format!("{file_name} is not a backup of world {world}"))
+        }
+        backup_core::NameError::Missing => backup_error(format!("no backup named {file_name}")),
+        backup_core::NameError::NotFile => backup_error(format!(
             "{file_name} is not a backup file in {}",
             root.display()
-        )));
-    }
-    Ok(path)
-}
-
-fn backup_names(root: &Path, world: &str) -> Result<Vec<String>, AppError> {
-    Ok(all_backup_names(root)?
-        .into_iter()
-        .filter(|name| world_of(name) == Some(world))
-        .collect())
-}
-
-fn all_backup_names(root: &Path) -> Result<Vec<String>, AppError> {
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(backup_error(format!("{}: {err}", root.display()))),
-    };
-    Ok(entries
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            if !entry.file_type().ok()?.is_file() {
-                return None;
-            }
-            let name = entry.file_name().to_string_lossy().into_owned();
-            is_level_backup(&name).then_some(name)
-        })
-        .collect())
-}
-
-/// Keep only the newest `keep` backups of one world. Names sort
-/// chronologically, and the world's own names sort together because the stamp
-/// leads.
-fn rotate(root: &Path, world: &str, keep: u32) -> Result<(), AppError> {
-    let mut names = backup_names(root, world)?;
-    names.sort();
-    let excess = names.len().saturating_sub(keep as usize);
-    for name in names.into_iter().take(excess) {
-        std::fs::remove_file(root.join(name)).map_err(|err| backup_error(format!("{err}")))?;
-    }
-    sync_dir(root);
-    Ok(())
-}
-
-/// Nanoseconds since the epoch, strictly increasing within this process so
-/// rapid writes always get distinct, ordered timestamps.
-fn unique_nanos() -> u64 {
-    static LAST: AtomicU64 = AtomicU64::new(0);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
-        .unwrap_or(0);
-    let mut last = LAST.load(Ordering::SeqCst);
-    loop {
-        let next = now.max(last.saturating_add(1));
-        match LAST.compare_exchange(last, next, Ordering::SeqCst, Ordering::SeqCst) {
-            Ok(_) => return next,
-            Err(current) => last = current,
-        }
-    }
-}
-
-/// Write to a hidden temp file, fsync it, then publish it with `hard_link` to
-/// the timestamped name and fsync the directory. `hard_link` fails with
-/// `AlreadyExists` instead of replacing a file another process published, so a
-/// backup name is never clobbered; on a collision the temp is removed and the
-/// next timestamp is tried.
-fn write_unique(root: &Path, world: &str, previous: &[u8]) -> Result<LevelBackupInfo, AppError> {
-    for _ in 0..64 {
-        let nanos = unique_nanos();
-        let stamp = timestamp(nanos);
-        let name = file_name(&stamp, world);
-        let path = root.join(&name);
-        let tmp = root.join(format!(".{stamp}.{}.tmp", std::process::id()));
-        let opened = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp);
-        let mut file = match opened {
-            Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(backup_error(format!("{}: {err}", tmp.display()))),
-        };
-        let written = (|| -> std::io::Result<()> {
-            file.write_all(previous)?;
-            file.sync_all()?;
-            Ok(())
-        })();
-        if let Err(err) = written {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(backup_error(format!("{}: {err}", tmp.display())));
-        }
-        match std::fs::hard_link(&tmp, &path) {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&tmp);
-                sync_dir(root);
-                return Ok(LevelBackupInfo {
-                    display: display_timestamp(&name),
-                    file_name: name,
-                    world: world.to_string(),
-                    bytes: previous.len() as u64,
-                });
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                let _ = std::fs::remove_file(&tmp);
-                continue;
-            }
-            Err(err) => {
-                let _ = std::fs::remove_file(&tmp);
-                return Err(backup_error(format!("{}: {err}", path.display())));
-            }
-        }
-    }
-    Err(backup_error(
-        "could not find a free backup name after 64 tries",
-    ))
-}
-
-fn sync_dir(path: &Path) {
-    if let Ok(handle) = std::fs::File::open(path) {
-        let _ = handle.sync_all();
-    }
-}
-
-/// `YYYYMMDDTHHMMSS.nnnnnnnnn` in UTC: sorts chronologically as text.
-fn timestamp(nanos: u64) -> String {
-    let seconds = (nanos / 1_000_000_000) as i64;
-    let fraction = nanos % 1_000_000_000;
-    let (year, month, day, hour, minute, second) = civil(seconds);
-    format!("{year:04}{month:02}{day:02}T{hour:02}{minute:02}{second:02}.{fraction:09}")
-}
-
-/// `YYYY-MM-DD HH:MM:SS UTC`, derived from the backup file name. Every slice
-/// uses `get`, so a crafted non-ASCII name falls back instead of panicking.
-fn display_timestamp(file_name: &str) -> String {
-    let stamp = file_name
-        .split_once('-')
-        .map(|(stamp, _)| stamp)
-        .unwrap_or(file_name);
-    let Some(rest) = stamp.split_once('T') else {
-        return stamp.to_string();
-    };
-    let (date, rest) = rest;
-    if date.len() != 8 {
-        return stamp.to_string();
-    }
-    let Some(time) = rest.split_once('.').map(|(time, _)| time) else {
-        return stamp.to_string();
-    };
-    if time.len() != 6 {
-        return stamp.to_string();
-    }
-    let (Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second)) = (
-        date.get(0..4),
-        date.get(4..6),
-        date.get(6..8),
-        time.get(0..2),
-        time.get(2..4),
-        time.get(4..6),
-    ) else {
-        return stamp.to_string();
-    };
-    format!("{year}-{month}-{day} {hour}:{minute}:{second} UTC")
-}
-
-/// Civil date and time from Unix seconds. Howard Hinnant's days-from-civil,
-/// inverted.
-fn civil(seconds: i64) -> (i64, u32, u32, u32, u32, u32) {
-    let days = seconds.div_euclid(86_400);
-    let time = seconds.rem_euclid(86_400);
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let year = if month <= 2 { year + 1 } else { year };
-    (
-        year,
-        month,
-        day,
-        (time / 3600) as u32,
-        ((time % 3600) / 60) as u32,
-        (time % 60) as u32,
-    )
+        )),
+    })
 }
 
 #[cfg(test)]

@@ -2,139 +2,26 @@ import { useEffect, useState } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { BackupsClient, PackClient } from '../../lib/ipc';
-import type {
-  BackupInfo,
-  DataStack,
-  GameRunning,
-  Pack,
-  PackListing,
-  ResourceStack,
-  StackEntry,
-} from '../../lib/types';
+import type { BackupInfo, ResourceStack } from '../../lib/types';
+import { makeFakeClient, type FakeClient, type FakeClientOptions } from '../../test/fake-ipc';
+import { pack, resourceStack } from '../../test/fake-packs';
 import BackupsPanel from '../settings/BackupsPanel';
 import ActiveStack from './ActiveStack';
 import PacksPage from './PacksPage';
 
 const FILES = ['vanilla', 'fabric', 'file/Alpha.zip', 'file/Beta.zip'];
+const PACKS = [pack('Alpha'), pack('Beta')];
+const BACKUPS: BackupInfo[] = [
+  { file_name: '20261025T090000.000000000-options.txt', bytes: 4066, display: '2026-10-25 09:00:00 UTC' },
+];
 
-function entry(value: string): StackEntry {
-  return value.startsWith('file/')
-    ? { kind: 'file', value, filename: value.slice('file/'.length) }
-    : { kind: 'foreign', value };
-}
-
-function makePack(name: string): Pack {
-  return {
-    id: `/home/demo/.minecraft/resourcepacks/${name}.zip`,
-    name,
-    path: `/home/demo/.minecraft/resourcepacks/${name}.zip`,
-    location: 'zip',
-    kind: 'resource',
-    description: 'A synthetic pack',
-    meta: {
-      pack_format: { major: 34, minor: 0 },
-      min_format: null,
-      max_format: null,
-      supported_formats: null,
-      description: 'A synthetic pack',
-    },
-    format: { major: 34, minor: 0 },
-    format_range: { min: { major: 34, minor: 0 }, max: { major: 42, minor: 0 } },
-    game_label: '1.21 to 1.21.3',
-    icon: null,
-    error: null,
-    bytes_read: 512,
-  };
-}
-
-interface StackClient extends PackClient, BackupsClient {
-  resource: string[];
-  running: GameRunning | null;
-  staleLocks: string[];
-  toggles: Array<{ filename: string; enabled: boolean }>;
-  reorders: string[][];
-  restores: string[];
-  backups: BackupInfo[];
-  restoredStack: ResourceStack | null;
-}
-
-function makeStackClient({
-  resource = [...FILES],
-  running = null,
-  staleLocks = [],
-  packs = [makePack('Alpha'), makePack('Beta')],
-  backups = [
-    { file_name: '20261025T090000.000000000-options.txt', bytes: 4066, display: '2026-10-25 09:00:00 UTC' },
-  ],
-}: {
-  resource?: string[];
-  running?: GameRunning | null;
-  staleLocks?: string[];
-  packs?: Pack[];
-  backups?: BackupInfo[];
-} = {}): StackClient {
-  const client: StackClient = {
-    resource: [...resource],
-    running,
-    staleLocks,
-    toggles: [],
-    reorders: [],
-    restores: [],
-    backups,
-    restoredStack: null,
-    async listResourcePacks(): Promise<PackListing> {
-      return {
-        packs,
-        count: packs.length,
-        bytes_read: 0,
-        elapsed_ms: 1,
-      };
-    },
-    async importResourcePack(): Promise<never> {
-      throw new Error('not used');
-    },
-    async deleteResourcePack() {},
-    async getResourceStack(): Promise<ResourceStack> {
-      return {
-        entries: client.resource.map(entry),
-        incompatible: [],
-        running: client.running,
-        stale_locks: client.staleLocks,
-        detection_supported: true,
-      };
-    },
-    async setResourcePackEnabled(filename: string, enabled: boolean) {
-      client.toggles.push({ filename, enabled });
-      const value = `file/${filename}`;
-      client.resource = enabled
-        ? [...client.resource.filter((item) => item !== value), value]
-        : client.resource.filter((item) => item !== value);
-      return client.getResourceStack();
-    },
-    async reorderResourceStack(order: string[]) {
-      client.reorders.push(order);
-      client.resource = [...order];
-      return client.getResourceStack();
-    },
-    async listOptionsBackups(): Promise<BackupInfo[]> {
-      return client.backups;
-    },
-    async restoreOptionsBackup(backup: string) {
-      client.restores.push(backup);
-      return client.restoredStack ?? client.getResourceStack();
-    },
-    async listLevelBackups() {
-      return [];
-    },
-    async listAllLevelBackups() {
-      return [];
-    },
-    async restoreLevelBackup(): Promise<DataStack> {
-      throw new Error('not used');
-    },
-  };
-  return client;
+function stackClient(options: FakeClientOptions = {}): FakeClient {
+  return makeFakeClient({
+    resource: [...FILES],
+    packs: PACKS,
+    backups: BACKUPS,
+    ...options,
+  });
 }
 
 function card(name: string): HTMLElement {
@@ -143,7 +30,7 @@ function card(name: string): HTMLElement {
 
 describe('ActiveStack', () => {
   it('shows the stack top-first with locked foreign entries', async () => {
-    render(<PacksPage client={makeStackClient()} />);
+    render(<PacksPage client={stackClient()} />);
 
     const list = await screen.findByRole('list', { name: 'Stack order' });
     const names = within(list)
@@ -163,7 +50,7 @@ describe('ActiveStack', () => {
 
   it('toggles a pack off and offers undo, which toggles it back', async () => {
     const user = userEvent.setup();
-    const client = makeStackClient();
+    const client = stackClient();
     render(<PacksPage client={client} />);
 
     await screen.findByRole('list', { name: 'Stack order' });
@@ -187,7 +74,7 @@ describe('ActiveStack', () => {
 
   it('reorders with the up and down buttons and sends the load order', async () => {
     const user = userEvent.setup();
-    const client = makeStackClient();
+    const client = stackClient();
     render(<PacksPage client={client} />);
 
     await screen.findByRole('list', { name: 'Stack order' });
@@ -212,7 +99,7 @@ describe('ActiveStack', () => {
 
   it('removes a missing pack by filename', async () => {
     const user = userEvent.setup();
-    const client = makeStackClient({
+    const client = stackClient({
       resource: ['vanilla', 'file/Gone.zip'],
       packs: [],
     });
@@ -229,7 +116,7 @@ describe('ActiveStack', () => {
 
   it('blocks every write and names the lock while the game runs', async () => {
     const user = userEvent.setup();
-    const client = makeStackClient({
+    const client = stackClient({
       running: {
         kind: 'session_lock',
         detail: '/home/demo/.minecraft/saves/world/session.lock is locked by pid 4242',
@@ -257,7 +144,7 @@ describe('ActiveStack', () => {
   });
 
   it('notes a stale session lock without blocking writes', async () => {
-    const client = makeStackClient({
+    const client = stackClient({
       staleLocks: ['/home/demo/.minecraft/saves/world/session.lock'],
     });
     render(<PacksPage client={client} />);
@@ -273,7 +160,7 @@ describe('ActiveStack', () => {
       { length: 18 },
       (_, index) => `/home/demo/.minecraft/saves/world-${index}/session.lock`,
     );
-    const client = makeStackClient({ staleLocks });
+    const client = stackClient({ staleLocks });
     render(<PacksPage client={client} />);
 
     const note = await screen.findByRole('status', { name: 'Stale session lock' });
@@ -288,14 +175,8 @@ describe('ActiveStack', () => {
 
   it('refreshes the stack after a backup restore', async () => {
     const user = userEvent.setup();
-    const client = makeStackClient({ resource: ['vanilla', 'file/Beta.zip'] });
-    client.restoredStack = {
-      entries: ['vanilla', 'fabric', 'file/Alpha.zip'].map(entry),
-      incompatible: [],
-      running: null,
-      stale_locks: [],
-      detection_supported: true,
-    };
+    const client = stackClient({ resource: ['vanilla', 'file/Beta.zip'] });
+    client.restoredStack = resourceStack(['vanilla', 'fabric', 'file/Alpha.zip']);
 
     function Harness() {
       const [stack, setStack] = useState<ResourceStack | null>(null);
@@ -307,7 +188,7 @@ describe('ActiveStack', () => {
           {stack ? (
             <ActiveStack
               stack={stack}
-              packs={[makePack('Alpha')]}
+              packs={[pack('Alpha')]}
               busy={false}
               running={stack.running}
               onToggle={() => {}}

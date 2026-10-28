@@ -1,12 +1,10 @@
 import type { IpcClient } from './ipc';
-import { emptyMeta } from './ipc';
 import { defaultConfig, IpcError } from './types';
 import type {
   BackupInfo,
   Config,
   DataSnapshot,
   DataStack,
-  DataStackEntry,
   DatapackDeleteOutcome,
   DatapackImportOutcome,
   DatapackListing,
@@ -19,17 +17,29 @@ import type {
   ModrinthInstallArgs,
   ModrinthInstallOutcome,
   ModrinthKind,
-  ModrinthSearchHit,
   ModrinthSort,
-  ModrinthVersion,
   Pack,
   PackKind,
   PackListing,
   ResourceStack,
-  StackEntry,
   Theme,
   World,
 } from './types';
+import {
+  MOCK_PROJECTS,
+  assertDownloadHash,
+  emptyMeta,
+  findMockProject,
+  formatRange,
+  iconDataUrl,
+  modrinthTargets,
+  projectFromHit,
+  stackEntry,
+  versionsForProject,
+  withActiveGameDir,
+  withGameDirAdded,
+  withGameDirRemoved,
+} from '../test/fake-packs';
 
 const STORAGE_KEY = 'mine-utils:config';
 
@@ -58,19 +68,6 @@ const LATENCY_MS = 60;
 
 function delay(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, LATENCY_MS));
-}
-
-function iconDataUrl(label: string, background: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" rx="10" fill="${background}"/><text x="32" y="40" font-family="sans-serif" font-size="26" font-weight="700" text-anchor="middle" fill="#fff">${label}</text></svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
-function version(major: number, minor = 0) {
-  return { major, minor };
-}
-
-function range(min: number, max: number): FormatRange {
-  return { min: version(min), max: version(max) };
 }
 
 function makePack(
@@ -103,7 +100,7 @@ const INITIAL_PACKS: Pack[] = [
   makePack(
     'VanillaTweaks_r656611_MC1.21.x.zip',
     'resource',
-    range(34, 69),
+    formatRange(34, 69),
     '1.21 to 1.21.10',
     'Vanilla Tweaks 1.21, small tweaks for blocks, items, and UI.',
     iconDataUrl('VT', '#3f7d5a'),
@@ -111,7 +108,7 @@ const INITIAL_PACKS: Pack[] = [
   makePack(
     'Re-covered.zip',
     'resource',
-    range(48, 70),
+    formatRange(48, 70),
     '1.21.2 to 1.21.5',
     'New book covers for enchanted books.',
     iconDataUrl('RC', '#8a5a3f'),
@@ -119,7 +116,7 @@ const INITIAL_PACKS: Pack[] = [
   makePack(
     'AutumnPack',
     'data',
-    range(48, 57),
+    formatRange(48, 57),
     '1.21 to 1.21.3',
     'Autumn recipes and loot tables for a seasonal server.',
     iconDataUrl('AP', '#a05a2c'),
@@ -127,7 +124,7 @@ const INITIAL_PACKS: Pack[] = [
   makePack(
     'OverlayTools',
     'both',
-    range(34, 42),
+    formatRange(34, 42),
     '1.21 to 1.21.3',
     'Resource and data roots in one folder pack.',
     null,
@@ -136,7 +133,7 @@ const INITIAL_PACKS: Pack[] = [
     ...makePack(
       'BrokenPack.zip',
       'unknown',
-      range(0, 0),
+      formatRange(0, 0),
       '',
       '',
       null,
@@ -205,13 +202,6 @@ function makeState(config: Config): GameDirState {
   return { config, entries: listing(config) };
 }
 
-function looksLikeGameDir(path: string): boolean {
-  return (
-    path.includes('.minecraft') ||
-    /\/(saves|versions|resourcepacks)(\/|$)/.test(path)
-  );
-}
-
 function packListing(): PackListing {
   return {
     packs: mockPacks.map((pack) => ({ ...pack })),
@@ -226,157 +216,6 @@ function packListing(): PackListing {
  * pack list. The mock can not stat the disk, so it uses path markers and a few
  * synthetic packs to exercise every UI state.
  */
-/**
- * What the mock pretends Modrinth hosts. Icons are inline SVG data URLs with
- * the same shape as the real CDN icons: the mock never reaches the network.
- */
-const MOCK_PROJECTS: ModrinthSearchHit[] = [
-  {
-    project_id: '7q7JnQD0',
-    slug: 'fresh-animations',
-    title: 'Fresh Animations',
-    description: 'Fresh animations for mobs and players.',
-    icon_url: iconDataUrl('FA', '#3f7d5a'),
-    downloads: 123456,
-    follows: 789,
-    project_type: 'resourcepack',
-    versions: ['1.21.1', '1.21'],
-    latest_version: 'v2',
-  },
-  {
-    project_id: 'bbbb',
-    slug: 'other-pack',
-    title: 'Other Pack',
-    description: 'Another resource pack for testing filters.',
-    icon_url: null,
-    downloads: 10,
-    follows: 1,
-    project_type: 'resourcepack',
-    versions: ['1.21'],
-    latest_version: 'o1',
-  },
-  {
-    project_id: 'dp1',
-    slug: 'pure-datapack',
-    title: 'Pure Datapack',
-    description: 'Only datapack files, no mods.',
-    icon_url: iconDataUrl('PD', '#5a3f7d'),
-    downloads: 500,
-    follows: 5,
-    project_type: 'datapack',
-    versions: ['1.21.1'],
-    latest_version: 'd2',
-  },
-  {
-    project_id: 'mm1',
-    slug: 'mismatch-pack',
-    title: 'Mismatch Pack',
-    description: 'Installing this file always fails the hash check in the mock.',
-    icon_url: null,
-    downloads: 3,
-    follows: 0,
-    project_type: 'resourcepack',
-    versions: ['1.21.1'],
-    latest_version: 'm1',
-  },
-];
-
-const MOCK_VERSIONS: Record<string, ModrinthVersion[]> = {
-  '7q7JnQD0': [
-    {
-      id: 'v2',
-      project_id: '7q7JnQD0',
-      name: 'Fresh Animations 1.9',
-      version_number: '1.9',
-      game_versions: ['1.21.1', '1.21'],
-      loaders: ['minecraft'],
-      files: [
-        {
-          url: 'https://cdn.modrinth.com/data/7q7/fresh-1.9.zip',
-          filename: 'fresh-1.9.zip',
-          size: 1024,
-          primary: true,
-          hashes: { sha512: 'mock-sha512', sha1: 'mock-sha1' },
-        },
-      ],
-    },
-    {
-      id: 'v1',
-      project_id: '7q7JnQD0',
-      name: 'Fresh Animations 1.8',
-      version_number: '1.8',
-      game_versions: ['1.20.1'],
-      loaders: ['minecraft'],
-      files: [
-        {
-          url: 'https://cdn.modrinth.com/data/7q7/fresh-1.8.zip',
-          filename: 'fresh-1.8.zip',
-          size: 900,
-          primary: true,
-          hashes: { sha512: 'mock-old', sha1: 'mock-old1' },
-        },
-      ],
-    },
-  ],
-  bbbb: [
-    {
-      id: 'o1',
-      project_id: 'bbbb',
-      name: 'Other Pack 1.0',
-      version_number: '1.0',
-      game_versions: ['1.21'],
-      loaders: ['minecraft'],
-      files: [
-        {
-          url: 'https://cdn.modrinth.com/data/bbb/other-1.0.zip',
-          filename: 'other-1.0.zip',
-          size: 512,
-          primary: true,
-          hashes: { sha512: 'mock-other', sha1: 'mock-other1' },
-        },
-      ],
-    },
-  ],
-  dp1: [
-    {
-      id: 'd2',
-      project_id: 'dp1',
-      name: 'Pure Datapack 2.0',
-      version_number: '2.0',
-      game_versions: ['1.21.1'],
-      loaders: ['minecraft'],
-      files: [
-        {
-          url: 'https://cdn.modrinth.com/data/dp1/pure-2.0.zip',
-          filename: 'pure-2.0.zip',
-          size: 256,
-          primary: true,
-          hashes: { sha512: 'mock-dp', sha1: 'mock-dp1' },
-        },
-      ],
-    },
-  ],
-  mm1: [
-    {
-      id: 'm1',
-      project_id: 'mm1',
-      name: 'Mismatch Pack 1.0',
-      version_number: '1.0',
-      game_versions: ['1.21.1'],
-      loaders: ['minecraft'],
-      files: [
-        {
-          url: 'https://cdn.modrinth.com/data/mm1/mismatch.zip',
-          filename: 'mismatch.zip',
-          size: 128,
-          primary: true,
-          hashes: { sha512: '00aa', sha1: '00' },
-        },
-      ],
-    },
-  ],
-};
-
 export const mockClient: IpcClient = {
   async listGameDirs() {
     await delay();
@@ -384,46 +223,20 @@ export const mockClient: IpcClient = {
   },
   async addGameDir(path: string) {
     await delay();
-    if (!looksLikeGameDir(path)) {
-      throw new IpcError(
-        'invalid_game_dir',
-        `invalid game dir ${path}: expected one of versions, saves, or resourcepacks`,
-      );
-    }
-    const config = loadConfig();
-    if (!config.game_dirs.some((dir) => dir.path === path)) {
-      config.game_dirs = [...config.game_dirs, { path, source: 'manual' }];
-    }
-    storeConfig(config);
+    const config = storeConfig(withGameDirAdded(loadConfig(), path));
     return makeState(config);
   },
   async removeGameDir(path: string) {
     await delay();
-    const config = loadConfig();
-    if (!config.game_dirs.some((dir) => dir.path === path)) {
-      throw new IpcError('unknown_game_dir', `unknown game dir ${path}`);
-    }
-    config.game_dirs = config.game_dirs.filter((dir) => dir.path !== path);
-    if (config.active_game_dir === path) config.active_game_dir = null;
-    storeConfig(config);
+    const config = storeConfig(withGameDirRemoved(loadConfig(), path));
     return makeState(config);
   },
   async setActiveGameDir(path: string) {
     await delay();
     const config = loadConfig();
-    const entry = listing(config).find((dir) => dir.path === path);
-    if (!entry) {
-      throw new IpcError('unknown_game_dir', `unknown game dir ${path}`);
-    }
-    if (!entry.present) {
-      throw new IpcError(
-        'invalid_game_dir',
-        `invalid game dir ${path}: expected one of versions, saves, or resourcepacks`,
-      );
-    }
-    config.active_game_dir = path;
-    storeConfig(config);
-    return makeState(config);
+    const next = withActiveGameDir(config, listing(config), path);
+    storeConfig(next);
+    return makeState(next);
   },
   async getConfig() {
     await delay();
@@ -482,12 +295,12 @@ export const mockClient: IpcClient = {
     if (name === 'Collision') {
       if (choice !== 'replace') return { status: 'collision', name: base };
     }
-    const formatRange = range(34, 42);
+    const packRange = formatRange(34, 42);
     const pack: Pack = {
       ...makePack(
         name,
         'resource',
-        formatRange,
+        packRange,
         '1.21 to 1.21.3',
         'Imported pack from the browser mock.',
         iconDataUrl(name.slice(0, 2).toUpperCase() || 'PK', '#4a5f8a'),
@@ -684,53 +497,28 @@ export const mockClient: IpcClient = {
   },
   async getModrinthProject(projectId: string) {
     await delay();
-    const hit = MOCK_PROJECTS.find(
-      (item) => item.project_id === projectId || item.slug === projectId,
-    );
+    const hit = findMockProject(projectId);
     if (!hit) {
       throw new IpcError('modrinth_status', `Modrinth request failed with status 404 for ${projectId}`);
     }
-    return {
-      id: hit.project_id,
-      slug: hit.slug,
-      title: hit.title,
-      description: hit.description,
-      body: `${hit.description} Full project body from the mock.`,
-      icon_url: hit.icon_url,
-      downloads: hit.downloads,
-      follows: hit.follows,
-      project_type: hit.project_type,
-      game_versions: [...hit.versions],
-      versions: MOCK_VERSIONS[hit.project_id]?.map((version) => version.id) ?? [],
-    };
+    return projectFromHit(hit, `${hit.description} Full project body from the mock.`);
   },
   async listModrinthVersions(projectId: string) {
     await delay();
-    const hit = MOCK_PROJECTS.find(
-      (item) => item.project_id === projectId || item.slug === projectId,
-    );
+    const hit = findMockProject(projectId);
     if (!hit) {
       throw new IpcError('modrinth_status', `Modrinth request failed with status 404 for ${projectId}`);
     }
-    return MOCK_VERSIONS[hit.project_id] ?? [];
+    return versionsForProject(hit.project_id) ?? [];
   },
   async modrinthTargets(world?: string | null) {
     await delay();
-    return {
-      installed_versions: ['1.21', '1.21.1'],
-      preferred_launcher: '1.21.1',
-      world_version: world ? '1.21.1' : null,
-    };
+    return modrinthTargets(world ? '1.21.1' : null);
   },
   async installModrinthPack(args: ModrinthInstallArgs) {
     await delay();
     const lower = args.filename.toLowerCase();
-    if (lower.includes('mismatch')) {
-      throw new IpcError(
-        'download_hash_mismatch',
-        'download failed: SHA-512 mismatch (expected 00aa, got ffbb)',
-      );
-    }
+    assertDownloadHash(args.filename);
     if (lower.includes('offline')) {
       throw new IpcError('modrinth_offline', 'Modrinth is unreachable (simulated offline); check the network');
     }
@@ -745,7 +533,7 @@ export const mockClient: IpcClient = {
       ...makePack(
         args.filename.replace(/\.zip$/i, ''),
         'resource',
-        range(34, 69),
+        formatRange(34, 69),
         '1.21 to 1.21.10',
         `Installed from Modrinth (${args.projectId}).`,
         null,
@@ -973,17 +761,11 @@ function mockWorldList(): World[] {
   ];
 }
 
-function dataEntry(value: string): DataStackEntry {
-  return value.startsWith('file/')
-    ? { kind: 'file', value, filename: value.slice('file/'.length) }
-    : { kind: 'foreign', value };
-}
-
 function mockDataStack(world: string): DataStack {
   const state = mockWorldStacks[world] ?? { enabled: ['vanilla'], disabled: [] };
   return {
-    enabled: state.enabled.map(dataEntry),
-    disabled: state.disabled.map(dataEntry),
+    enabled: state.enabled.map(stackEntry),
+    disabled: state.disabled.map(stackEntry),
     running:
       mockGameState === 'running'
         ? {
@@ -1192,12 +974,6 @@ function mockDeleteDatapack(world: string, path: string) {
   state.disabled = state.disabled.filter((entry) => entry !== value);
   mockWorldPacks[world] = (mockWorldPacks[world] ?? []).filter((item) => item.filename !== filename);
   snapshotLevelBackup(world);
-}
-
-function stackEntry(value: string): StackEntry {
-  return value.startsWith('file/')
-    ? { kind: 'file', value, filename: value.slice('file/'.length) }
-    : { kind: 'foreign', value };
 }
 
 function mockResourceStack(): ResourceStack {

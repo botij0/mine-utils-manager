@@ -4,6 +4,7 @@ import { ipc, pickPackPath, toAppError } from '../../lib/ipc';
 import { formatVersionLabel } from '../../lib/format';
 import { packFilename } from '../../lib/packPath';
 import type { DatapackImportOutcome, GameRunning } from '../../lib/types';
+import { StatusNote } from '../packs/PackEmptyState';
 import DatapackDetail from './DatapackDetail';
 import DatapackGrid, { type DatapackRow } from './DatapackGrid';
 import WorldHeader from './WorldHeader';
@@ -260,7 +261,7 @@ export default function WorldsPage({
         </p>
       ) : null}
       {noGameDir ? (
-        <p className="empty-note">Pick a game dir in Settings first.</p>
+        <StatusNote>Pick a game dir in Settings first.</StatusNote>
       ) : (
         <div className="worlds-body">
           <WorldRail
@@ -371,9 +372,9 @@ export default function WorldsPage({
                     onMove={(index, direction) => void handleMove(index, direction)}
                   />
                 ) : (
-                  <p className="empty-note">
+                  <StatusNote>
                     The datapack controls are hidden while this world is read-only.
-                  </p>
+                  </StatusNote>
                 )}
                 <DatapackDetail
                   pack={selectedRow?.pack ?? null}
@@ -395,9 +396,9 @@ export default function WorldsPage({
                 ) : null}
               </>
             ) : (
-              <p className="empty-note">
+              <StatusNote>
                 {loading ? 'Loading worlds…' : 'Select a world to see its datapacks.'}
-              </p>
+              </StatusNote>
             )}
           </div>
         </div>

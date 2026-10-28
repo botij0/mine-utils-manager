@@ -9,11 +9,12 @@ use mine_utils_core::{
     finish_modrinth_install, installed_game_versions, parse_install_kind,
     preferred_launcher_version, prepare_modrinth_install, world, AppError, CoreInstallOutcome,
     DatapackImportOutcome, ImportOutcome, ModrinthClient, ModrinthError, ModrinthProject,
-    ModrinthVersion, ReqwestTransport, SearchHit, SearchKind, SearchQuery, SearchSort,
+    ModrinthVersion, ReqwestTransport, SearchHit, SearchQuery, SearchSort,
 };
 use tauri::State;
 
 use super::game_dirs::AppState;
+use super::join_error;
 use super::packs::PackState;
 use super::resource_stack::StackState;
 
@@ -35,14 +36,6 @@ impl Default for ModrinthState {
     fn default() -> Self {
         ModrinthState::new()
     }
-}
-
-fn join_error(err: impl std::error::Error + Send + Sync + 'static) -> AppError {
-    AppError::Io(std::io::Error::other(err))
-}
-
-fn parse_kind(kind: &str) -> Result<SearchKind, ModrinthError> {
-    parse_install_kind(kind)
 }
 
 fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
@@ -75,7 +68,7 @@ pub async fn search_modrinth(
     tauri::async_runtime::spawn_blocking(move || {
         let found = client.search(&SearchQuery {
             text: query,
-            kind: parse_kind(&kind)?,
+            kind: parse_install_kind(&kind)?,
             game_version,
             sort: parse_sort(sort.as_deref().unwrap_or("relevance"))?,
             limit: 20,
@@ -224,13 +217,14 @@ pub async fn install_modrinth_pack(
     state.note_ipc();
     // One snapshot: the game dir, stack paths, and backup policy are read
     // once, not three times across the install.
-    let snapshot = state.install_snapshot()?;
+    let snapshot = state.snapshot()?;
+    let stack_paths = snapshot.stack_paths();
     let data_paths = match world.clone() {
         Some(name) => Some(snapshot.world_data_paths(&name)?),
         None => None,
     };
     let guard = stack.lock_for(&snapshot.game_dir);
-    let data_dir = state.data_dir();
+    let data_dir = snapshot.data_dir.clone();
     let icons = packs.icons();
     let hashes = packs.hashes();
     let client = Arc::clone(&mods.client);
@@ -247,7 +241,7 @@ pub async fn install_modrinth_pack(
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         finish_modrinth_install(
             prepared,
-            &snapshot.stack_paths,
+            &stack_paths,
             data_paths.as_ref(),
             &data_dir,
             &icons,

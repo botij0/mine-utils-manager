@@ -23,8 +23,8 @@ import type {
   ModrinthTargets,
   ModrinthVersion,
   Pack,
+  PackIcon,
   PackListing,
-  PackMeta,
   ResourceStack,
   StackSnapshot,
   Theme,
@@ -60,14 +60,11 @@ export interface WorldsClient {
 /** The narrow surface `BackupsPanel` needs: options backups, the game guard,
  *  and every world's `level.dat` backups in one batch call. Tests fake this
  *  instead of the whole `IpcClient`. */
-export interface BackupsClient {
-  listOptionsBackups(): Promise<BackupInfo[]>;
-  restoreOptionsBackup(backup: string): Promise<ResourceStack>;
-  getResourceStack(): Promise<ResourceStack>;
-  listLevelBackups(world: string): Promise<LevelBackupInfo[]>;
-  listAllLevelBackups(): Promise<LevelBackupInfo[]>;
-  restoreLevelBackup(world: string, backup: string): Promise<DataStack>;
-}
+export type BackupsClient = Pick<
+  PackClient,
+  'listOptionsBackups' | 'restoreOptionsBackup' | 'getResourceStack'
+> &
+  Pick<WorldsClient, 'listLevelBackups' | 'listAllLevelBackups' | 'restoreLevelBackup'>;
 
 /** The Modrinth discovery surface. Search fires only from the Discover page:
  *  the local tabs never trigger a network request. */
@@ -134,11 +131,13 @@ export type WireImportOutcome =
   | { status: 'imported'; pack: WirePack }
   | Exclude<ImportOutcome, { status: 'imported' }>;
 
-export function packWithIconUrl(pack: WirePack): Pack {
+export function withIconUrl<T extends { icon: { sha256: string; path: string } | null }>(
+  item: T,
+): Omit<T, 'icon'> & { icon: PackIcon | null } {
   return {
-    ...pack,
-    icon: pack.icon
-      ? { sha256: pack.icon.sha256, url: convertFileSrc(pack.icon.path) }
+    ...item,
+    icon: item.icon
+      ? { sha256: item.icon.sha256, url: convertFileSrc(item.icon.path) }
       : null,
   };
 }
@@ -146,12 +145,12 @@ export function packWithIconUrl(pack: WirePack): Pack {
 export function listingWithIconUrls(
   listing: Omit<PackListing, 'packs'> & { packs: WirePack[] },
 ): PackListing {
-  return { ...listing, packs: listing.packs.map(packWithIconUrl) };
+  return { ...listing, packs: listing.packs.map(withIconUrl) };
 }
 
 export function outcomeWithIconUrl(outcome: WireImportOutcome): ImportOutcome {
   return outcome.status === 'imported'
-    ? { ...outcome, pack: packWithIconUrl(outcome.pack) }
+    ? { ...outcome, pack: withIconUrl(outcome.pack) }
     : outcome;
 }
 
@@ -187,7 +186,7 @@ const tauriClient: IpcClient = {
     call<ResourceStack>('restore_options_backup', { backup }),
   async listWorlds() {
     const worlds = await call<WireWorld[]>('list_worlds');
-    return worlds.map(worldWithIconUrl);
+    return worlds.map(withIconUrl);
   },
   async listDatapacks(world: string) {
     const listing = await call<
@@ -251,15 +250,6 @@ const tauriClient: IpcClient = {
     return outcome;
   },
 };
-
-export function worldWithIconUrl(world: WireWorld): World {
-  return {
-    ...world,
-    icon: world.icon
-      ? { sha256: world.icon.sha256, url: convertFileSrc(world.icon.path) }
-      : null,
-  };
-}
 
 /**
  * The one client the UI talks to. It picks the Tauri invoke transport when the
@@ -331,15 +321,4 @@ export async function pickPackPath(
   });
   if (Array.isArray(selected)) return selected[0] ?? null;
   return selected;
-}
-
-/** Empty meta for mock fixtures and tests. */
-export function emptyMeta(description = ''): PackMeta {
-  return {
-    pack_format: null,
-    min_format: null,
-    max_format: null,
-    supported_formats: null,
-    description,
-  };
 }

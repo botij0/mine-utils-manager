@@ -4,6 +4,7 @@ import type {
   ModrinthKind,
   World,
 } from '../../lib/types';
+import { StatusNote } from '../packs/PackEmptyState';
 import DialogShell from './DialogShell';
 
 interface InstallSheetProps {
@@ -27,29 +28,22 @@ interface InstallSheetProps {
 }
 
 function resultText(result: ModrinthInstallOutcome): string {
-  if (result.kind === 'resourcepack') {
-    const outcome = result.outcome;
-    if (outcome.status === 'imported') return `Installed ${outcome.pack.name} and enabled it.`;
-    if (outcome.status === 'duplicate') {
-      return `${outcome.name} is already installed (same content as ${outcome.existing}).`;
-    }
-    if (outcome.status === 'collision') {
-      return `${outcome.name} already exists with different content; import it from the Packs page to choose Replace.`;
-    }
-    return 'Import skipped.';
+  switch (result.outcome.status) {
+    case 'imported':
+      return result.kind === 'resourcepack'
+        ? `Installed ${result.outcome.pack.name} and enabled it.`
+        : `Installed ${result.outcome.filename} and enabled it.`;
+    case 'locked':
+      return `Installed ${result.outcome.filename}, but the world is locked so it stays disabled: ${result.outcome.detail}`;
+    case 'duplicate':
+      return `${result.outcome.name} is already installed (same content as ${result.outcome.existing}).`;
+    case 'collision':
+      return `${result.outcome.name} already exists with different content; import it from the ${
+        result.kind === 'resourcepack' ? 'Packs' : 'Worlds'
+      } page to choose Replace.`;
+    default:
+      return 'Import skipped.';
   }
-  const outcome = result.outcome;
-  if (outcome.status === 'imported') return `Installed ${outcome.filename} and enabled it.`;
-  if (outcome.status === 'locked') {
-    return `Installed ${outcome.filename}, but the world is locked so it stays disabled: ${outcome.detail}`;
-  }
-  if (outcome.status === 'duplicate') {
-    return `${outcome.name} is already installed (same content as ${outcome.existing}).`;
-  }
-  if (outcome.status === 'collision') {
-    return `${outcome.name} already exists with different content; import it from the Worlds page to choose Replace.`;
-  }
-  return 'Import skipped.';
 }
 
 export default function InstallSheet({
@@ -93,10 +87,10 @@ export default function InstallSheet({
         <div className="field">
           <label htmlFor="discover-world">Target world</label>
           {worlds.length === 0 ? (
-            <p className="empty-note" role="status">
+            <StatusNote role="status">
               No worlds yet. Create or open a world in Minecraft first, then
               install a datapack into it.
-            </p>
+            </StatusNote>
           ) : (
             <select
               id="discover-world"
@@ -114,29 +108,19 @@ export default function InstallSheet({
         </div>
       ) : null}
       {!hasGameDir ? (
-        <p className="empty-note" role="status">
+        <StatusNote role="status">
           No game dir is active. Pick a game dir in Settings first, then install.
-        </p>
+        </StatusNote>
       ) : null}
-      {blockedReason ? (
-        <p className="empty-note" role="status">
-          {blockedReason}
-        </p>
-      ) : null}
+      {blockedReason ? <StatusNote role="status">{blockedReason}</StatusNote> : null}
       {error ? (
         <p className="error" role="alert">
           {error.message}
         </p>
       ) : null}
-      {result ? (
-        <p className="empty-note" role="status">
-          {resultText(result)}
-        </p>
-      ) : null}
+      {result ? <StatusNote role="status">{resultText(result)}</StatusNote> : null}
       {result?.provenance_warning ? (
-        <p className="empty-note" role="status">
-          Warning: {result.provenance_warning}
-        </p>
+        <StatusNote role="status">Warning: {result.provenance_warning}</StatusNote>
       ) : null}
       <div className="pack-confirm-actions">
         <button type="button" className="button" onClick={onClose}>

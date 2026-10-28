@@ -1,14 +1,14 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { BackupsClient } from '../../lib/ipc';
 import type {
   BackupInfo,
   GameRunning,
   LevelBackupInfo,
-  ResourceStack,
 } from '../../lib/types';
 import { IpcError } from '../../lib/types';
+import { makeFakeClient, type FakeClient } from '../../test/fake-ipc';
+import { resourceStack } from '../../test/fake-packs';
 import BackupsPanel from './BackupsPanel';
 
 const RUNNING: GameRunning = {
@@ -19,77 +19,43 @@ const RUNNING: GameRunning = {
   command: 'java -jar client.jar --gameDir /home/demo/.minecraft',
 };
 
-const STACK: ResourceStack = {
-  entries: [
-    { kind: 'foreign', value: 'vanilla' },
-    { kind: 'file', value: 'file/Alpha.zip', filename: 'Alpha.zip' },
-  ],
-  incompatible: [],
-  running: null,
-  stale_locks: [],
-  detection_supported: true,
-};
+const STACK = resourceStack(['vanilla', 'file/Alpha.zip']);
+
+const DEFAULT_BACKUPS: BackupInfo[] = [
+  {
+    file_name: '20261025T090000.000000000-options.txt',
+    bytes: 4066,
+    display: '2026-10-25 09:00:00 UTC',
+  },
+  {
+    file_name: '20261025T080000.000000000-options.txt',
+    bytes: 1024,
+    display: '2026-10-25 08:00:00 UTC',
+  },
+];
+
+const LEVEL_BACKUPS: LevelBackupInfo[] = [
+  {
+    file_name: '20261025T101500.000000000-Survival 1_17-level.dat',
+    world: 'Survival 1_17',
+    bytes: 10258,
+    display: '2026-10-25 10:15:00 UTC',
+  },
+];
 
 function makeClient({
-  backups = [
-    {
-      file_name: '20261025T090000.000000000-options.txt',
-      bytes: 4066,
-      display: '2026-10-25 09:00:00 UTC',
-    },
-    {
-      file_name: '20261025T080000.000000000-options.txt',
-      bytes: 1024,
-      display: '2026-10-25 08:00:00 UTC',
-    },
-  ] as BackupInfo[],
+  backups = DEFAULT_BACKUPS,
   error = null as IpcError | null,
   running = null as GameRunning | null,
-  restored = STACK as ResourceStack,
-} = {}) {
-  const restores: string[] = [];
-  const levelRestores: string[] = [];
-  const levelBackups: LevelBackupInfo[] = [
-    {
-      file_name: '20261025T101500.000000000-Survival 1_17-level.dat',
-      world: 'Survival 1_17',
-      bytes: 10258,
-      display: '2026-10-25 10:15:00 UTC',
-    },
-  ];
-  const client: BackupsClient & { restores: string[]; levelRestores: string[] } = {
-    restores,
-    levelRestores,
-    async getResourceStack() {
-      return { ...STACK, running };
-    },
-    async listOptionsBackups() {
-      if (error) throw error;
-      return backups;
-    },
-    async restoreOptionsBackup(backup: string): Promise<ResourceStack> {
-      restores.push(backup);
-      return restored;
-    },
-    async listLevelBackups(world: string) {
-      return levelBackups.filter((entry) => entry.world === world);
-    },
-    async listAllLevelBackups() {
-      return [...levelBackups];
-    },
-    async restoreLevelBackup(world: string, backup: string) {
-      levelRestores.push(`${world}/${backup}`);
-      return {
-        enabled: [],
-        disabled: [],
-        running: null,
-        world_locked: null,
-        stale_locks: [],
-        detection_supported: true,
-      };
-    },
-  };
-  return client;
+  restored = STACK,
+} = {}): FakeClient {
+  return makeFakeClient({
+    backups,
+    backupsError: error,
+    running,
+    restoredStack: restored,
+    levelBackups: LEVEL_BACKUPS,
+  });
 }
 
 describe('BackupsPanel', () => {

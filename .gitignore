@@ -1,6 +1,13 @@
 node_modules/
+.codegraph/
 dist/
+dist-release/
+.vite/
 target/
+src-tauri/target/
 src-tauri/gen/
 *.log
+*.AppImage
+*.rpm
+SHA256SUMS.txt
 decisions.tsv

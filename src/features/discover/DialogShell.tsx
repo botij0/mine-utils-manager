@@ -4,24 +4,32 @@ interface DialogShellProps {
   label: string;
   onClose: () => void;
   children: ReactNode;
+  /** False while a request is in flight, so Escape cannot strand the flow. */
+  dismissOnEscape?: boolean;
 }
 
 /**
  * One modal dialog at a time: `aria-modal`, initial focus in the dialog,
  * focus restored to the opener on unmount, and Escape to close. Callers
- * render at most one `DialogShell` so two sheets never stack.
+ * render at most one `DialogShell` so two sheets never stack. Pass
+ * `dismissOnEscape={false}` while a request is in flight: closing mid-flight
+ * would drop the state the pending result resolves into.
  */
-export default function DialogShell({ label, onClose, children }: DialogShellProps) {
+export default function DialogShell({ label, onClose, children, dismissOnEscape = true }: DialogShellProps) {
   const dialogRef = useRef<HTMLElement | null>(null);
   const openerRef = useRef<Element | null>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const dismissRef = useRef(dismissOnEscape);
+  dismissRef.current = dismissOnEscape;
 
   useEffect(() => {
     openerRef.current = document.activeElement;
-    dialogRef.current?.focus();
+    if (!dialogRef.current?.contains(document.activeElement)) {
+      dialogRef.current?.focus();
+    }
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && dismissRef.current) {
         event.stopPropagation();
         closeRef.current();
       }

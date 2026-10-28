@@ -285,6 +285,8 @@ fn download_into<T: Transport>(
     let mut sha256 = Sha256::new();
     let mut bytes: u64 = 0;
     let mut reader = fetched.body.take(max_bytes + 1);
+    // Same 64KiB size as the pack/install hash loops, but not shared: this
+    // loop hashes two digests while writing and enforcing the byte cap.
     let mut chunk = [0u8; 64 * 1024];
     loop {
         let n = reader.read(&mut chunk).map_err(|err| DownloadError::Io {

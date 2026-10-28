@@ -1,5 +1,6 @@
 import GameRunningBanner from '../packs/GameRunningBanner';
 import { formatVersionLabel } from '../../lib/format';
+import { hideBrokenImage, worldInitials } from '../../lib/avatar';
 import type { GameRunning, World } from '../../lib/types';
 
 interface WorldHeaderProps {
@@ -33,9 +34,9 @@ export default function WorldHeader({
     <header className="world-header">
       <span className="world-icon" aria-hidden="true">
         {world.icon ? (
-          <img src={world.icon.url} alt="" onError={hideBrokenIcon} />
+          <img src={world.icon.url} alt="" onError={hideBrokenImage} />
         ) : (
-          <span className="world-icon-fallback">{initials(world.level_name)}</span>
+          <span className="world-icon-fallback">{worldInitials(world.level_name)}</span>
         )}
       </span>
       <div className="world-header-text">
@@ -84,14 +85,4 @@ export default function WorldHeader({
       </div>
     </header>
   );
-}
-
-function initials(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) return '?';
-  return trimmed.slice(0, 2).toUpperCase();
-}
-
-function hideBrokenIcon(event: React.SyntheticEvent<HTMLImageElement>) {
-  event.currentTarget.style.display = 'none';
 }
