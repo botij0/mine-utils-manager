@@ -24,7 +24,7 @@ use crate::pack_scan::{
     self, display_name, HashCache, PackListing, SystemTrash, TrashService, MAX_META_BYTES,
     MAX_ZIP_ENTRIES,
 };
-use crate::resource_stack::{SystemGuard, WriteGuard};
+use crate::resource_stack::{stack_core, SystemGuard, WriteGuard};
 
 /// Everything that can go wrong with a datapack stack change request.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -54,41 +54,8 @@ impl DataStackError {
     }
 }
 
-/// One `DataPacks` entry. The wire tags each entry with `kind`, mirroring the
-/// resource stack shape in `src/lib/types.ts`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum DataStackEntry {
-    /// The exact `file/<filename>` value plus the filename alone.
-    File { value: String, filename: String },
-    /// A locked string the app never edits, such as `vanilla`.
-    Foreign { value: String },
-}
-
-impl DataStackEntry {
-    pub fn parse(value: &str) -> DataStackEntry {
-        match value.strip_prefix("file/") {
-            Some(filename) => DataStackEntry::File {
-                value: value.to_string(),
-                filename: filename.to_string(),
-            },
-            None => DataStackEntry::Foreign {
-                value: value.to_string(),
-            },
-        }
-    }
-
-    pub fn value(&self) -> &str {
-        match self {
-            DataStackEntry::File { value, .. } => value,
-            DataStackEntry::Foreign { value } => value,
-        }
-    }
-
-    pub fn is_file(&self) -> bool {
-        matches!(self, DataStackEntry::File { .. })
-    }
-}
+/// One `DataPacks` entry. The wire shape is the shared stack entry.
+pub use crate::resource_stack::StackEntry as DataStackEntry;
 
 /// The active datapack stack as the app sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,28 +168,21 @@ pub enum DatapackImportOutcome {
 
 /// A pack filename must be a plain direct child of `datapacks`.
 pub fn validate_filename(filename: &str) -> Result<(), DataStackError> {
-    let unsafe_name = filename.is_empty()
-        || filename == "."
-        || filename == ".."
-        || filename.contains('/')
-        || filename.contains('\\')
-        || filename.contains('\0');
-    if unsafe_name {
-        return Err(DataStackError::InvalidFilename {
-            filename: filename.to_string(),
-        });
+    stack_core::validate_filename(filename).map_err(DataStackError::from)
+}
+
+impl From<stack_core::EntryError> for DataStackError {
+    fn from(err: stack_core::EntryError) -> Self {
+        match err {
+            stack_core::EntryError::InvalidFilename { filename } => {
+                DataStackError::InvalidFilename { filename }
+            }
+            stack_core::EntryError::ForeignMoved { value, index } => {
+                DataStackError::ForeignMoved { value, index }
+            }
+            stack_core::EntryError::OrderChanged => DataStackError::OrderChanged,
+        }
     }
-    Ok(())
-}
-
-/// The exact `file/<filename>` value Minecraft writes.
-pub fn file_value(filename: &str) -> Result<String, DataStackError> {
-    validate_filename(filename)?;
-    Ok(format!("file/{filename}"))
-}
-
-fn is_file_entry(value: &str) -> bool {
-    value.starts_with("file/")
 }
 
 /// Enable: drop `file/<filename>` from `Disabled`, append to `Enabled` when
@@ -231,8 +191,8 @@ pub fn enable(
     enabled: &mut Vec<String>,
     disabled: &mut Vec<String>,
     filename: &str,
-) -> Result<bool, DataStackError> {
-    let value = file_value(filename)?;
+) -> Result<bool, stack_core::EntryError> {
+    let value = stack_core::file_value(filename)?;
     let removed = disabled.iter().filter(|entry| *entry == &value).count();
     disabled.retain(|entry| entry != &value);
     if enabled.contains(&value) {
@@ -259,25 +219,7 @@ pub fn disable(enabled: &mut Vec<String>, disabled: &mut Vec<String>, filename: 
 /// entries may move. Foreign entries keep their indices and relative order,
 /// and the file multiset is preserved, so duplicates survive a reorder.
 pub fn reorder(current: &[String], order: &[String]) -> Result<(), DataStackError> {
-    if order.len() != current.len() {
-        return Err(DataStackError::OrderChanged);
-    }
-    for (index, (before, after)) in current.iter().zip(order.iter()).enumerate() {
-        if !is_file_entry(before) && before != after {
-            return Err(DataStackError::ForeignMoved {
-                value: before.clone(),
-                index,
-            });
-        }
-    }
-    let mut before_files: Vec<&String> = current.iter().filter(|e| is_file_entry(e)).collect();
-    let mut after_files: Vec<&String> = order.iter().filter(|e| is_file_entry(e)).collect();
-    before_files.sort();
-    after_files.sort();
-    if before_files != after_files {
-        return Err(DataStackError::OrderChanged);
-    }
-    Ok(())
+    stack_core::reorder(current, order).map_err(DataStackError::from)
 }
 
 fn writable(game_dir: &Path, world_dir: &Path, guard: &dyn WriteGuard) -> Result<(), AppError> {
@@ -350,7 +292,7 @@ pub fn set_enabled_with_guard(
     guard: &dyn WriteGuard,
 ) -> Result<DataStack, AppError> {
     validate_filename(filename).map_err(AppError::from)?;
-    let change = Change::Toggle {
+    let change = stack_core::Change::Toggle {
         filename: filename.to_string(),
         enabled,
     };
@@ -365,7 +307,7 @@ pub fn reorder_stack(
     order: &[String],
     expected: &DataSnapshot,
 ) -> Result<DataStack, AppError> {
-    let change = Change::Reorder {
+    let change = stack_core::Change::Reorder {
         order: order.to_vec(),
     };
     let write = commit(paths, Some(expected), &change, &SystemGuard)?;
@@ -377,7 +319,7 @@ pub fn remove_references(paths: &DataPaths, filename: &str) -> Result<bool, AppE
     if !paths.level_dat_path.exists() {
         return Ok(false);
     }
-    let change = Change::Remove {
+    let change = stack_core::Change::Remove {
         filename: filename.to_string(),
     };
     Ok(commit(paths, None, &change, &SystemGuard)?.wrote)
@@ -706,51 +648,113 @@ fn stack_of_lists(write: &DataWrite, paths: &DataPaths) -> DataStack {
     }
 }
 
-enum Change {
-    Toggle { filename: String, enabled: bool },
-    Reorder { order: Vec<String> },
-    Remove { filename: String },
+fn rules() -> stack_core::Rules {
+    stack_core::Rules {
+        enable: enable_lists,
+        disable: disable_lists,
+        remove: remove_lists,
+    }
 }
 
-impl Change {
-    fn apply(
-        &self,
-        enabled: &mut Vec<String>,
-        disabled: &mut Vec<String>,
-    ) -> Result<bool, DataStackError> {
-        match self {
-            Change::Toggle {
-                filename,
-                enabled: true,
-            } => enable(enabled, disabled, filename),
-            Change::Toggle {
-                filename,
-                enabled: false,
-            } => {
-                validate_filename(filename)?;
-                Ok(disable(enabled, disabled, filename))
-            }
-            Change::Remove { filename } => {
-                let value = format!("file/{filename}");
-                validate_filename(filename)?;
-                let before = enabled.len() + disabled.len();
-                enabled.retain(|entry| entry != &value);
-                disabled.retain(|entry| entry != &value);
-                Ok(enabled.len() + disabled.len() != before)
-            }
-            Change::Reorder { order } => {
-                reorder(enabled, order)?;
-                if enabled.as_slice() == order.as_slice() {
-                    return Ok(false);
-                }
-                *enabled = order.clone();
-                Ok(true)
-            }
+fn enable_lists(
+    lists: &mut stack_core::Lists,
+    filename: &str,
+) -> Result<bool, stack_core::EntryError> {
+    enable(&mut lists.primary, &mut lists.secondary, filename)
+}
+
+fn disable_lists(lists: &mut stack_core::Lists, filename: &str) -> bool {
+    disable(&mut lists.primary, &mut lists.secondary, filename)
+}
+
+fn remove_lists(
+    lists: &mut stack_core::Lists,
+    filename: &str,
+) -> Result<bool, stack_core::EntryError> {
+    stack_core::validate_filename(filename)?;
+    let value = format!("file/{filename}");
+    let before = lists.primary.len() + lists.secondary.len();
+    lists.primary.retain(|entry| entry != &value);
+    lists.secondary.retain(|entry| entry != &value);
+    Ok(lists.primary.len() + lists.secondary.len() != before)
+}
+
+struct DataFile<'a> {
+    paths: &'a DataPaths,
+    guard: &'a dyn WriteGuard,
+}
+
+impl stack_core::StackFile for DataFile<'_> {
+    type Source = Vec<u8>;
+    type Backup = LevelBackupOutcome;
+    type Rendered = Vec<u8>;
+
+    fn prepare(&self) -> Result<(), AppError> {
+        writable(&self.paths.game_dir, &self.paths.world_dir, self.guard)?;
+        reject_link_targets(self.paths)
+    }
+
+    fn guard(&self) -> Result<(), AppError> {
+        writable(&self.paths.game_dir, &self.paths.world_dir, self.guard)
+    }
+
+    fn read(&self) -> Result<(Vec<u8>, stack_core::Lists), AppError> {
+        let previous = std::fs::read(&self.paths.level_dat_path)?;
+        let view = level_dat::parse(&previous)?;
+        let lists = stack_core::Lists {
+            primary: view.enabled,
+            secondary: view.disabled,
+        };
+        Ok((previous, lists))
+    }
+
+    fn bytes<'a>(&self, source: &'a Vec<u8>) -> &'a [u8] {
+        source
+    }
+
+    fn render(&self, previous: &Vec<u8>, lists: &stack_core::Lists) -> Result<Vec<u8>, AppError> {
+        Ok(level_dat::render_with(
+            previous,
+            &lists.primary,
+            &lists.secondary,
+        )?)
+    }
+
+    fn write(&self, rendered: Vec<u8>) -> Result<(), AppError> {
+        level_dat::write_level_dat(&self.paths.world_dir, &rendered)?;
+        Ok(())
+    }
+
+    fn backup(&self, previous: &[u8]) -> Result<LevelBackupOutcome, AppError> {
+        level_backup::create(
+            &self.paths.backups_root,
+            &self.paths.world_name(),
+            previous,
+            &self.paths.backups,
+        )
+    }
+
+    fn skipped_backup(&self) -> LevelBackupOutcome {
+        LevelBackupOutcome {
+            created: None,
+            skipped: !self.paths.backups.enabled,
         }
     }
 
-    fn order_related(&self) -> bool {
-        matches!(self, Change::Reorder { .. })
+    fn unchanged(&self, previous: &[u8]) -> Result<bool, AppError> {
+        Ok(std::fs::read(&self.paths.level_dat_path).ok().as_deref() == Some(previous))
+    }
+
+    fn reject(&self, err: stack_core::EntryError) -> AppError {
+        AppError::from(DataStackError::from(err))
+    }
+
+    fn stale(&self) -> AppError {
+        AppError::from(DataStackError::StaleFile)
+    }
+
+    fn rules(&self) -> stack_core::Rules {
+        rules()
     }
 }
 
@@ -761,81 +765,21 @@ impl Change {
 fn commit(
     paths: &DataPaths,
     expected: Option<&DataSnapshot>,
-    change: &Change,
+    change: &stack_core::Change,
     guard: &dyn WriteGuard,
 ) -> Result<DataWrite, AppError> {
-    writable(&paths.game_dir, &paths.world_dir, guard)?;
-    reject_link_targets(paths)?;
-
-    for attempt in 0..2 {
-        let before = std::fs::read(&paths.level_dat_path)?;
-        let view = level_dat::parse(&before)?;
-        let mut enabled = view.enabled.clone();
-        let mut disabled = view.disabled.clone();
-        let stale = expected
-            .is_some_and(|snapshot| snapshot.enabled != enabled || snapshot.disabled != disabled);
-
-        let applied = change.apply(&mut enabled, &mut disabled);
-        let changed = match applied {
-            Ok(changed) => changed,
-            Err(_) if stale && change.order_related() => {
-                return Err(AppError::from(DataStackError::StaleFile));
-            }
-            Err(err) => return Err(AppError::from(err)),
-        };
-
-        if !changed {
-            return Ok(DataWrite {
-                enabled,
-                disabled,
-                backup: LevelBackupOutcome {
-                    created: None,
-                    skipped: !paths.backups.enabled,
-                },
-                wrote: false,
-            });
-        }
-
-        if std::fs::read(&paths.level_dat_path).ok().as_deref() != Some(before.as_slice()) {
-            // An external writer landed between our read and our write.
-            if attempt == 1 {
-                return Err(AppError::from(DataStackError::StaleFile));
-            }
-            continue;
-        }
-
-        // A failed backup aborts the write; the previous bytes stay intact.
-        let backup_outcome = level_backup::create(
-            &paths.backups_root,
-            &paths.world_name(),
-            &before,
-            &paths.backups,
-        )?;
-        // Re-check after the backup and immediately before the replace. A game
-        // that started during the backup leaves the old bytes in place.
-        writable(&paths.game_dir, &paths.world_dir, guard)?;
-        // The render depends only on `before`, so it sits directly against
-        // the final re-read and the replace: nothing else can interleave.
-        let rendered =
-            level_dat::render_with(&before, &enabled, &disabled).map_err(AppError::from)?;
-        // Re-read immediately before the replace: an external writer that
-        // landed during the backup is rebased once; a second race comes back
-        // as stale instead of clobbering the new content.
-        if std::fs::read(&paths.level_dat_path).ok().as_deref() != Some(before.as_slice()) {
-            if attempt == 1 {
-                return Err(AppError::from(DataStackError::StaleFile));
-            }
-            continue;
-        }
-        level_dat::write_level_dat(&paths.world_dir, &rendered)?;
-        return Ok(DataWrite {
-            enabled,
-            disabled,
-            backup: backup_outcome,
-            wrote: true,
-        });
-    }
-    Err(AppError::from(DataStackError::StaleFile))
+    let file = DataFile { paths, guard };
+    let expected = expected.map(|snapshot| stack_core::Expected {
+        primary: &snapshot.enabled,
+        secondary: &snapshot.disabled,
+    });
+    let committed = stack_core::commit(&file, expected, change)?;
+    Ok(DataWrite {
+        enabled: committed.lists.primary,
+        disabled: committed.lists.secondary,
+        backup: committed.backup,
+        wrote: committed.wrote,
+    })
 }
 
 impl From<DataStackError> for AppError {

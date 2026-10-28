@@ -21,6 +21,270 @@ use crate::game_lock;
 use crate::options_txt::{self, OptionsTxt};
 use crate::pack_scan::{delete_pack_with, validate_delete_target, TrashService};
 
+/// The parts of a two-array pack stack that do not depend on which stack it is:
+/// entry parsing, filename rules, and reorder validation. The resource and
+/// datapack stacks share this module so each invariant has one definition.
+pub(crate) mod stack_core {
+    use serde::{Deserialize, Serialize};
+
+    use crate::error::AppError;
+
+    /// One `file/<filename>` entry. The wire tags each entry with `kind`, and
+    /// the frontend mirrors this shape in `src/lib/types.ts`.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    pub enum Entry {
+        /// The exact `file/<filename>` value plus the filename alone. The
+        /// filename is a direct child of the pack folder, never `pack.name`,
+        /// which strips `.zip`.
+        File { value: String, filename: String },
+        /// A locked string the app never edits, such as `vanilla`.
+        Foreign { value: String },
+    }
+
+    impl Entry {
+        pub fn parse(value: &str) -> Entry {
+            match value.strip_prefix("file/") {
+                Some(filename) => Entry::File {
+                    value: value.to_string(),
+                    filename: filename.to_string(),
+                },
+                None => Entry::Foreign {
+                    value: value.to_string(),
+                },
+            }
+        }
+
+        pub fn value(&self) -> &str {
+            match self {
+                Entry::File { value, .. } => value,
+                Entry::Foreign { value } => value,
+            }
+        }
+
+        pub fn is_file(&self) -> bool {
+            matches!(self, Entry::File { .. })
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum EntryError {
+        InvalidFilename { filename: String },
+        ForeignMoved { value: String, index: usize },
+        OrderChanged,
+    }
+
+    /// A pack filename must be a plain direct child of the pack folder. Only
+    /// path separators, NUL, and the two directory names are rejected; dots
+    /// inside a name are ordinary characters, so `Epic..Pack.zip` is valid.
+    pub fn validate_filename(filename: &str) -> Result<(), EntryError> {
+        let unsafe_name = filename.is_empty()
+            || filename == "."
+            || filename == ".."
+            || filename.contains('/')
+            || filename.contains('\\')
+            || filename.contains('\0');
+        if unsafe_name {
+            return Err(EntryError::InvalidFilename {
+                filename: filename.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The exact `file/<filename>` value Minecraft writes.
+    pub fn file_value(filename: &str) -> Result<String, EntryError> {
+        validate_filename(filename)?;
+        Ok(format!("file/{filename}"))
+    }
+
+    pub fn is_file_entry(value: &str) -> bool {
+        value.starts_with("file/")
+    }
+
+    /// Accept the full array order, low to high. Only `file/` entries may move.
+    /// Foreign entries keep their indices and relative order, and the file
+    /// multiset is preserved, so duplicates survive a reorder.
+    pub fn reorder(current: &[String], order: &[String]) -> Result<(), EntryError> {
+        if order.len() != current.len() {
+            return Err(EntryError::OrderChanged);
+        }
+        for (index, (before, after)) in current.iter().zip(order.iter()).enumerate() {
+            if !is_file_entry(before) && before != after {
+                return Err(EntryError::ForeignMoved {
+                    value: before.clone(),
+                    index,
+                });
+            }
+        }
+        let mut before_files: Vec<&String> = current
+            .iter()
+            .filter(|entry| is_file_entry(entry))
+            .collect();
+        let mut after_files: Vec<&String> =
+            order.iter().filter(|entry| is_file_entry(entry)).collect();
+        before_files.sort();
+        after_files.sort();
+        if before_files != after_files {
+            return Err(EntryError::OrderChanged);
+        }
+        Ok(())
+    }
+
+    /// The two string arrays a stack owns. `primary` is the load order;
+    /// `secondary` is the kind-specific companion (`incompatibleResourcePacks`
+    /// or `DataPacks.Disabled`).
+    #[derive(Debug, Clone, PartialEq, Eq, Default)]
+    pub struct Lists {
+        pub primary: Vec<String>,
+        pub secondary: Vec<String>,
+    }
+
+    /// The two arrays the UI rendered.
+    #[derive(Debug, Clone, Copy)]
+    pub struct Expected<'a> {
+        pub primary: &'a [String],
+        pub secondary: &'a [String],
+    }
+
+    /// The mutation vocabulary both stacks share. The per-kind meaning of each
+    /// operation lives in [`Rules`].
+    #[derive(Debug, Clone)]
+    pub enum Change {
+        Toggle { filename: String, enabled: bool },
+        Reorder { order: Vec<String> },
+        Remove { filename: String },
+    }
+
+    impl Change {
+        pub fn apply(&self, lists: &mut Lists, rules: Rules) -> Result<bool, EntryError> {
+            match self {
+                Change::Toggle {
+                    filename,
+                    enabled: true,
+                } => (rules.enable)(lists, filename),
+                Change::Toggle {
+                    filename,
+                    enabled: false,
+                } => Ok((rules.disable)(lists, filename)),
+                Change::Remove { filename } => (rules.remove)(lists, filename),
+                Change::Reorder { order } => {
+                    reorder(&lists.primary, order)?;
+                    if lists.primary == *order {
+                        return Ok(false);
+                    }
+                    lists.primary.clone_from(order);
+                    Ok(true)
+                }
+            }
+        }
+
+        pub fn order_related(&self) -> bool {
+            matches!(self, Change::Reorder { .. })
+        }
+    }
+
+    /// The mutations that differ between the stacks.
+    #[derive(Clone, Copy)]
+    pub struct Rules {
+        pub enable: fn(&mut Lists, &str) -> Result<bool, EntryError>,
+        pub disable: fn(&mut Lists, &str) -> bool,
+        pub remove: fn(&mut Lists, &str) -> Result<bool, EntryError>,
+    }
+
+    /// One stack file: how to read, render, back up, and replace it. The commit
+    /// driver owns the guard and rebase sequence; each stack owns only these
+    /// file-specific steps.
+    pub trait StackFile {
+        type Source;
+        type Backup;
+        type Rendered;
+
+        fn prepare(&self) -> Result<(), AppError>;
+        fn guard(&self) -> Result<(), AppError>;
+        fn read(&self) -> Result<(Self::Source, Lists), AppError>;
+        fn bytes<'a>(&self, source: &'a Self::Source) -> &'a [u8];
+        fn render(&self, source: &Self::Source, lists: &Lists) -> Result<Self::Rendered, AppError>;
+        fn write(&self, rendered: Self::Rendered) -> Result<(), AppError>;
+        fn backup(&self, previous: &[u8]) -> Result<Self::Backup, AppError>;
+        fn skipped_backup(&self) -> Self::Backup;
+        fn unchanged(&self, previous: &[u8]) -> Result<bool, AppError>;
+        fn unchanged_before_write(&self, previous: &[u8]) -> Result<bool, AppError> {
+            self.unchanged(previous)
+        }
+        fn reject(&self, err: EntryError) -> AppError;
+        fn stale(&self) -> AppError;
+        fn rules(&self) -> Rules;
+    }
+
+    pub struct Committed<B> {
+        pub lists: Lists,
+        pub backup: B,
+        pub wrote: bool,
+    }
+
+    /// Run one change end to end: prepare, re-read, apply to the latest content,
+    /// back up, and replace atomically. An external edit that races the write is
+    /// rebased once; a second race comes back as stale.
+    pub fn commit<F: StackFile>(
+        file: &F,
+        expected: Option<Expected<'_>>,
+        change: &Change,
+    ) -> Result<Committed<F::Backup>, AppError> {
+        file.prepare()?;
+
+        for attempt in 0..2 {
+            let (source, mut lists) = file.read()?;
+            let stale = expected.is_some_and(|expected| {
+                lists.primary != expected.primary || lists.secondary != expected.secondary
+            });
+
+            let changed = match change.apply(&mut lists, file.rules()) {
+                Ok(changed) => changed,
+                Err(_) if stale && change.order_related() => return Err(file.stale()),
+                Err(err) => return Err(file.reject(err)),
+            };
+
+            if !changed {
+                return Ok(Committed {
+                    lists,
+                    backup: file.skipped_backup(),
+                    wrote: false,
+                });
+            }
+
+            let previous = file.bytes(&source);
+            if !file.unchanged(previous)? {
+                // An external writer landed between our read and our write.
+                if attempt == 1 {
+                    return Err(file.stale());
+                }
+                continue;
+            }
+
+            // A failed backup aborts the write; the previous bytes stay intact.
+            let backup = file.backup(previous)?;
+            // Re-check after the backup and immediately before the replace. A
+            // game that started during the backup leaves the old bytes in place.
+            file.guard()?;
+            let rendered = file.render(&source, &lists)?;
+            if !file.unchanged_before_write(previous)? {
+                if attempt == 1 {
+                    return Err(file.stale());
+                }
+                continue;
+            }
+            file.write(rendered)?;
+            return Ok(Committed {
+                lists,
+                backup,
+                wrote: true,
+            });
+        }
+        Err(file.stale())
+    }
+}
+
 /// The game-running check a write performs before touching disk. Production
 /// uses the real process and session-lock probe; tests inject a scripted guard
 /// to prove that the re-checks after the backup and before the trash still run.
@@ -59,43 +323,7 @@ impl StackError {
     }
 }
 
-/// One `resourcePacks` entry. The wire tags each entry with `kind`, and the
-/// frontend mirrors this shape in `src/lib/types.ts`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum StackEntry {
-    /// The exact `file/<filename>` value plus the filename alone. The
-    /// filename is a direct child of `resourcepacks`, never `pack.name`,
-    /// which strips `.zip`.
-    File { value: String, filename: String },
-    /// A locked string the app never edits, such as `vanilla`.
-    Foreign { value: String },
-}
-
-impl StackEntry {
-    pub fn parse(value: &str) -> StackEntry {
-        match value.strip_prefix("file/") {
-            Some(filename) => StackEntry::File {
-                value: value.to_string(),
-                filename: filename.to_string(),
-            },
-            None => StackEntry::Foreign {
-                value: value.to_string(),
-            },
-        }
-    }
-
-    pub fn value(&self) -> &str {
-        match self {
-            StackEntry::File { value, .. } => value,
-            StackEntry::Foreign { value } => value,
-        }
-    }
-
-    pub fn is_file(&self) -> bool {
-        matches!(self, StackEntry::File { .. })
-    }
-}
+pub use stack_core::Entry as StackEntry;
 
 /// The active stack as the app sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,28 +391,14 @@ pub struct StackWrite {
     pub wrote: bool,
 }
 
-/// A pack filename must be a plain direct child of `resourcepacks`. Only path
-/// separators, NUL, and the two directory names are rejected; dots inside a
-/// name are ordinary characters, so `Epic..Pack.zip` is valid.
+/// A pack filename must be a plain direct child of `resourcepacks`.
 pub fn validate_filename(filename: &str) -> Result<(), StackError> {
-    let unsafe_name = filename.is_empty()
-        || filename == "."
-        || filename == ".."
-        || filename.contains('/')
-        || filename.contains('\\')
-        || filename.contains('\0');
-    if unsafe_name {
-        return Err(StackError::InvalidFilename {
-            filename: filename.to_string(),
-        });
-    }
-    Ok(())
+    stack_core::validate_filename(filename).map_err(StackError::from)
 }
 
 /// The exact `file/<filename>` value Minecraft writes.
 pub fn file_value(filename: &str) -> Result<String, StackError> {
-    validate_filename(filename)?;
-    Ok(format!("file/{filename}"))
+    stack_core::file_value(filename).map_err(StackError::from)
 }
 
 /// The filename of a pack on disk. This is the basename of `pack.path`, so a
@@ -204,12 +418,7 @@ pub fn filename_for(path: &Path) -> Result<String, StackError> {
 /// place a new reference to a pack file is created, so this is where the
 /// filename is validated.
 pub fn enable(resource: &mut Vec<String>, filename: &str) -> Result<bool, StackError> {
-    let value = file_value(filename)?;
-    if resource.contains(&value) {
-        return Ok(false);
-    }
-    resource.push(value);
-    Ok(true)
+    enable_entry(resource, filename).map_err(StackError::from)
 }
 
 /// Disable: drop every occurrence from both arrays. Removal only matches
@@ -227,32 +436,21 @@ pub fn disable(resource: &mut Vec<String>, incompatible: &mut Vec<String>, filen
 /// move. Foreign entries keep their indices and relative order, and the file
 /// multiset is preserved, so duplicates survive a reorder.
 pub fn reorder(current: &[String], order: &[String]) -> Result<(), StackError> {
-    if order.len() != current.len() {
-        return Err(StackError::OrderChanged);
-    }
-    for (index, (before, after)) in current.iter().zip(order.iter()).enumerate() {
-        if !is_file_entry(before) && before != after {
-            return Err(StackError::ForeignMoved {
-                value: before.clone(),
-                index,
-            });
-        }
-    }
-    let mut before_files: Vec<&String> = current
-        .iter()
-        .filter(|entry| is_file_entry(entry))
-        .collect();
-    let mut after_files: Vec<&String> = order.iter().filter(|entry| is_file_entry(entry)).collect();
-    before_files.sort();
-    after_files.sort();
-    if before_files != after_files {
-        return Err(StackError::OrderChanged);
-    }
-    Ok(())
+    stack_core::reorder(current, order).map_err(StackError::from)
 }
 
-fn is_file_entry(value: &str) -> bool {
-    value.starts_with("file/")
+impl From<stack_core::EntryError> for StackError {
+    fn from(err: stack_core::EntryError) -> Self {
+        match err {
+            stack_core::EntryError::InvalidFilename { filename } => {
+                StackError::InvalidFilename { filename }
+            }
+            stack_core::EntryError::ForeignMoved { value, index } => {
+                StackError::ForeignMoved { value, index }
+            }
+            stack_core::EntryError::OrderChanged => StackError::OrderChanged,
+        }
+    }
 }
 
 /// Read the stack. Reads never block, even while the game runs.
@@ -294,7 +492,7 @@ pub fn set_enabled_with_guard(
     enabled: bool,
     guard: &dyn WriteGuard,
 ) -> Result<ResourceStack, AppError> {
-    let change = Change::Toggle {
+    let change = stack_core::Change::Toggle {
         filename: filename.to_string(),
         enabled,
     };
@@ -314,7 +512,7 @@ pub fn reorder_stack(
     order: &[String],
     expected: &StackSnapshot,
 ) -> Result<ResourceStack, AppError> {
-    let change = Change::Reorder {
+    let change = stack_core::Change::Reorder {
         order: order.to_vec(),
     };
     let write = commit(paths, Some(expected), &change, &SystemGuard)?;
@@ -333,7 +531,7 @@ pub fn remove_references(paths: &StackPaths, filename: &str) -> Result<bool, App
         // Nothing can reference the pack when the file is missing.
         return Ok(false);
     }
-    let change = Change::Remove {
+    let change = stack_core::Change::Remove {
         filename: filename.to_string(),
     };
     Ok(commit(paths, None, &change, &SystemGuard)?.wrote)
@@ -410,41 +608,114 @@ fn resource_stack_of(paths: &StackPaths, write: &StackWrite) -> Result<ResourceS
     })
 }
 
-enum Change {
-    Toggle { filename: String, enabled: bool },
-    Reorder { order: Vec<String> },
-    Remove { filename: String },
+fn rules() -> stack_core::Rules {
+    stack_core::Rules {
+        enable: enable_lists,
+        disable: disable_lists,
+        remove: remove_lists,
+    }
 }
 
-impl Change {
-    fn apply(
-        &self,
-        resource: &mut Vec<String>,
-        incompatible: &mut Vec<String>,
-    ) -> Result<bool, StackError> {
-        match self {
-            Change::Toggle {
-                filename,
-                enabled: true,
-            } => enable(resource, filename),
-            Change::Toggle {
-                filename,
-                enabled: false,
-            } => Ok(disable(resource, incompatible, filename)),
-            Change::Remove { filename } => Ok(disable(resource, incompatible, filename)),
-            Change::Reorder { order } => {
-                reorder(resource, order)?;
-                if resource.as_slice() == order.as_slice() {
-                    return Ok(false);
-                }
-                *resource = order.clone();
-                Ok(true)
-            }
+fn enable_lists(
+    lists: &mut stack_core::Lists,
+    filename: &str,
+) -> Result<bool, stack_core::EntryError> {
+    enable_entry(&mut lists.primary, filename)
+}
+
+fn enable_entry(
+    resource: &mut Vec<String>,
+    filename: &str,
+) -> Result<bool, stack_core::EntryError> {
+    let value = stack_core::file_value(filename)?;
+    if resource.contains(&value) {
+        return Ok(false);
+    }
+    resource.push(value);
+    Ok(true)
+}
+
+fn disable_lists(lists: &mut stack_core::Lists, filename: &str) -> bool {
+    disable(&mut lists.primary, &mut lists.secondary, filename)
+}
+
+fn remove_lists(
+    lists: &mut stack_core::Lists,
+    filename: &str,
+) -> Result<bool, stack_core::EntryError> {
+    Ok(disable_lists(lists, filename))
+}
+
+struct ResourceFile<'a> {
+    paths: &'a StackPaths,
+    guard: &'a dyn WriteGuard,
+}
+
+impl stack_core::StackFile for ResourceFile<'_> {
+    type Source = OptionsTxt;
+    type Backup = BackupOutcome;
+    type Rendered = String;
+
+    fn prepare(&self) -> Result<(), AppError> {
+        self.guard.ensure_writable(&self.paths.game_dir)
+    }
+
+    fn guard(&self) -> Result<(), AppError> {
+        self.guard.ensure_writable(&self.paths.game_dir)
+    }
+
+    fn read(&self) -> Result<(OptionsTxt, stack_core::Lists), AppError> {
+        let txt = options_txt::read_options(&self.paths.options_path)?;
+        let lists = stack_core::Lists {
+            primary: txt.resource_packs().to_vec(),
+            secondary: txt.incompatible_packs().to_vec(),
+        };
+        Ok((txt, lists))
+    }
+
+    fn bytes<'a>(&self, source: &'a OptionsTxt) -> &'a [u8] {
+        source.source().as_bytes()
+    }
+
+    fn render(&self, source: &OptionsTxt, lists: &stack_core::Lists) -> Result<String, AppError> {
+        Ok(source.render(&lists.primary, &lists.secondary))
+    }
+
+    fn write(&self, rendered: String) -> Result<(), AppError> {
+        options_txt::write_options(&self.paths.options_path, &rendered)
+    }
+
+    fn backup(&self, previous: &[u8]) -> Result<BackupOutcome, AppError> {
+        backup::create(&self.paths.backups_root, previous, &self.paths.backups)
+    }
+
+    fn skipped_backup(&self) -> BackupOutcome {
+        BackupOutcome {
+            created: None,
+            skipped: !self.paths.backups.enabled,
         }
     }
 
-    fn order_related(&self) -> bool {
-        matches!(self, Change::Reorder { .. })
+    fn unchanged(&self, previous: &[u8]) -> Result<bool, AppError> {
+        Ok(std::fs::read(&self.paths.options_path).ok().as_deref() == Some(previous))
+    }
+
+    fn unchanged_before_write(&self, _previous: &[u8]) -> Result<bool, AppError> {
+        // The options write keeps its single pre-backup re-read; a second read
+        // here would narrow a race window the existing behavior leaves open.
+        Ok(true)
+    }
+
+    fn reject(&self, err: stack_core::EntryError) -> AppError {
+        AppError::Stack(err.into())
+    }
+
+    fn stale(&self) -> AppError {
+        AppError::Stack(StackError::StaleStack)
+    }
+
+    fn rules(&self) -> stack_core::Rules {
+        rules()
     }
 }
 
@@ -455,64 +726,21 @@ impl Change {
 fn commit(
     paths: &StackPaths,
     expected: Option<&StackSnapshot>,
-    change: &Change,
+    change: &stack_core::Change,
     guard: &dyn WriteGuard,
 ) -> Result<StackWrite, AppError> {
-    guard.ensure_writable(&paths.game_dir)?;
-
-    for attempt in 0..2 {
-        let txt = options_txt::read_options(&paths.options_path)?;
-        let mut resource = txt.resource_packs().to_vec();
-        let mut incompatible = txt.incompatible_packs().to_vec();
-        let stale = expected.is_some_and(|snapshot| {
-            snapshot.resource != resource || snapshot.incompatible != incompatible
-        });
-
-        let applied = change.apply(&mut resource, &mut incompatible);
-        let changed = match applied {
-            Ok(changed) => changed,
-            Err(_) if stale && change.order_related() => {
-                return Err(AppError::Stack(StackError::StaleStack));
-            }
-            Err(err) => return Err(AppError::Stack(err)),
-        };
-
-        if !changed {
-            return Ok(StackWrite {
-                resource,
-                incompatible,
-                backup: BackupOutcome {
-                    created: None,
-                    skipped: !paths.backups.enabled,
-                },
-                wrote: false,
-            });
-        }
-
-        let base = txt.source().as_bytes();
-        let rendered = txt.render(&resource, &incompatible);
-        if std::fs::read(&paths.options_path).ok().as_deref() != Some(base) {
-            // An external writer landed between our read and our write.
-            if attempt == 1 {
-                return Err(AppError::Stack(StackError::StaleStack));
-            }
-            continue;
-        }
-
-        // A failed backup aborts the write; the previous bytes stay intact.
-        let backup_outcome = backup::create(&paths.backups_root, base, &paths.backups)?;
-        // Re-check after the backup and immediately before the replace. A game
-        // that started during the backup leaves the old bytes in place.
-        guard.ensure_writable(&paths.game_dir)?;
-        options_txt::write_options(&paths.options_path, &rendered)?;
-        return Ok(StackWrite {
-            resource,
-            incompatible,
-            backup: backup_outcome,
-            wrote: true,
-        });
-    }
-    Err(AppError::Stack(StackError::StaleStack))
+    let file = ResourceFile { paths, guard };
+    let expected = expected.map(|snapshot| stack_core::Expected {
+        primary: &snapshot.resource,
+        secondary: &snapshot.incompatible,
+    });
+    let committed = stack_core::commit(&file, expected, change)?;
+    Ok(StackWrite {
+        resource: committed.lists.primary,
+        incompatible: committed.lists.secondary,
+        backup: committed.backup,
+        wrote: committed.wrote,
+    })
 }
 
 #[cfg(test)]
@@ -573,7 +801,7 @@ mod tests {
         reorder(&current, &order).unwrap();
 
         for (before, after) in current.iter().zip(order.iter()) {
-            if !is_file_entry(before) {
+            if !stack_core::is_file_entry(before) {
                 assert_eq!(before, after, "foreign entries keep their index");
             }
         }
