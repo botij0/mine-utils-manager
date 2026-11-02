@@ -1,168 +1,92 @@
-# Mine Utils
+<div align="center">
+  <img src="assets/icon.svg" alt="Mine Utils logo" width="112" height="112">
 
-Mine Utils is a desktop app for Minecraft resource packs, worlds, and shared
-content. It runs as a Tauri 2 app with a React frontend and a Rust core crate.
-It lists and imports resource packs, toggles them through `options.txt`,
-manages world datapacks through `level.dat`, and discovers new packs on
-Modrinth.
+  <h1>Mine Utils</h1>
 
-## Install
+  <p><strong>A safer, simpler desktop manager for Minecraft resource packs and datapacks.</strong></p>
+  <p>Organize local packs, control load order, and install verified content from Modrinth.</p>
 
-Download the release for your system from the GitHub releases page. Each
-release ships an AppImage, an RPM, and a `SHA256SUMS.txt`. Check the download
-before running it:
+  <p>
+    <a href="https://github.com/botij0/mine-utils-manager/actions/workflows/ci.yml">
+      <img alt="CI status" src="https://github.com/botij0/mine-utils-manager/actions/workflows/ci.yml/badge.svg">
+    </a>
+    <a href="https://github.com/botij0/mine-utils-manager/releases/latest">
+      <img alt="Latest release" src="https://img.shields.io/github/v/release/botij0/mine-utils-manager">
+    </a>
+    <img alt="Linux" src="https://img.shields.io/badge/platform-Linux-1d4ed8">
+    <img alt="Minecraft Java Edition" src="https://img.shields.io/badge/Minecraft-Java%20Edition-5b82e8">
+  </p>
+</div>
+
+<p align="center">
+  <a href="GUIDE.md">User guide</a> ·
+  <a href="ARCHITECTURE.md">Architecture</a> ·
+  <a href="DEVELOPMENT.md">Development</a>
+</p>
+
+## What you can do
+
+| | Feature | What it gives you |
+| --- | --- | --- |
+| 📦 | **Resource pack manager** | Import zip files or folders, inspect metadata, search and filter, enable packs, and set their priority. |
+| 🌍 | **World datapacks** | Manage each world separately, check compatibility, fix missing references, and control datapack order. |
+| 🧭 | **Modrinth discovery** | Search resource packs and datapacks, choose a version, and install verified downloads. |
+| 🗂️ | **Multiple game folders** | Use a standard, Flatpak, Prism Launcher, MultiMC, or manually added Minecraft folder. |
+| 🛡️ | **Safer changes** | Pause writes while Minecraft runs, keep timestamped backups, and move deleted packs to the system trash. |
+| 🎨 | **A comfortable desktop app** | Switch between System, Light, and Dark themes. Your local pages never use the network. |
+
+## Quick start
+
+### 1. Download and run
+
+Download the **AppImage** and **`SHA256SUMS.txt`** from the [latest release](https://github.com/botij0/mine-utils-manager/releases/latest). Open a terminal in your download folder:
 
 ```sh
-sha256sum -c SHA256SUMS.txt
-```
+# Verify the files you downloaded
+sha256sum --ignore-missing -c SHA256SUMS.txt
 
-Run the AppImage directly (stable release name, version from the tag):
-
-```sh
+# Make the app executable and launch it
 chmod +x mine-utils_*_amd64.AppImage
 ./mine-utils_*_amd64.AppImage
 ```
 
-Or install the RPM on Fedora (and other rpm systems):
+On Fedora or another RPM-based system, you can install the RPM instead:
 
 ```sh
 sudo dnf install ./mine-utils-*-1.x86_64.rpm
 ```
 
-There is no auto-update and the artifacts are not signed: install a new
-release to upgrade, and verify the checksum above.
+Then open **Mine Utils** from your application menu.
 
-## Requirements
+### 2. Pick your Minecraft folder
 
-- Node 22 and pnpm 10
-- Rust stable
-- On Linux, the Tauri system dependencies. See the `tauri` job in
-  `.github/workflows/ci.yml` for the package list. For the full release
-  artifacts (AppImage + RPM, `.github/workflows/release.yml`) you also need
-  `rpm`/`rpmbuild` plus the webkit/gtk dev packages in `release.yml`.
+1. Select a detected game folder, or paste its path and choose **Add**.
+2. Close Minecraft before changing packs or restoring backups.
+3. Open **Packs**, **Worlds**, or **Discover** and start organizing.
 
-## Develop
+> [!NOTE]
+> Launch Minecraft once before using a new game folder. This creates files such as `options.txt` that Mine Utils needs.
 
-Run the app.
+### Run from source
+
+You need Node 22, pnpm 10, Rust stable, and the Linux dependencies listed in [DEVELOPMENT.md](DEVELOPMENT.md#requirements).
 
 ```sh
+git clone https://github.com/botij0/mine-utils-manager.git
+cd mine-utils-manager
 pnpm install
 env -u APPIMAGE pnpm tauri dev
 ```
 
-`env -u APPIMAGE` matters on this setup. The T3 AppImage exports `APPIMAGE`, and
-rustup then mistakes it for a proxy name.
+For a quick UI preview without Rust or real game files, run `pnpm dev` and open `http://localhost:5173`. This browser demo uses mock data only.
 
-Run the browser shell without Tauri. It renders the same UI against three mock
-game dirs in `src/lib/ipc.mock.ts`. The Discover mock simulates Modrinth
-locally and never reaches the network.
+## Learn more
 
-```sh
-pnpm dev
-```
+| Document | Best for |
+| --- | --- |
+| [GUIDE.md](GUIDE.md) | Everyday tasks, backups, safety behavior, and troubleshooting |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How React, Tauri, Rust, Minecraft files, and Modrinth fit together |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Local setup, tests, probe commands, and release builds |
 
-## Test
-
-```sh
-pnpm lint
-pnpm typecheck
-pnpm test
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p mine-utils-core
-```
-
-The probe binary prints the discovered game dirs as JSON. It calls the same
-core functions as the app.
-
-```sh
-cargo run -p mine-utils-core --bin mine-utils-probe list-game-dirs
-```
-
-Modrinth search and install go through the same core client. `install-modrinth`
-needs an explicit game dir (positional or `$MINE_UTILS_GAME_DIR`); it never
-falls through to `~/.minecraft`:
-
-```sh
-cargo run -p mine-utils-core --bin mine-utils-probe search-modrinth fresh resourcepack
-cargo run -p mine-utils-core --bin mine-utils-probe install-modrinth <project> <version> resourcepack /tmp/demo-game
-```
-
-## Build a release
-
-Tagged `v*` pushes build the AppImage and the RPM on Ubuntu 24.04 (see
-`.github/workflows/release.yml`) and attach them plus `SHA256SUMS.txt` to the
-GitHub release. To build the same artifacts locally:
-
-```sh
-env -u APPIMAGE pnpm tauri build
-```
-
-The bundles land under `target/release/bundle/` (the workspace target dir,
-not `src-tauri/target/`). The RPM needs `webkit2gtk4.1` and `gtk3` at install
-time; the AppImage bundles its own WebKit, which is why it is large
-(~112 MB, ~320 MB extracted). No signing, no auto-update.
-
-## Layout
-
-- `crates/mine-utils-core` owns `GameDir`, `DiscoverySource`, `Config`, and
-  `AppError`, plus discovery, config persistence, pack/world scanning, the
-  Modrinth client, verified downloads, provenance, and the probe binary.
-- `src-tauri` owns the Tauri shell and the IPC commands.
-- `src/lib/types.ts` mirrors the core shapes one to one.
-- `src/lib/ipc.ts` picks the Tauri invoke transport or the localStorage mock.
-
-## Data locations
-
-- Config: `~/.config/mine-utils/config.json` (`schema`, `game_dirs`,
-  `active_game_dir`, `last_world`, `theme`, `backups`). Writes go through a
-  temp file, fsync, and rename.
-- Data: `~/.local/share/mine-utils` (backups and `provenance.json`, which maps
-  an installed file's SHA-256 back to its Modrinth project and version).
-- Cache: `~/.cache/mine-utils` (pack icons, keyed by SHA-256).
-
-Game dir discovery scans `~/.minecraft`, the Flatpak data dir, and Prism
-Launcher and MultiMC instance dirs. A dir counts when it holds `versions`,
-`saves`, or `resourcepacks`.
-
-## Safety rules
-
-- Writes are blocked while Minecraft runs (session lock or process scan), and
-  every write keeps a backup under the data dir.
-- Modrinth search fires only from the Discover tab; the local tabs never
-  touch the network.
-- Downloads come only from `https://cdn.modrinth.com` on the default port.
-  Redirects elsewhere are refused, files are capped at 500 MB, the SHA-512
-  from the version metadata must match, and the zip must contain `assets/`
-  (resource packs) or `data/` (datapacks). A mismatch deletes the temp file
-  and leaves nothing behind. The verified file is committed under the API
-  filename without replacing an existing file, then routed through the same
-  import/enable path as a manual install; a running game refuses before any
-  download starts, except a locked datapack world, which still copies the new
-  datapack and leaves it disabled (`Locked`) until the lock releases. A fresh
-  game dir with no `options.txt` is refused before any download: launch
-  Minecraft once so it writes the file, then install.
-- A hash mismatch, a non-zip, or a wrong archive root is never retried.
-  A 429 or 5xx is retried up to three times, honoring `Retry-After`.
-
-## Known limits
-
-- Pack icons in the local grid use the `asset://` protocol (see issue #8);
-  Modrinth result icons are plain remote HTTPS and are unaffected.
-- A locked world copies a new datapack but leaves it disabled until the lock
-  releases.
-- The production bundle ships without sourcemaps (`build.sourcemap: false` in
-  `vite.config.ts`), so a stack trace points at minified code.
-- Pack zips must use Stored or Deflate compression. The `zip` crate is built
-  with only the `deflate` feature, so bzip2, zstd, and lzma archives read as
-  broken packs.
-- Modrinth HTTP uses `reqwest::blocking` clients. Each search or install holds
-  one blocking thread until the request or download finishes; the UI stays
-  responsive because the commands run it through `spawn_blocking`.
-- The browser mock never touches disk or network and ignores the stale-stack
-  snapshot on resource reorders; the Tauri backend enforces both.
-- The installed `.desktop` entry lists `Categories=Utility;Game;` for the RPM
-  (via `src-tauri/linux/mine-utils.desktop.hbs`). The AppImage entry remains
-  `Utility;` because the AppImage config has no template; that category is the
-  operator's call at packaging time.
-- No auto-update: watch the releases page for new versions.
+> [!IMPORTANT]
+> Releases are not signed and there is no auto-update. Verify new downloads and install a newer release to upgrade.
