@@ -475,6 +475,25 @@ describe('useModrinth', () => {
     expect(ids.slice(-4)).toEqual(['page-20', 'page-21', 'page-22', 'page-23']);
   });
 
+  it('deduplicates project ids repeated inside one next page', async () => {
+    const client = makeFakeClient([]);
+    client.searchModrinth = async (_text, _kind, _gameVersion, _sort, offset = 0) =>
+      offset === 0
+        ? pageHits(0, 20)
+        : [hit('page-20'), hit('page-20'), hit('page-21')];
+    const result = await searchFor(client, 'fresh');
+
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    expect(result.current.hits.map((item) => item.project_id)).toEqual([
+      ...pageHits(0, 20).map((item) => item.project_id),
+      'page-20',
+      'page-21',
+    ]);
+  });
+
   const resetCases: Array<{
     name: string;
     change: (state: ModrinthState) => void;

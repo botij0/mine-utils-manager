@@ -242,7 +242,13 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
       if (!mounted.current || requestId.current !== id) return;
       setHits((current) => {
         const seen = new Set(current.map((hit) => hit.project_id));
-        return [...current, ...page.filter((hit) => !seen.has(hit.project_id))];
+        const appended: ModrinthSearchHit[] = [];
+        for (const hit of page) {
+          if (seen.has(hit.project_id)) continue;
+          seen.add(hit.project_id);
+          appended.push(hit);
+        }
+        return [...current, ...appended];
       });
       setPagination({
         nextOffset:
