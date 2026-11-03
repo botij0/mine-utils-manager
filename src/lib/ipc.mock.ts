@@ -1,5 +1,5 @@
 import type { IpcClient } from './ipc';
-import { defaultConfig, IpcError } from './types';
+import { MODRINTH_SEARCH_PAGE_SIZE, defaultConfig, IpcError } from './types';
 import type {
   BackupInfo,
   Config,
@@ -17,6 +17,7 @@ import type {
   ModrinthInstallArgs,
   ModrinthInstallOutcome,
   ModrinthKind,
+  ModrinthSearchHit,
   ModrinthSort,
   Pack,
   PackKind,
@@ -65,6 +66,24 @@ const MOCK_DIRS: GameDirEntry[] = [
 ];
 
 const LATENCY_MS = 60;
+
+/** Browser-demo-only hits: typing `demo` exercises a full page and a short
+ *  second page without touching the network. */
+const DEMO_PACKS: ModrinthSearchHit[] = Array.from({ length: 25 }, (_, index) => {
+  const number = String(index + 1).padStart(2, '0');
+  return {
+    project_id: `demo-pack-${number}`,
+    slug: `demo-pack-${number}`,
+    title: `Demo Pack ${number}`,
+    description: `Synthetic resource pack ${number} for trying Load more in the browser demo.`,
+    icon_url: iconDataUrl(`D${number}`, '#4a5f8a'),
+    downloads: 1000 - index,
+    follows: 100 - index,
+    project_type: 'resourcepack',
+    versions: ['1.21.1'],
+    latest_version: '1.0',
+  };
+});
 
 function delay(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, LATENCY_MS));
@@ -468,6 +487,7 @@ export const mockClient: IpcClient = {
     kind: ModrinthKind,
     gameVersion?: string | null,
     sort?: ModrinthSort,
+    offset = 0,
   ) {
     await delay();
     void sort;
@@ -477,7 +497,7 @@ export const mockClient: IpcClient = {
       throw new IpcError('modrinth_offline', 'Modrinth is unreachable (simulated offline); check the network');
     }
     const needle = text.trim().toLowerCase();
-    return MOCK_PROJECTS.filter((hit) => {
+    const matches = [...MOCK_PROJECTS, ...DEMO_PACKS].filter((hit) => {
       if (kind === 'resourcepack' && hit.project_type !== 'resourcepack') return false;
       if (kind === 'datapack' && hit.project_type !== 'datapack') return false;
       if (
@@ -494,6 +514,7 @@ export const mockClient: IpcClient = {
         hit.slug.includes(needle)
       );
     });
+    return matches.slice(offset, offset + MODRINTH_SEARCH_PAGE_SIZE);
   },
   async getModrinthProject(projectId: string) {
     await delay();

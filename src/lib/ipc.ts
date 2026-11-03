@@ -74,6 +74,7 @@ export interface DiscoverClient {
     kind: ModrinthKind,
     gameVersion?: string | null,
     sort?: ModrinthSort,
+    offset?: number,
   ): Promise<ModrinthSearchHit[]>;
   getModrinthProject(projectId: string): Promise<ModrinthProject>;
   listModrinthVersions(projectId: string): Promise<ModrinthVersion[]>;
@@ -218,12 +219,13 @@ const tauriClient: IpcClient = {
   listAllLevelBackups: () => call<LevelBackupInfo[]>('list_all_level_backups'),
   restoreLevelBackup: (world, backup) =>
     call<DataStack>('restore_level_backup', { world, backup }),
-  searchModrinth: (text, kind, gameVersion, sort) =>
+  searchModrinth: (text, kind, gameVersion, sort, offset) =>
     call<ModrinthSearchHit[]>('search_modrinth', {
       query: text,
       kind,
       gameVersion: gameVersion ?? null,
       sort: sort ?? 'relevance',
+      offset: offset ?? 0,
     }),
   getModrinthProject: (projectId) =>
     call<ModrinthProject>('get_modrinth_project', { projectId }),
@@ -286,8 +288,8 @@ export const ipc: IpcClient = {
   listLevelBackups: (world) => pick().listLevelBackups(world),
   listAllLevelBackups: () => pick().listAllLevelBackups(),
   restoreLevelBackup: (world, backup) => pick().restoreLevelBackup(world, backup),
-  searchModrinth: (text, kind, gameVersion, sort) =>
-    pick().searchModrinth(text, kind, gameVersion, sort),
+  searchModrinth: (text, kind, gameVersion, sort, offset) =>
+    pick().searchModrinth(text, kind, gameVersion, sort, offset),
   getModrinthProject: (projectId) => pick().getModrinthProject(projectId),
   listModrinthVersions: (projectId) => pick().listModrinthVersions(projectId),
   modrinthTargets: (world) => pick().modrinthTargets(world),

@@ -21,7 +21,7 @@ import type {
   ResourceStack,
   Theme,
 } from '../lib/types';
-import { defaultConfig, IpcError } from '../lib/types';
+import { MODRINTH_SEARCH_PAGE_SIZE, defaultConfig, IpcError } from '../lib/types';
 import {
   assertDownloadHash,
   datapack,
@@ -293,6 +293,7 @@ export function makeFakeClient(
       kind: ModrinthKind,
       gameVersion?: string | null,
       sort?: ModrinthSort,
+      offset = 0,
     ): Promise<ModrinthSearchHit[]> {
       void gameVersion;
       void sort;
@@ -304,7 +305,7 @@ export function makeFakeClient(
       if (text === '__boom__') {
         throw new IpcError('modrinth_status', 'Modrinth request failed with status 500');
       }
-      return fakeHits(kind);
+      return fakeHits(kind).slice(offset, offset + MODRINTH_SEARCH_PAGE_SIZE);
     },
     async getModrinthProject(projectId: string): Promise<ModrinthProject> {
       return fakeProject(projectId);

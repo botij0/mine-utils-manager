@@ -49,6 +49,25 @@ describe('mock client behavior', () => {
   it('returns a null startup warning', async () => {
     expect(await ipc.getStartupWarning()).toBeNull();
   });
+
+  it('pages the demo catalog for Load more without the network', async () => {
+    const first = await ipc.searchModrinth('demo', 'resourcepack');
+    expect(first).toHaveLength(20);
+    expect(first[0].title).toBe('Demo Pack 01');
+    expect(first[19].title).toBe('Demo Pack 20');
+
+    const next = await ipc.searchModrinth('demo', 'resourcepack', null, 'relevance', 20);
+    expect(next.map((hit) => hit.title)).toEqual([
+      'Demo Pack 21',
+      'Demo Pack 22',
+      'Demo Pack 23',
+      'Demo Pack 24',
+      'Demo Pack 25',
+    ]);
+
+    const ids = [...first, ...next].map((hit) => hit.project_id);
+    expect(new Set(ids).size).toBe(25);
+  });
 });
 
 describe('typed error mapping', () => {

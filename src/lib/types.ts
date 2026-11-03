@@ -248,6 +248,10 @@ export interface LevelBackupInfo {
   display: string;
 }
 
+/** The number of hits one Discover search page requests. The Tauri backend
+ *  mirrors this value in its own page-size constant. */
+export const MODRINTH_SEARCH_PAGE_SIZE = 20;
+
 export type ModrinthKind = 'resourcepack' | 'datapack';
 
 export type ModrinthSort = 'relevance' | 'downloads' | 'follows' | 'newest' | 'updated';
