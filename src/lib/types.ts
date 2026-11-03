@@ -248,9 +248,9 @@ export interface LevelBackupInfo {
   display: string;
 }
 
-/** The number of hits one Discover search page requests. The Tauri backend
- *  mirrors this value in its own page-size constant. */
-export const MODRINTH_SEARCH_PAGE_SIZE = 20;
+/** Page size for the browser mock and the test fake. The Tauri command owns
+ *  the production page size and reports whether more hits exist. */
+export const MOCK_MODRINTH_PAGE_SIZE = 20;
 
 export type ModrinthKind = 'resourcepack' | 'datapack';
 
@@ -267,6 +267,13 @@ export interface ModrinthSearchHit {
   project_type: string | null;
   versions: string[];
   latest_version: string | null;
+}
+
+/** One search page. `has_more` is the backend's answer, so the client never
+ *  has to mirror the backend page size. */
+export interface ModrinthSearchPage {
+  hits: ModrinthSearchHit[];
+  has_more: boolean;
 }
 
 export interface ModrinthHashes {

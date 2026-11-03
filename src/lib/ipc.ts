@@ -18,7 +18,7 @@ import type {
   ModrinthInstallOutcome,
   ModrinthKind,
   ModrinthProject,
-  ModrinthSearchHit,
+  ModrinthSearchPage,
   ModrinthSort,
   ModrinthTargets,
   ModrinthVersion,
@@ -75,7 +75,7 @@ export interface DiscoverClient {
     gameVersion?: string | null,
     sort?: ModrinthSort,
     offset?: number,
-  ): Promise<ModrinthSearchHit[]>;
+  ): Promise<ModrinthSearchPage>;
   getModrinthProject(projectId: string): Promise<ModrinthProject>;
   listModrinthVersions(projectId: string): Promise<ModrinthVersion[]>;
   modrinthTargets(world?: string | null): Promise<ModrinthTargets>;
@@ -220,7 +220,7 @@ const tauriClient: IpcClient = {
   restoreLevelBackup: (world, backup) =>
     call<DataStack>('restore_level_backup', { world, backup }),
   searchModrinth: (text, kind, gameVersion, sort, offset) =>
-    call<ModrinthSearchHit[]>('search_modrinth', {
+    call<ModrinthSearchPage>('search_modrinth', {
       query: text,
       kind,
       gameVersion: gameVersion ?? null,

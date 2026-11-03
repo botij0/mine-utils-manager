@@ -13,7 +13,7 @@ import type {
   ModrinthInstallOutcome,
   ModrinthKind,
   ModrinthProject,
-  ModrinthSearchHit,
+  ModrinthSearchPage,
   ModrinthSort,
   ModrinthTargets,
   ModrinthVersion,
@@ -21,7 +21,7 @@ import type {
   ResourceStack,
   Theme,
 } from '../lib/types';
-import { MODRINTH_SEARCH_PAGE_SIZE, defaultConfig, IpcError } from '../lib/types';
+import { MOCK_MODRINTH_PAGE_SIZE, defaultConfig, IpcError } from '../lib/types';
 import {
   assertDownloadHash,
   datapack,
@@ -294,7 +294,7 @@ export function makeFakeClient(
       gameVersion?: string | null,
       sort?: ModrinthSort,
       offset = 0,
-    ): Promise<ModrinthSearchHit[]> {
+    ): Promise<ModrinthSearchPage> {
       void gameVersion;
       void sort;
       // Exact sentinels leave a real query containing "offline" searchable;
@@ -305,7 +305,9 @@ export function makeFakeClient(
       if (text === '__boom__') {
         throw new IpcError('modrinth_status', 'Modrinth request failed with status 500');
       }
-      return fakeHits(kind).slice(offset, offset + MODRINTH_SEARCH_PAGE_SIZE);
+      const hits = fakeHits(kind);
+      const page = hits.slice(offset, offset + MOCK_MODRINTH_PAGE_SIZE);
+      return { hits: page, has_more: offset + page.length < hits.length };
     },
     async getModrinthProject(projectId: string): Promise<ModrinthProject> {
       return fakeProject(projectId);

@@ -53,6 +53,23 @@ fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
 
 const SEARCH_PAGE_SIZE: u8 = 20;
 
+/// One Discover search page. `has_more` keeps the 20-hit page size in the
+/// backend, so the frontend does not mirror it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SearchPage {
+    pub hits: Vec<SearchHit>,
+    pub has_more: bool,
+}
+
+impl SearchPage {
+    fn new(hits: Vec<SearchHit>) -> Self {
+        SearchPage {
+            has_more: hits.len() == usize::from(SEARCH_PAGE_SIZE),
+            hits,
+        }
+    }
+}
+
 fn build_search_query(
     text: String,
     kind: String,
@@ -82,12 +99,12 @@ pub async fn search_modrinth(
     game_version: Option<String>,
     sort: Option<String>,
     offset: Option<u32>,
-) -> Result<Vec<SearchHit>, AppError> {
+) -> Result<SearchPage, AppError> {
     state.note_ipc();
     let client = Arc::clone(&mods.client);
     tauri::async_runtime::spawn_blocking(move || {
         let query = build_search_query(query, kind, game_version, sort, offset.unwrap_or(0))?;
-        Ok(client.search(&query)?)
+        Ok(SearchPage::new(client.search(&query)?))
     })
     .await
     .map_err(join_error)?
@@ -269,6 +286,25 @@ pub async fn install_modrinth_pack(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hit() -> SearchHit {
+        serde_json::from_value(serde_json::json!({ "project_id": "p" })).expect("hit")
+    }
+
+    #[test]
+    fn search_page_reports_more_only_when_the_page_is_full() {
+        let full = SearchPage::new((0..20).map(|_| hit()).collect());
+        assert!(full.has_more);
+        let wire = serde_json::to_value(&full).expect("serializes");
+        assert_eq!(
+            wire.get("has_more").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+
+        let short = SearchPage::new((0..19).map(|_| hit()).collect());
+        assert!(!short.has_more);
+        assert!(!SearchPage::new(Vec::new()).has_more);
+    }
 
     #[test]
     fn search_query_forwards_offset_and_keeps_the_page_size() {

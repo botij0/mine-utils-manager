@@ -6,7 +6,11 @@ import InstallSheet from './InstallSheet';
 import ProjectDetail from './ProjectDetail';
 import VersionPicker from './VersionPicker';
 import { IpcError } from '../../lib/types';
-import type { ModrinthInstallOutcome, ModrinthSearchHit } from '../../lib/types';
+import type {
+  ModrinthInstallOutcome,
+  ModrinthSearchHit,
+  ModrinthSearchPage,
+} from '../../lib/types';
 import { makeFakeClient } from '../../test/fake-ipc';
 import { fakeVersions, freshHit } from '../../test/fake-packs';
 import { isTrustedIconUrl } from './icon';
@@ -45,10 +49,14 @@ function searchHit(title: string): ModrinthSearchHit {
   return { ...freshHit(), project_id: title, slug: title, title };
 }
 
-function page(offset: number, count: number): ModrinthSearchHit[] {
+function pageHits(offset: number, count: number): ModrinthSearchHit[] {
   return Array.from({ length: count }, (_, index) =>
     searchHit(`Page ${String(offset + index).padStart(2, '0')}`),
   );
+}
+
+function page(hits: ModrinthSearchHit[], hasMore = false): ModrinthSearchPage {
+  return { hits, has_more: hasMore };
 }
 
 const sheetProps = {
@@ -194,11 +202,11 @@ describe('discover Load more', () => {
   it('appends the next page and disables the action while it loads', async () => {
     const client = makeFakeClient([]);
     const calls: Array<number | undefined> = [];
-    let release!: (hits: ModrinthSearchHit[]) => void;
+    let release!: (page: ModrinthSearchPage) => void;
     client.searchModrinth = async (_text, _kind, _gameVersion, _sort, offset = 0) => {
       calls.push(offset);
-      if (offset === 0) return page(0, 20);
-      return new Promise<ModrinthSearchHit[]>((resolve) => {
+      if (offset === 0) return page(pageHits(0, 20), true);
+      return new Promise<ModrinthSearchPage>((resolve) => {
         release = resolve;
       });
     };
@@ -213,7 +221,7 @@ describe('discover Load more', () => {
     const loading = await screen.findByRole('button', { name: 'Loading more…' });
     expect(loading).toBeDisabled();
 
-    release(page(20, 5));
+    release(page(pageHits(20, 5)));
     await waitFor(() => expect(screen.getByText('Page 24')).toBeInTheDocument());
 
     expect(screen.getByText('Page 00')).toBeInTheDocument();
@@ -224,7 +232,7 @@ describe('discover Load more', () => {
   it('keeps the loaded cards and offers Retry after a failed next page', async () => {
     const client = makeFakeClient([]);
     client.searchModrinth = async (_text, _kind, _gameVersion, _sort, offset = 0) => {
-      if (offset === 0) return page(0, 20);
+      if (offset === 0) return page(pageHits(0, 20), true);
       throw new IpcError('modrinth_status', 'Modrinth request failed with status 500');
     };
 
