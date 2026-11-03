@@ -152,6 +152,23 @@ export default function DiscoverPage({
           onSelect={(hit) => void discover.select(hit)}
         />
       ) : null}
+      {discover.hits.length > 0 && (discover.hasMore || discover.loadingMore) ? (
+        <div className="discover-more">
+          {discover.loadMoreError ? (
+            <p className="error" role="alert">
+              {discover.loadMoreError.message}
+            </p>
+          ) : null}
+          <button
+            type="button"
+            className="button"
+            onClick={() => void discover.loadMore()}
+            disabled={discover.loadingMore}
+          >
+            {discover.loadingMore ? 'Loading more…' : discover.loadMoreError ? 'Retry' : 'Load more'}
+          </button>
+        </div>
+      ) : null}
       {/* One dialog at a time: the install sheet replaces the detail sheet
           instead of stacking on top of it. */}
       {installOpen && discover.selected ? (

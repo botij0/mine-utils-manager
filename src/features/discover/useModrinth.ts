@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DiscoverClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
+import { MODRINTH_SEARCH_PAGE_SIZE } from '../../lib/types';
 import type {
   IpcError,
   ModrinthInstallOutcome,
@@ -54,6 +55,18 @@ export function isOfflineError(err: IpcError): boolean {
   return err.code === 'modrinth_offline' || err.code === 'download_offline';
 }
 
+interface PaginationState {
+  nextOffset: number | null;
+  loading: boolean;
+  error: IpcError | null;
+}
+
+const EMPTY_PAGINATION: PaginationState = {
+  nextOffset: null,
+  loading: false,
+  error: null,
+};
+
 export interface ModrinthState {
   query: string;
   setQuery: (query: string) => void;
@@ -69,6 +82,10 @@ export interface ModrinthState {
   error: IpcError | null;
   offline: boolean;
   retry: () => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMoreError: IpcError | null;
+  loadMore: () => Promise<void>;
   targets: ModrinthTargets | null;
   /** The game version the picker prefers: the launcher version for resource
    *  packs, the selected world's version for datapacks. */
@@ -106,6 +123,7 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState<IpcError | null>(null);
   const [offline, setOffline] = useState(false);
+  const [pagination, setPagination] = useState<PaginationState>(EMPTY_PAGINATION);
   const [targets, setTargets] = useState<ModrinthTargets | null>(null);
   const [world, setWorld] = useState<string | null>(null);
   const [selected, setSelected] = useState<ModrinthSearchHit | null>(null);
@@ -164,16 +182,27 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
       setError(null);
       setOffline(false);
       setSearched(false);
+      setPagination(EMPTY_PAGINATION);
       return;
     }
     const id = requestId.current + 1;
     requestId.current = id;
     setSearching(true);
+    setHits([]);
+    setError(null);
+    setOffline(false);
+    setPagination(EMPTY_PAGINATION);
     client
-      .searchModrinth(debouncedQuery, kind, gameVersion || null, sort)
+      .searchModrinth(debouncedQuery, kind, gameVersion || null, sort, 0)
       .then((found) => {
         if (!mounted.current || requestId.current !== id) return;
         setHits(found);
+        setPagination({
+          nextOffset:
+            found.length === MODRINTH_SEARCH_PAGE_SIZE ? found.length : null,
+          loading: false,
+          error: null,
+        });
         setError(null);
         setOffline(false);
         setSearched(true);
@@ -182,6 +211,7 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
         if (!mounted.current || requestId.current !== id) return;
         const failure = toAppError(err);
         setHits([]);
+        setPagination(EMPTY_PAGINATION);
         setError(failure);
         setOffline(isOfflineError(failure));
         setSearched(true);
@@ -191,6 +221,53 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
       });
     // retryNonce re-fires the same query after an error without new typing.
   }, [client, debouncedQuery, kind, gameVersion, sort, retryNonce]);
+
+  const loadMore = useCallback(async () => {
+    const offset = pagination.nextOffset;
+    if (offset === null || pagination.loading || searching) return;
+    const id = requestId.current;
+    setPagination((current) => ({
+      nextOffset: current.nextOffset,
+      loading: true,
+      error: null,
+    }));
+    try {
+      const page = await client.searchModrinth(
+        debouncedQuery,
+        kind,
+        gameVersion || null,
+        sort,
+        offset,
+      );
+      if (!mounted.current || requestId.current !== id) return;
+      setHits((current) => {
+        const seen = new Set(current.map((hit) => hit.project_id));
+        return [...current, ...page.filter((hit) => !seen.has(hit.project_id))];
+      });
+      setPagination({
+        nextOffset:
+          page.length === MODRINTH_SEARCH_PAGE_SIZE ? offset + page.length : null,
+        loading: false,
+        error: null,
+      });
+    } catch (err) {
+      if (!mounted.current || requestId.current !== id) return;
+      setPagination((current) => ({
+        nextOffset: current.nextOffset,
+        loading: false,
+        error: toAppError(err),
+      }));
+    }
+  }, [
+    client,
+    debouncedQuery,
+    kind,
+    gameVersion,
+    sort,
+    pagination.nextOffset,
+    pagination.loading,
+    searching,
+  ]);
 
   const select = useCallback(
     async (hit: ModrinthSearchHit | null) => {
@@ -242,6 +319,7 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
     setSearching(false);
     setError(null);
     setOffline(false);
+    setPagination(EMPTY_PAGINATION);
     setSelected(null);
     setProject(null);
     setVersions([]);
@@ -334,6 +412,10 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
     error,
     offline,
     retry,
+    hasMore: pagination.nextOffset !== null,
+    loadingMore: pagination.loading,
+    loadMoreError: pagination.error,
+    loadMore,
     targets,
     targetVersion,
     world,
