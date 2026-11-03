@@ -68,6 +68,17 @@ describe('mock client behavior', () => {
     const ids = [...first, ...next].map((hit) => hit.project_id);
     expect(new Set(ids).size).toBe(25);
   });
+
+  it('opens detail and versions for a demo catalog hit', async () => {
+    const project = await ipc.getModrinthProject('demo-pack-01');
+    const versions = await ipc.listModrinthVersions('demo-pack-01');
+
+    expect(project.title).toBe('Demo Pack 01');
+    expect(project.versions).toEqual(['demo-pack-01-1.0']);
+    expect(versions.map((version) => version.files[0]?.filename)).toEqual([
+      'demo-pack-01-1.0.zip',
+    ]);
+  });
 });
 
 describe('typed error mapping', () => {

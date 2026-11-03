@@ -19,6 +19,7 @@ import type {
   ModrinthKind,
   ModrinthSearchHit,
   ModrinthSort,
+  ModrinthVersion,
   Pack,
   PackKind,
   PackListing,
@@ -84,6 +85,32 @@ const DEMO_PACKS: ModrinthSearchHit[] = Array.from({ length: 25 }, (_, index) =>
     latest_version: '1.0',
   };
 });
+
+function findDemoHit(projectId: string): ModrinthSearchHit | undefined {
+  return DEMO_PACKS.find(
+    (hit) => hit.project_id === projectId || hit.slug === projectId,
+  );
+}
+
+function demoVersion(hit: ModrinthSearchHit): ModrinthVersion {
+  return {
+    id: `${hit.project_id}-1.0`,
+    project_id: hit.project_id,
+    name: `${hit.title} 1.0`,
+    version_number: '1.0',
+    game_versions: [...hit.versions],
+    loaders: ['minecraft'],
+    files: [
+      {
+        url: `https://cdn.modrinth.com/data/${hit.project_id}/${hit.slug}-1.0.zip`,
+        filename: `${hit.slug}-1.0.zip`,
+        size: 256,
+        primary: true,
+        hashes: { sha512: 'demo-sha512', sha1: 'demo-sha1' },
+      },
+    ],
+  };
+}
 
 function delay(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, LATENCY_MS));
@@ -518,14 +545,21 @@ export const mockClient: IpcClient = {
   },
   async getModrinthProject(projectId: string) {
     await delay();
-    const hit = findMockProject(projectId);
+    const demo = findDemoHit(projectId);
+    const hit = findMockProject(projectId) ?? demo;
     if (!hit) {
       throw new IpcError('modrinth_status', `Modrinth request failed with status 404 for ${projectId}`);
     }
-    return projectFromHit(hit, `${hit.description} Full project body from the mock.`);
+    return projectFromHit(
+      hit,
+      `${hit.description} Full project body from the mock.`,
+      demo ? [demoVersion(demo)] : undefined,
+    );
   },
   async listModrinthVersions(projectId: string) {
     await delay();
+    const demo = findDemoHit(projectId);
+    if (demo) return [demoVersion(demo)];
     const hit = findMockProject(projectId);
     if (!hit) {
       throw new IpcError('modrinth_status', `Modrinth request failed with status 404 for ${projectId}`);
