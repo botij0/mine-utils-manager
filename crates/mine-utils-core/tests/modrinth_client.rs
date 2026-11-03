@@ -247,6 +247,19 @@ fn search_sends_facets_and_sort() {
 }
 
 #[test]
+fn search_sends_offset_and_limit() {
+    let (client, _) = client(|url, _| {
+        assert!(url.contains("offset=40"), "offset missing in {url}");
+        assert!(url.contains("limit=20"), "limit missing in {url}");
+        json_response(200, r#"{"hits": []}"#)
+    });
+    let mut q = query(SearchKind::ResourcePack);
+    q.offset = 40;
+    let hits = client.search(&q).expect("search");
+    assert!(hits.is_empty());
+}
+
+#[test]
 fn project_and_versions_parse() {
     let (client, _) = client(|url, _| {
         if url.contains("/version") {

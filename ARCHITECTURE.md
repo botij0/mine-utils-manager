@@ -264,7 +264,7 @@ The install has two phases:
 Transport and validation rules include:
 
 - Only Discover initiates requests. Local pages do not share this code path.
-- Search requests return one page of 20 results.
+- Search requests return one page of 20 results and a `has_more` flag. Discover appends the next page only when the user selects **Load more**; a fresh search starts at offset 0, and a short or empty page ends pagination. Changing the query, project type, game version, or sort starts a fresh page. Nothing prefetches on scroll or in the background.
 - Redirects are constrained to approved Modrinth hosts. The final download must use `https://cdn.modrinth.com` on the default port.
 - The expected SHA-512 is required and checked while streaming. SHA-256 is also calculated for provenance.
 - Resource packs require an `assets/` zip root. Datapacks require a `data/` root and a `.zip` filename.

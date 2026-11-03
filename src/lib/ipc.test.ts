@@ -49,6 +49,53 @@ describe('mock client behavior', () => {
   it('returns a null startup warning', async () => {
     expect(await ipc.getStartupWarning()).toBeNull();
   });
+
+  it('pages the demo catalog for Load more without the network', async () => {
+    const first = await ipc.searchModrinth('demo', 'resourcepack');
+    expect(first.hits).toHaveLength(20);
+    expect(first.has_more).toBe(true);
+    expect(first.hits[0].title).toBe('Demo Pack 01');
+    expect(first.hits[19].title).toBe('Demo Pack 20');
+
+    const next = await ipc.searchModrinth('demo', 'resourcepack', null, 'relevance', 20);
+    expect(next.hits.map((hit) => hit.title)).toEqual([
+      'Demo Pack 21',
+      'Demo Pack 22',
+      'Demo Pack 23',
+      'Demo Pack 24',
+      'Demo Pack 25',
+    ]);
+    expect(next.has_more).toBe(false);
+
+    const ids = [...first.hits, ...next.hits].map((hit) => hit.project_id);
+    expect(new Set(ids).size).toBe(25);
+  });
+
+  it('pages the datapack demo catalog and keeps it out of other queries', async () => {
+    const datapacks = await ipc.searchModrinth('demo', 'datapack');
+    expect(datapacks.hits).toHaveLength(20);
+    expect(datapacks.has_more).toBe(true);
+    expect(datapacks.hits[0].title).toBe('Demo Datapack 01');
+
+    const packs = await ipc.searchModrinth('pack', 'resourcepack');
+    expect(packs.hits.some((hit) => hit.title.startsWith('Demo Pack'))).toBe(false);
+  });
+
+  it('sorts the mock catalog by the requested order', async () => {
+    const page = await ipc.searchModrinth('demo', 'resourcepack', null, 'downloads');
+    expect(page.hits[0].downloads).toBeGreaterThanOrEqual(page.hits[1].downloads);
+  });
+
+  it('opens detail and versions for a demo catalog hit', async () => {
+    const project = await ipc.getModrinthProject('demo-pack-01');
+    const versions = await ipc.listModrinthVersions('demo-pack-01');
+
+    expect(project.title).toBe('Demo Pack 01');
+    expect(project.versions).toEqual(['demo-pack-01-1.0']);
+    expect(versions.map((version) => version.files[0]?.filename)).toEqual([
+      'demo-pack-01-1.0.zip',
+    ]);
+  });
 });
 
 describe('typed error mapping', () => {

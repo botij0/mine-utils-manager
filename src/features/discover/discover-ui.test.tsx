@@ -1,10 +1,17 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { userEvent } from '@testing-library/user-event';
+import DiscoverPage from './DiscoverPage';
 import InstallSheet from './InstallSheet';
 import ProjectDetail from './ProjectDetail';
 import VersionPicker from './VersionPicker';
-import type { ModrinthInstallOutcome } from '../../lib/types';
+import { IpcError } from '../../lib/types';
+import type {
+  ModrinthInstallOutcome,
+  ModrinthSearchHit,
+  ModrinthSearchPage,
+} from '../../lib/types';
+import { makeFakeClient } from '../../test/fake-ipc';
 import { fakeVersions, freshHit } from '../../test/fake-packs';
 import { isTrustedIconUrl } from './icon';
 
@@ -36,6 +43,20 @@ function importedOutcome(): ModrinthInstallOutcome {
       },
     },
   };
+}
+
+function searchHit(title: string): ModrinthSearchHit {
+  return { ...freshHit(), project_id: title, slug: title, title };
+}
+
+function pageHits(offset: number, count: number): ModrinthSearchHit[] {
+  return Array.from({ length: count }, (_, index) =>
+    searchHit(`Page ${String(offset + index).padStart(2, '0')}`),
+  );
+}
+
+function page(hits: ModrinthSearchHit[], hasMore = false): ModrinthSearchPage {
+  return { hits, has_more: hasMore };
 }
 
 const sheetProps = {
@@ -174,6 +195,58 @@ describe('discover dialogs', () => {
     // a `resource_pack` payload must not silently render as a datapack.
     render(<InstallSheet {...sheetProps} result={importedOutcome()} />);
     expect(screen.getByText(/Installed fresh-1\.9\.zip and enabled it\./)).toBeInTheDocument();
+  });
+});
+
+describe('discover Load more', () => {
+  it('appends the next page and disables the action while it loads', async () => {
+    const client = makeFakeClient([]);
+    const calls: Array<number | undefined> = [];
+    let release!: (page: ModrinthSearchPage) => void;
+    client.searchModrinth = async (_text, _kind, _gameVersion, _sort, offset = 0) => {
+      calls.push(offset);
+      if (offset === 0) return page(pageHits(0, 20), true);
+      return new Promise<ModrinthSearchPage>((resolve) => {
+        release = resolve;
+      });
+    };
+
+    render(<DiscoverPage client={client} gameRunning={null} hasGameDir />);
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), {
+      target: { value: 'fresh' },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    expect(screen.getByText('Page 00')).toBeInTheDocument();
+
+    const loading = await screen.findByRole('button', { name: 'Loading more…' });
+    expect(loading).toBeDisabled();
+
+    release(page(pageHits(20, 5)));
+    await waitFor(() => expect(screen.getByText('Page 24')).toBeInTheDocument());
+
+    expect(screen.getByText('Page 00')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    expect(calls).toEqual([0, 20]);
+  });
+
+  it('keeps the loaded cards and offers Retry after a failed next page', async () => {
+    const client = makeFakeClient([]);
+    client.searchModrinth = async (_text, _kind, _gameVersion, _sort, offset = 0) => {
+      if (offset === 0) return page(pageHits(0, 20), true);
+      throw new IpcError('modrinth_status', 'Modrinth request failed with status 500');
+    };
+
+    render(<DiscoverPage client={client} gameRunning={null} hasGameDir />);
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), {
+      target: { value: 'fresh' },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Modrinth request failed with status 500',
+    );
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByText('Page 00')).toBeInTheDocument();
   });
 });
 

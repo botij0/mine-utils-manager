@@ -1,5 +1,5 @@
 import type { IpcClient } from './ipc';
-import { defaultConfig, IpcError } from './types';
+import { MOCK_MODRINTH_PAGE_SIZE, defaultConfig, IpcError } from './types';
 import type {
   BackupInfo,
   Config,
@@ -17,7 +17,9 @@ import type {
   ModrinthInstallArgs,
   ModrinthInstallOutcome,
   ModrinthKind,
+  ModrinthSearchHit,
   ModrinthSort,
+  ModrinthVersion,
   Pack,
   PackKind,
   PackListing,
@@ -65,6 +67,63 @@ const MOCK_DIRS: GameDirEntry[] = [
 ];
 
 const LATENCY_MS = 60;
+
+/** Browser-demo-only hits: typing `demo` exercises a full page and a short
+ *  second page without touching the network. */
+function demoHits(
+  projectType: 'resourcepack' | 'datapack',
+  label: string,
+  prefix: string,
+  color: string,
+): ModrinthSearchHit[] {
+  const kind = projectType === 'datapack' ? 'datapack' : 'resource pack';
+  return Array.from({ length: 25 }, (_, index) => {
+    const number = String(index + 1).padStart(2, '0');
+    return {
+      project_id: `${prefix}-${number}`,
+      slug: `${prefix}-${number}`,
+      title: `${label} ${number}`,
+      description: `Synthetic ${kind} ${number} for trying Load more in the browser demo.`,
+      icon_url: iconDataUrl(`D${number}`, color),
+      downloads: 1000 - index,
+      follows: 100 - index,
+      project_type: projectType,
+      versions: ['1.21.1'],
+      latest_version: '1.0',
+    };
+  });
+}
+
+const DEMO_HITS: ModrinthSearchHit[] = [
+  ...demoHits('resourcepack', 'Demo Pack', 'demo-pack', '#4a5f8a'),
+  ...demoHits('datapack', 'Demo Datapack', 'demo-datapack', '#5a3f7d'),
+];
+
+function findDemoHit(projectId: string): ModrinthSearchHit | undefined {
+  return DEMO_HITS.find(
+    (hit) => hit.project_id === projectId || hit.slug === projectId,
+  );
+}
+
+function demoVersion(hit: ModrinthSearchHit): ModrinthVersion {
+  return {
+    id: `${hit.project_id}-1.0`,
+    project_id: hit.project_id,
+    name: `${hit.title} 1.0`,
+    version_number: '1.0',
+    game_versions: [...hit.versions],
+    loaders: ['minecraft'],
+    files: [
+      {
+        url: `https://cdn.modrinth.com/data/${hit.project_id}/${hit.slug}-1.0.zip`,
+        filename: `${hit.slug}-1.0.zip`,
+        size: 256,
+        primary: true,
+        hashes: { sha512: 'demo-sha512', sha1: 'demo-sha1' },
+      },
+    ],
+  };
+}
 
 function delay(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, LATENCY_MS));
@@ -468,16 +527,19 @@ export const mockClient: IpcClient = {
     kind: ModrinthKind,
     gameVersion?: string | null,
     sort?: ModrinthSort,
+    offset = 0,
   ) {
     await delay();
-    void sort;
     // The mock simulates the network: it never reaches api.modrinth.com.
     // Searching for "offline" simulates a dead network instead of results.
     if (text.toLowerCase().includes('offline')) {
       throw new IpcError('modrinth_offline', 'Modrinth is unreachable (simulated offline); check the network');
     }
     const needle = text.trim().toLowerCase();
-    return MOCK_PROJECTS.filter((hit) => {
+    const catalog = needle.includes('demo')
+      ? [...MOCK_PROJECTS, ...DEMO_HITS]
+      : MOCK_PROJECTS;
+    const matches = catalog.filter((hit) => {
       if (kind === 'resourcepack' && hit.project_type !== 'resourcepack') return false;
       if (kind === 'datapack' && hit.project_type !== 'datapack') return false;
       if (
@@ -494,17 +556,29 @@ export const mockClient: IpcClient = {
         hit.slug.includes(needle)
       );
     });
+    // The hit shape has no timestamps, so newest and updated keep catalog order.
+    if (sort === 'downloads') matches.sort((left, right) => right.downloads - left.downloads);
+    if (sort === 'follows') matches.sort((left, right) => right.follows - left.follows);
+    const page = matches.slice(offset, offset + MOCK_MODRINTH_PAGE_SIZE);
+    return { hits: page, has_more: offset + page.length < matches.length };
   },
   async getModrinthProject(projectId: string) {
     await delay();
-    const hit = findMockProject(projectId);
+    const demo = findDemoHit(projectId);
+    const hit = findMockProject(projectId) ?? demo;
     if (!hit) {
       throw new IpcError('modrinth_status', `Modrinth request failed with status 404 for ${projectId}`);
     }
-    return projectFromHit(hit, `${hit.description} Full project body from the mock.`);
+    return projectFromHit(
+      hit,
+      `${hit.description} Full project body from the mock.`,
+      demo ? [demoVersion(demo)] : undefined,
+    );
   },
   async listModrinthVersions(projectId: string) {
     await delay();
+    const demo = findDemoHit(projectId);
+    if (demo) return [demoVersion(demo)];
     const hit = findMockProject(projectId);
     if (!hit) {
       throw new IpcError('modrinth_status', `Modrinth request failed with status 404 for ${projectId}`);

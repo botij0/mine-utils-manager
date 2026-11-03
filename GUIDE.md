@@ -187,7 +187,7 @@ The **Discover** section is the only part of the app that contacts Modrinth.
 3. Optionally choose a game version and a sort order: **Relevance**, **Downloads**, **Follows**, **Newest**, or **Updated**.
 4. Select a result to open its details.
 
-Mine Utils shows up to 20 results. An empty search does not send a request, and opening Discover alone does not prefetch content.
+Mine Utils loads results 20 at a time. Select **Load more** below the results to fetch and append the next page. Changing the search term, project type, game version, or sort starts again from the first page. An empty search does not send a request, opening Discover alone does not prefetch content, and there is no infinite scroll or background loading.
 
 ### Choose a version
 

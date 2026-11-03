@@ -1,11 +1,18 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IpcClient } from '../../lib/ipc';
-import type { ModrinthInstallOutcome, ModrinthSearchHit } from '../../lib/types';
+import { IpcError } from '../../lib/types';
+import type {
+  ModrinthInstallOutcome,
+  ModrinthSearchHit,
+  ModrinthSearchPage,
+} from '../../lib/types';
 import { makeFakeClient } from '../../test/fake-ipc';
 import { freshHit, gameDir, mismatchHit } from '../../test/fake-packs';
+import type { ModrinthState } from './useModrinth';
 import {
   SEARCH_DEBOUNCE_MS,
+  isCurrentSearchResponse,
   isOfflineError,
   preferModrinthVersion,
   useModrinth,
@@ -17,6 +24,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 async function flushSearch() {
@@ -37,6 +45,18 @@ async function searchFor(client: IpcClient, text: string) {
   });
   await flushSearch();
   return result;
+}
+
+function hit(id: string): ModrinthSearchHit {
+  return { ...freshHit(), project_id: id, slug: id, title: id };
+}
+
+function pageHits(offset: number, count: number): ModrinthSearchHit[] {
+  return Array.from({ length: count }, (_, index) => hit(`page-${offset + index}`));
+}
+
+function page(hits: ModrinthSearchHit[], hasMore = false): ModrinthSearchPage {
+  return { hits, has_more: hasMore };
 }
 
 describe('useModrinth', () => {
@@ -250,8 +270,8 @@ describe('useModrinth', () => {
 
   it('drops a late search response after the query is cleared', async () => {
     const client = makeFakeClient([]);
-    let release!: (hits: ModrinthSearchHit[]) => void;
-    const gate = new Promise<ModrinthSearchHit[]>((resolve) => {
+    let release!: (page: ModrinthSearchPage) => void;
+    const gate = new Promise<ModrinthSearchPage>((resolve) => {
       release = resolve;
     });
     client.searchModrinth = () => gate;
@@ -271,7 +291,7 @@ describe('useModrinth', () => {
       vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS + 50);
     });
     await act(async () => {
-      release([freshHit()]);
+      release(page([freshHit()]));
     });
     await act(async () => {});
     await act(async () => {});
@@ -409,5 +429,314 @@ describe('useModrinth', () => {
     });
     expect(result.current.installResult).toBeNull();
     expect(result.current.installError).not.toBeNull();
+  });
+
+  it('forwards offset 0 then 20 for the first and next page', async () => {
+    const client = makeFakeClient([]);
+    const calls: Array<{
+      text: string;
+      kind: string;
+      gameVersion: string | null | undefined;
+      sort: string | undefined;
+      offset: number | undefined;
+    }> = [];
+    client.searchModrinth = async (text, kind, gameVersion, sort, offset = 0) => {
+      calls.push({ text, kind, gameVersion, sort, offset });
+      return offset === 0 ? page(pageHits(0, 20), true) : page(pageHits(20, 5));
+    };
+    const result = await searchFor(client, 'fresh');
+    expect(result.current.hasMore).toBe(true);
+
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    expect(calls.map((call) => call.offset)).toEqual([0, 20]);
+    expect(calls[1]).toMatchObject({
+      text: 'fresh',
+      kind: 'resourcepack',
+      gameVersion: null,
+      sort: 'relevance',
+    });
+    expect(result.current.hasMore).toBe(false);
+  });
+
+  it('reuses non-default filters for the next page', async () => {
+    const client = makeFakeClient([]);
+    const calls: Array<{
+      text: string;
+      kind: string;
+      gameVersion: string | null | undefined;
+      sort: string | undefined;
+      offset: number | undefined;
+    }> = [];
+    client.searchModrinth = async (text, kind, gameVersion, sort, offset = 0) => {
+      calls.push({ text, kind, gameVersion, sort, offset });
+      return offset === 0 ? page(pageHits(0, 20), true) : page(pageHits(20, 5));
+    };
+    const result = await searchFor(client, 'fresh');
+
+    await act(async () => {
+      result.current.setKind('datapack');
+      result.current.setGameVersion('1.21.1');
+      result.current.setSort('downloads');
+    });
+    await flushSearch();
+    expect(result.current.hasMore).toBe(true);
+
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    expect(calls.at(-1)).toMatchObject({
+      text: 'fresh',
+      kind: 'datapack',
+      gameVersion: '1.21.1',
+      sort: 'downloads',
+      offset: 20,
+    });
+    expect(result.current.hits).toHaveLength(25);
+  });
+
+  it('hides further pagination while a new query waits for the debounce', async () => {
+    const client = makeFakeClient([]);
+    client.searchModrinth = async (text, _kind, _gameVersion, _sort, offset = 0) => {
+      if (text === 'other') return page([hit('next-search')]);
+      return offset === 0 ? page(pageHits(0, 20), true) : page(pageHits(20, 5));
+    };
+    const result = await searchFor(client, 'fresh');
+    expect(result.current.hasMore).toBe(true);
+
+    act(() => {
+      result.current.setQuery('other');
+    });
+    expect(result.current.hasMore).toBe(false);
+
+    await flushSearch();
+    expect(result.current.hits.map((item) => item.project_id)).toEqual(['next-search']);
+    expect(result.current.hasMore).toBe(false);
+  });
+
+  it('appends the next page without duplicating project ids', async () => {
+    const client = makeFakeClient([]);
+    client.searchModrinth = async (_text, _kind, _gameVersion, _sort, offset = 0) =>
+      offset === 0
+        ? page(pageHits(0, 20), true)
+        : page([
+            hit('page-19'),
+            hit('page-20'),
+            hit('page-21'),
+            hit('page-22'),
+            hit('page-23'),
+          ]);
+    const result = await searchFor(client, 'fresh');
+
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    const ids = result.current.hits.map((item) => item.project_id);
+    expect(ids).toHaveLength(24);
+    expect(new Set(ids).size).toBe(24);
+    expect(ids.slice(-4)).toEqual(['page-20', 'page-21', 'page-22', 'page-23']);
+  });
+
+  it('deduplicates project ids repeated inside one next page', async () => {
+    const client = makeFakeClient([]);
+    client.searchModrinth = async (_text, _kind, _gameVersion, _sort, offset = 0) =>
+      offset === 0
+        ? page(pageHits(0, 20), true)
+        : page([hit('page-20'), hit('page-20'), hit('page-21')]);
+    const result = await searchFor(client, 'fresh');
+
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    expect(result.current.hits.map((item) => item.project_id)).toEqual([
+      ...pageHits(0, 20).map((item) => item.project_id),
+      'page-20',
+      'page-21',
+    ]);
+  });
+
+  const resetCases: Array<{
+    name: string;
+    change: (state: ModrinthState) => void;
+  }> = [
+    { name: 'query', change: (state) => state.setQuery('other') },
+    { name: 'kind', change: (state) => state.setKind('datapack') },
+    { name: 'game version', change: (state) => state.setGameVersion('1.21.1') },
+    { name: 'sort', change: (state) => state.setSort('downloads') },
+  ];
+
+  it.each(resetCases)('resets accumulated hits when the $name changes', async ({ change }) => {
+    const client = makeFakeClient([]);
+    client.searchModrinth = async (text, kind, gameVersion, sort, offset = 0) => {
+      if (text === 'other' || kind === 'datapack' || gameVersion === '1.21.1' || sort === 'downloads') {
+        return page([hit('next-search')]);
+      }
+      return offset === 0 ? page(pageHits(0, 20), true) : page(pageHits(20, 5));
+    };
+    const result = await searchFor(client, 'fresh');
+    expect(result.current.hits).toHaveLength(20);
+    expect(result.current.hasMore).toBe(true);
+
+    await act(async () => {
+      change(result.current);
+    });
+    await flushSearch();
+
+    expect(result.current.hits.map((item) => item.project_id)).toEqual(['next-search']);
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.loadMoreError).toBeNull();
+  });
+
+  it('ends pagination after a short next page', async () => {
+    const client = makeFakeClient([]);
+    client.searchModrinth = async (_text, _kind, _gameVersion, _sort, offset = 0) =>
+      offset === 0 ? page(pageHits(0, 20), true) : page(pageHits(20, 3));
+    const result = await searchFor(client, 'fresh');
+
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    expect(result.current.hits).toHaveLength(23);
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.loadingMore).toBe(false);
+  });
+
+  it('ends pagination after an empty next page', async () => {
+    const client = makeFakeClient([]);
+    client.searchModrinth = async (_text, _kind, _gameVersion, _sort, offset = 0) =>
+      offset === 0 ? page(pageHits(0, 20), true) : page([]);
+    const result = await searchFor(client, 'fresh');
+
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    expect(result.current.hits).toHaveLength(20);
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.loadingMore).toBe(false);
+  });
+
+  it('reports loading while the next page is in flight', async () => {
+    const client = makeFakeClient([]);
+    let release!: (page: ModrinthSearchPage) => void;
+    client.searchModrinth = async (_text, _kind, _gameVersion, _sort, offset = 0) => {
+      if (offset === 0) return page(pageHits(0, 20), true);
+      return new Promise<ModrinthSearchPage>((resolve) => {
+        release = resolve;
+      });
+    };
+    const result = await searchFor(client, 'fresh');
+
+    act(() => {
+      void result.current.loadMore();
+    });
+
+    expect(result.current.loadingMore).toBe(true);
+    expect(result.current.hasMore).toBe(true);
+
+    await act(async () => {
+      release(page(pageHits(20, 5)));
+    });
+    await act(async () => {});
+
+    expect(result.current.loadingMore).toBe(false);
+    expect(result.current.hits).toHaveLength(25);
+  });
+
+  it('keeps loaded hits on a next-page error and retries the same offset', async () => {
+    const client = makeFakeClient([]);
+    const offsets: number[] = [];
+    let releaseRetry!: (page: ModrinthSearchPage) => void;
+    let nextPageAttempts = 0;
+    client.searchModrinth = async (_text, _kind, _gameVersion, _sort, offset = 0) => {
+      offsets.push(offset);
+      if (offset === 0) return page(pageHits(0, 20), true);
+      nextPageAttempts += 1;
+      if (nextPageAttempts === 1) {
+        throw new IpcError('modrinth_status', 'page failed');
+      }
+      return new Promise<ModrinthSearchPage>((resolve) => {
+        releaseRetry = resolve;
+      });
+    };
+    const result = await searchFor(client, 'fresh');
+
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    expect(result.current.hits).toHaveLength(20);
+    expect(result.current.hasMore).toBe(true);
+    expect(result.current.loadMoreError?.message).toBe('page failed');
+
+    act(() => {
+      void result.current.loadMore();
+    });
+
+    expect(result.current.loadMoreError).toBeNull();
+    expect(result.current.loadingMore).toBe(true);
+
+    await act(async () => {
+      releaseRetry(page(pageHits(20, 5)));
+    });
+    await act(async () => {});
+
+    expect(offsets).toEqual([0, 20, 20]);
+    expect(result.current.hits).toHaveLength(25);
+    expect(result.current.loadMoreError).toBeNull();
+  });
+
+  it('ignores a next-page response after the search parameters change', async () => {
+    const client = makeFakeClient([]);
+    let releaseStale!: (page: ModrinthSearchPage) => void;
+    client.searchModrinth = async (_text, _kind, _gameVersion, sort, offset = 0) => {
+      if (sort === 'downloads') return page([hit('new-search')]);
+      if (offset === 0) return page(pageHits(0, 20), true);
+      return new Promise<ModrinthSearchPage>((resolve) => {
+        releaseStale = resolve;
+      });
+    };
+    const result = await searchFor(client, 'fresh');
+
+    act(() => {
+      void result.current.loadMore();
+    });
+    expect(result.current.loadingMore).toBe(true);
+
+    await act(async () => {
+      result.current.setSort('downloads');
+    });
+    await flushSearch();
+
+    expect(result.current.hits.map((item) => item.project_id)).toEqual(['new-search']);
+
+    await act(async () => {
+      releaseStale(page(pageHits(20, 5)));
+    });
+    await act(async () => {});
+
+    expect(result.current.hits.map((item) => item.project_id)).toEqual(['new-search']);
+    expect(result.current.loadingMore).toBe(false);
+  });
+
+});
+
+describe('isCurrentSearchResponse', () => {
+  it('rejects a response after the page unmounts', () => {
+    expect(isCurrentSearchResponse(false, 1, 1)).toBe(false);
+  });
+
+  it('rejects a response from an older search generation', () => {
+    expect(isCurrentSearchResponse(true, 1, 2)).toBe(false);
+  });
+
+  it('accepts the current response on a mounted page', () => {
+    expect(isCurrentSearchResponse(true, 2, 2)).toBe(true);
   });
 });

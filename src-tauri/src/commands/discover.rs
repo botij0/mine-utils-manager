@@ -51,9 +51,45 @@ fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
     }
 }
 
+const SEARCH_PAGE_SIZE: u8 = 20;
+
+/// One Discover search page. `has_more` keeps the 20-hit page size in the
+/// backend, so the frontend does not mirror it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SearchPage {
+    pub hits: Vec<SearchHit>,
+    pub has_more: bool,
+}
+
+impl SearchPage {
+    fn new(hits: Vec<SearchHit>) -> Self {
+        SearchPage {
+            has_more: hits.len() == usize::from(SEARCH_PAGE_SIZE),
+            hits,
+        }
+    }
+}
+
+fn build_search_query(
+    text: String,
+    kind: String,
+    game_version: Option<String>,
+    sort: Option<String>,
+    offset: u32,
+) -> Result<SearchQuery, AppError> {
+    Ok(SearchQuery {
+        text,
+        kind: parse_install_kind(&kind)?,
+        game_version,
+        sort: parse_sort(sort.as_deref().unwrap_or("relevance"))?,
+        limit: SEARCH_PAGE_SIZE,
+        offset,
+    })
+}
+
 /// Search Modrinth. Runs only when the Discover page calls it; nothing
 /// prefetches, and the local tabs never trigger a request. One page of 20
-/// hits: there is no pagination UI, so offset is always zero.
+/// hits per call; the offset selects the page for an explicit Load more.
 #[tauri::command]
 pub async fn search_modrinth(
     state: State<'_, AppState>,
@@ -62,19 +98,13 @@ pub async fn search_modrinth(
     kind: String,
     game_version: Option<String>,
     sort: Option<String>,
-) -> Result<Vec<SearchHit>, AppError> {
+    offset: Option<u32>,
+) -> Result<SearchPage, AppError> {
     state.note_ipc();
     let client = Arc::clone(&mods.client);
     tauri::async_runtime::spawn_blocking(move || {
-        let found = client.search(&SearchQuery {
-            text: query,
-            kind: parse_install_kind(&kind)?,
-            game_version,
-            sort: parse_sort(sort.as_deref().unwrap_or("relevance"))?,
-            limit: 20,
-            offset: 0,
-        })?;
-        Ok(found)
+        let query = build_search_query(query, kind, game_version, sort, offset.unwrap_or(0))?;
+        Ok(SearchPage::new(client.search(&query)?))
     })
     .await
     .map_err(join_error)?
@@ -256,6 +286,42 @@ pub async fn install_modrinth_pack(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hit() -> SearchHit {
+        serde_json::from_value(serde_json::json!({ "project_id": "p" })).expect("hit")
+    }
+
+    #[test]
+    fn search_page_reports_more_only_when_the_page_is_full() {
+        let full = SearchPage::new((0..20).map(|_| hit()).collect());
+        assert!(full.has_more);
+        let wire = serde_json::to_value(&full).expect("serializes");
+        assert_eq!(
+            wire.get("has_more").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+
+        let short = SearchPage::new((0..19).map(|_| hit()).collect());
+        assert!(!short.has_more);
+        assert!(!SearchPage::new(Vec::new()).has_more);
+    }
+
+    #[test]
+    fn search_query_forwards_offset_and_keeps_the_page_size() {
+        let query = build_search_query(
+            "fresh".to_string(),
+            "resourcepack".to_string(),
+            Some("1.21.1".to_string()),
+            Some("downloads".to_string()),
+            40,
+        )
+        .expect("query");
+
+        assert_eq!(query.offset, 40);
+        assert_eq!(query.limit, 20);
+        assert!(matches!(query.sort, SearchSort::Downloads));
+        assert_eq!(query.game_version.as_deref(), Some("1.21.1"));
+    }
 
     /// Locks the wire contract that caused the original `Installed undefined`
     /// bug: the Tauri command serializes the outcome kind as `resourcepack`
