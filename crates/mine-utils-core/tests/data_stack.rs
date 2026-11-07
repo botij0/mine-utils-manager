@@ -1,7 +1,7 @@
 //! Datapack production-path tests: every write goes through
 //! `data_stack::commit` on a temp world, never through a test-only twin.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 
 use mine_utils_core::data_stack::{self, DataPaths};
@@ -455,24 +455,66 @@ fn broken_zip_is_refused_before_any_copy() {
     );
 }
 
+fn lists(enabled: &[&str], disabled: &[&str]) -> (Vec<String>, Vec<String>) {
+    let owned = |entries: &[&str]| entries.iter().map(|e| e.to_string()).collect();
+    (owned(enabled), owned(disabled))
+}
+
+struct FnTrash<F>(F);
+
+impl<F: Fn(&Path) -> Result<(), PackError>> TrashService for FnTrash<F> {
+    fn move_to_trash(&self, path: &Path) -> Result<(), PackError> {
+        (self.0)(path)
+    }
+}
+
+fn failing_trash(path: &Path) -> Result<(), PackError> {
+    Err(PackError::Trash {
+        path: path.to_path_buf(),
+        reason: "no usable .Trash-1000 on this mount".to_string(),
+    })
+}
+
 #[test]
-fn delete_cleans_references_before_the_trash() {
+fn delete_disables_the_pack_before_the_trash_and_drops_it_after() {
     let world = temp_world(&["vanilla", "file/gone.zip"], &["file/old.zip"]);
     let pack = world.paths.datapacks_dir.join("gone.zip");
     std::fs::write(&pack, b"zip").unwrap();
-    let trash = RecordingTrash::new();
+    let at_trash = RefCell::new(None);
+    let trash = FnTrash(|_: &Path| {
+        *at_trash.borrow_mut() = Some(view(&world.paths));
+        Ok(())
+    });
     let outcome =
         data_stack::delete_datapack_safely_with_guard(&world.paths, &pack, &trash, &PassGuard)
             .unwrap();
     assert!(outcome.removed_references);
-    assert_eq!(trash.calls(), vec![pack.clone()]);
-    let (enabled, disabled) = view(&world.paths);
-    assert!(!enabled.contains(&"file/gone.zip".to_string()));
-    assert!(disabled.contains(&"file/old.zip".to_string()));
+    assert_eq!(
+        at_trash.into_inner(),
+        Some(lists(&["vanilla"], &["file/old.zip", "file/gone.zip"]))
+    );
+    assert_eq!(view(&world.paths), lists(&["vanilla"], &["file/old.zip"]));
 }
 
 #[test]
-fn delete_second_guard_failure_leaves_the_pack_and_the_trash_untouched() {
+fn delete_trash_failure_keeps_a_disabled_pack_disabled() {
+    let world = temp_world(&["vanilla"], &["file/old.zip"]);
+    let pack = world.paths.datapacks_dir.join("old.zip");
+    std::fs::write(&pack, b"zip").unwrap();
+    let err = data_stack::delete_datapack_safely_with_guard(
+        &world.paths,
+        &pack,
+        &FnTrash(failing_trash),
+        &PassGuard,
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "pack_trash");
+    assert!(pack.is_file(), "the pack is still installed");
+    assert_eq!(view(&world.paths), lists(&["vanilla"], &["file/old.zip"]));
+}
+
+#[test]
+fn delete_second_guard_failure_leaves_the_pack_disabled_and_untrashed() {
     let world = temp_world(&["vanilla", "file/gone.zip"], &[]);
     let pack = world.paths.datapacks_dir.join("gone.zip");
     std::fs::write(&pack, b"zip").unwrap();
@@ -483,11 +525,23 @@ fn delete_second_guard_failure_leaves_the_pack_and_the_trash_untouched() {
     assert_eq!(err.code(), "game_running");
     assert!(pack.is_file(), "the pack is untouched");
     assert!(trash.calls().is_empty(), "nothing was trashed");
-    let (enabled, _) = view(&world.paths);
-    assert!(
-        !enabled.contains(&"file/gone.zip".to_string()),
-        "references were cleaned before the final check"
-    );
+    assert_eq!(view(&world.paths), lists(&["vanilla"], &["file/gone.zip"]));
+}
+
+#[test]
+fn delete_succeeds_when_the_cleanup_after_the_trash_fails() {
+    let world = temp_world(&["vanilla", "file/gone.zip"], &[]);
+    let pack = world.paths.datapacks_dir.join("gone.zip");
+    std::fs::write(&pack, b"zip").unwrap();
+    // An unreadable level.dat makes the post-trash cleanup fail.
+    let trash = FnTrash(|_: &Path| {
+        std::fs::write(&world.paths.level_dat_path, b"not gzip").unwrap();
+        Ok(())
+    });
+    let outcome =
+        data_stack::delete_datapack_safely_with_guard(&world.paths, &pack, &trash, &PassGuard)
+            .unwrap();
+    assert!(!outcome.removed_references);
 }
 
 #[test]
