@@ -1,6 +1,6 @@
 use std::path::Path;
 
-/// Move `temp` to `dest` without replacing an existing file. On Linux the
+/// Move `temp` to `dest` without replacing an existing entry. On Linux the
 /// rename is a single `renameat2` with `RENAME_NOREPLACE`, so the
 /// exists-then-rename race cannot happen.
 pub(crate) fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
@@ -36,7 +36,8 @@ pub(crate) fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()>
 }
 
 /// A hard link (same directory, so same filesystem) is the atomic
-/// no-replace, with an exists-checked rename as the last resort.
+/// no-replace for a file. A directory cannot be hard-linked, so it falls to
+/// `checked_rename`, as does a file on a filesystem that refuses links.
 pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<()> {
     match std::fs::hard_link(temp, dest) {
         Ok(()) => {
@@ -50,14 +51,37 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
     }
 }
 
+/// A directory claims `dest` with `create_dir`, which fails for any existing
+/// entry, then renames onto its own empty claim, so no rival is replaced.
+/// The empty claim is visible at `dest` until the rename lands.
 fn checked_rename(temp: &Path, dest: &Path) -> std::io::Result<()> {
-    if dest.exists() {
+    if std::fs::symlink_metadata(temp)?.is_dir() {
+        std::fs::create_dir(dest)?;
+        return std::fs::rename(temp, dest).map_err(|err| {
+            let _ = std::fs::remove_dir(dest);
+            taken_as_already_exists(err)
+        });
+    }
+    if std::fs::symlink_metadata(dest).is_ok() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
             "destination exists",
         ));
     }
-    std::fs::rename(temp, dest)
+    std::fs::rename(temp, dest).map_err(taken_as_already_exists)
+}
+
+/// `rename` reports a rival of the other kind, or a directory with entries,
+/// with these errors instead of `EEXIST`.
+fn taken_as_already_exists(err: std::io::Error) -> std::io::Error {
+    match err.kind() {
+        std::io::ErrorKind::NotADirectory
+        | std::io::ErrorKind::IsADirectory
+        | std::io::ErrorKind::DirectoryNotEmpty => {
+            std::io::Error::new(std::io::ErrorKind::AlreadyExists, err)
+        }
+        _ => err,
+    }
 }
 
 /// NFS, sshfs, and FUSE filesystems without rename flags answer EINVAL; a
@@ -119,6 +143,34 @@ mod tests {
 
         assert_eq!(result, Ok(()));
         assert_eq!(std::fs::read(&dest).unwrap(), b"pack");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_errors_that_name_a_rival_read_as_already_exists() {
+        let kinds: Vec<(&str, std::io::ErrorKind)> = [
+            ("ENOTDIR", libc::ENOTDIR),
+            ("EISDIR", libc::EISDIR),
+            ("ENOTEMPTY", libc::ENOTEMPTY),
+            ("EXDEV", libc::EXDEV),
+            ("EACCES", libc::EACCES),
+        ]
+        .into_iter()
+        .map(|(name, errno)| {
+            let err = std::io::Error::from_raw_os_error(errno);
+            (name, taken_as_already_exists(err).kind())
+        })
+        .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("ENOTDIR", std::io::ErrorKind::AlreadyExists),
+                ("EISDIR", std::io::ErrorKind::AlreadyExists),
+                ("ENOTEMPTY", std::io::ErrorKind::AlreadyExists),
+                ("EXDEV", std::io::ErrorKind::CrossesDevices),
+                ("EACCES", std::io::ErrorKind::PermissionDenied),
+            ]
+        );
     }
 
     #[cfg(unix)]
