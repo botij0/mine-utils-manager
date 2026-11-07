@@ -405,8 +405,7 @@ fn commit_path(temp: &Path, target_dir: &Path, filename: &str) -> Result<PathBuf
 
 /// Move `temp` to `dest` without replacing an existing file. On Linux the
 /// rename is a single `renameat2` with `RENAME_NOREPLACE`, so the
-/// exists-then-rename race cannot happen. Elsewhere, and on filesystems that
-/// refuse the flag, [`no_replace_fallback`] commits instead.
+/// exists-then-rename race cannot happen.
 fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -443,7 +442,12 @@ fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
 /// no-replace, with an exists-checked rename as the last resort.
 fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<()> {
     match std::fs::hard_link(temp, dest) {
-        Ok(()) => std::fs::remove_file(temp),
+        Ok(()) => {
+            if std::fs::remove_file(temp).is_err() {
+                let _ = std::fs::remove_file(temp);
+            }
+            Ok(())
+        }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Err(err),
         Err(_) => {
             if dest.exists() {
