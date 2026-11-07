@@ -473,6 +473,58 @@ mod tests {
     }
 
     #[test]
+    fn a_year_based_row_resolves_every_version_in_its_span() {
+        let table = FormatTable::from_json(
+            r#"{"resource": [], "data": [{"format": [101, 1], "label": "26.1 to 26.1.2"}]}"#,
+        )
+        .unwrap();
+        for version in ["26.1", "26.1.1", "26.1.2"] {
+            assert_eq!(
+                table.data_format_for_version(version),
+                Some(FormatVersion::new(101, 1)),
+                "{version} must resolve"
+            );
+        }
+        assert_eq!(table.data_format_for_version("26.2"), None);
+        assert_eq!(table.data_format_for_version("26.1.3"), None);
+    }
+
+    #[test]
+    fn the_embedded_table_resolves_the_26_x_releases() {
+        let table = FormatTable::embedded();
+        for (version, format) in [
+            ("26.1", FormatVersion::new(101, 1)),
+            ("26.1.1", FormatVersion::new(101, 1)),
+            ("26.1.2", FormatVersion::new(101, 1)),
+            ("26.2", FormatVersion::new(107, 1)),
+            ("26.3", FormatVersion::from_major(121)),
+        ] {
+            assert_eq!(
+                table.data_format_for_version(version),
+                Some(format),
+                "{version} must resolve"
+            );
+        }
+        let label = |kind, format| table.label_for(kind, format).map(str::to_string);
+        assert_eq!(
+            label(PackKind::Resource, FormatVersion::from_major(84)).as_deref(),
+            Some("26.1 to 26.1.2")
+        );
+        assert_eq!(
+            label(PackKind::Resource, FormatVersion::from_major(88)).as_deref(),
+            Some("26.2")
+        );
+        assert_eq!(
+            label(PackKind::Resource, FormatVersion::new(97, 1)).as_deref(),
+            Some("26.3")
+        );
+        assert_eq!(
+            label(PackKind::Data, FormatVersion::new(101, 1)).as_deref(),
+            Some("26.1 to 26.1.2")
+        );
+    }
+
+    #[test]
     fn every_embedded_data_row_resolves() {
         let table = FormatTable::embedded();
         for row in &table.data {

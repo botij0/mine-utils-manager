@@ -185,6 +185,48 @@ fn version_resolves_to_the_data_format() {
 }
 
 #[test]
+fn a_year_based_world_version_resolves_to_its_data_format() {
+    let (_dir, game, icons) = game_dir();
+    add_world(
+        &game,
+        "w",
+        Some(level_bytes(Some("26.1.2"), true, Some("W"))),
+        false,
+    );
+    let worlds = mine_utils_core::world::scan_worlds(&game, &icons);
+    let version = serde_json::to_value(worlds[0].version.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        version,
+        serde_json::json!({
+            "name": "26.1.2",
+            "data_format": { "major": 101, "minor": 1 },
+            "newest_known_version": null,
+        })
+    );
+}
+
+#[test]
+fn a_world_newer_than_the_table_names_the_newest_known_version() {
+    let (_dir, game, icons) = game_dir();
+    add_world(
+        &game,
+        "w",
+        Some(level_bytes(Some("26.9"), true, Some("W"))),
+        false,
+    );
+    let worlds = mine_utils_core::world::scan_worlds(&game, &icons);
+    let version = serde_json::to_value(worlds[0].version.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        version,
+        serde_json::json!({
+            "name": "26.9",
+            "data_format": null,
+            "newest_known_version": "26.3",
+        })
+    );
+}
+
+#[test]
 fn lock_holder_helper() {
     let Ok(path) = std::env::var("MINE_UTILS_LOCK_HOLDER") else {
         return;
