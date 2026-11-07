@@ -102,6 +102,136 @@ fn rename_noreplace_unsupported(err: &std::io::Error) -> bool {
 mod tests {
     use super::*;
 
+    fn entry_summary(path: &Path) -> String {
+        let Ok(entry) = std::fs::symlink_metadata(path) else {
+            return "missing".to_string();
+        };
+        if entry.is_symlink() {
+            format!("symlink to {}", std::fs::read_link(path).unwrap().display())
+        } else if entry.is_dir() {
+            format!(
+                "dir with {} entries",
+                std::fs::read_dir(path).unwrap().count()
+            )
+        } else {
+            format!("file {}", std::fs::read_to_string(path).unwrap())
+        }
+    }
+
+    #[cfg(unix)]
+    fn first_rename_fails_with(errno: i32) -> impl FnMut(&Path, &Path) -> std::io::Result<()> {
+        let mut failed = false;
+        move |from, to| {
+            if std::mem::replace(&mut failed, true) {
+                std::fs::rename(from, to)
+            } else {
+                Err(std::io::Error::from_raw_os_error(errno))
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    const RENAME_ERRNOS: [(&str, i32); 4] = [
+        ("ENOTDIR", libc::ENOTDIR),
+        ("EISDIR", libc::EISDIR),
+        ("ENOTEMPTY", libc::ENOTEMPTY),
+        ("EPERM", libc::EPERM),
+    ];
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_whose_rename_onto_the_claim_fails_retries_unless_a_rival_took_it() {
+        let seen: Vec<String> = RENAME_ERRNOS
+            .into_iter()
+            .map(|(name, errno)| {
+                let root = tempfile::tempdir().unwrap();
+                let temp = root.path().join(".Pack.tmp");
+                std::fs::create_dir(&temp).unwrap();
+                std::fs::write(temp.join("pack.mcmeta"), b"{}").unwrap();
+                let dest = root.path().join("Pack");
+
+                let result = checked_rename(&temp, &dest, first_rename_fails_with(errno))
+                    .map_err(|err| err.kind());
+
+                format!(
+                    "{name}: {result:?}; dest {}; temp kept {}",
+                    entry_summary(&dest),
+                    temp.exists()
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            seen,
+            [
+                "ENOTDIR: Err(AlreadyExists); dest missing; temp kept true",
+                "EISDIR: Ok(()); dest dir with 1 entries; temp kept false",
+                "ENOTEMPTY: Err(AlreadyExists); dest missing; temp kept true",
+                "EPERM: Ok(()); dest dir with 1 entries; temp kept false",
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_rename_reads_only_a_folder_rival_as_taken() {
+        let seen: Vec<String> = RENAME_ERRNOS
+            .into_iter()
+            .map(|(name, errno)| {
+                let root = tempfile::tempdir().unwrap();
+                let temp = root.path().join(".Pack.zip.tmp");
+                std::fs::write(&temp, b"pack").unwrap();
+                let dest = root.path().join("Pack.zip");
+
+                let result = checked_rename(&temp, &dest, first_rename_fails_with(errno))
+                    .map_err(|err| err.kind());
+
+                format!(
+                    "{name}: {result:?}; dest {}; temp kept {}",
+                    entry_summary(&dest),
+                    temp.exists()
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            seen,
+            [
+                "ENOTDIR: Err(NotADirectory); dest missing; temp kept true",
+                "EISDIR: Err(AlreadyExists); dest missing; temp kept true",
+                "ENOTEMPTY: Err(DirectoryNotEmpty); dest missing; temp kept true",
+                "EPERM: Err(PermissionDenied); dest missing; temp kept true",
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_rename_leaves_a_folder_that_replaced_the_claim() {
+        let root = tempfile::tempdir().unwrap();
+        let temp = root.path().join(".Pack.tmp");
+        std::fs::create_dir(&temp).unwrap();
+        let dest = root.path().join("Pack");
+        let rival = root.path().join("rival");
+
+        let result = checked_rename(&temp, &dest, |_, to| {
+            std::fs::create_dir(&rival).unwrap();
+            std::fs::remove_dir(to).unwrap();
+            std::fs::rename(&rival, to).unwrap();
+            Err(std::io::Error::from_raw_os_error(libc::EPERM))
+        })
+        .map_err(|err| err.kind());
+
+        assert_eq!(
+            format!(
+                "{result:?}; dest {}; temp kept {}",
+                entry_summary(&dest),
+                temp.exists()
+            ),
+            "Err(PermissionDenied); dest dir with 0 entries; temp kept true"
+        );
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn renameat2_errors_that_mean_unsupported_take_the_link_fallback() {
@@ -206,22 +336,9 @@ mod tests {
                 let result = checked_rename(&temp, &dest, |from, to| std::fs::rename(from, to))
                     .map_err(|err| err.kind());
 
-                let entry = std::fs::symlink_metadata(&dest).unwrap();
-                let left = if entry.is_symlink() {
-                    format!(
-                        "symlink to {}",
-                        std::fs::read_link(&dest).unwrap().display()
-                    )
-                } else if entry.is_dir() {
-                    format!(
-                        "dir with {} entries",
-                        std::fs::read_dir(&dest).unwrap().count()
-                    )
-                } else {
-                    format!("file {}", std::fs::read_to_string(&dest).unwrap())
-                };
                 seen.push(format!(
-                    "{temp_kind} temp, {label}: {result:?}; dest {left}; temp kept {}",
+                    "{temp_kind} temp, {label}: {result:?}; dest {}; temp kept {}",
+                    entry_summary(&dest),
                     temp.exists()
                 ));
             }
