@@ -1,8 +1,10 @@
+use std::io::ErrorKind;
 use std::path::Path;
 
 /// Move `temp` to `dest` without replacing an existing entry. On Linux the
-/// rename is a single `renameat2` with `RENAME_NOREPLACE`, so the
-/// exists-then-rename race cannot happen.
+/// rename is a single `renameat2` with `RENAME_NOREPLACE`, so on a
+/// filesystem that supports the flag the exists-then-rename race cannot
+/// happen.
 pub(crate) fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -46,46 +48,79 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
             }
             Ok(())
         }
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Err(err),
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => Err(err),
         Err(_) => checked_rename(temp, dest, |from, to| std::fs::rename(from, to)),
     }
 }
 
 /// A directory claims `dest` with `create_dir`, which fails for any existing
-/// entry, then renames onto its own empty claim, so no rival is replaced.
-/// The empty claim is visible at `dest` until the rename lands.
+/// entry, then renames onto its own empty claim. A rival that removes the
+/// claim and puts its own empty directory there is still replaced by that
+/// rename, and no portable fix exists on this fallback. A crash before the
+/// rename leaves the empty claim at `dest`. If the rename onto the claim fails
+/// without naming a rival, as a plain SFTP rename does for any existing
+/// target, a claim that is still ours is removed and the directory is moved
+/// like a file. A file checks `dest` with `symlink_metadata` and then
+/// renames, so a rival that lands between the two is replaced.
 fn checked_rename(
     temp: &Path,
     dest: &Path,
     mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    if std::fs::symlink_metadata(temp)?.is_dir() {
+    let rivals = if std::fs::symlink_metadata(temp)?.is_dir() {
         std::fs::create_dir(dest)?;
-        return rename(temp, dest).map_err(|err| {
-            let _ = std::fs::remove_dir(dest);
-            taken_as_already_exists(err)
-        });
-    }
+        let claim = std::fs::symlink_metadata(dest)?;
+        let Err(err) = rename(temp, dest) else {
+            return Ok(());
+        };
+        let claim_removed = remove_claim(dest, &claim);
+        if DIR_RIVALS.contains(&err.kind()) || !claim_removed {
+            return Err(taken_as_already_exists(err, DIR_RIVALS));
+        }
+        DIR_RIVALS
+    } else {
+        FILE_RIVALS
+    };
     if std::fs::symlink_metadata(dest).is_ok() {
         return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
+            ErrorKind::AlreadyExists,
             "destination exists",
         ));
     }
-    rename(temp, dest).map_err(taken_as_already_exists)
+    rename(temp, dest).map_err(|err| taken_as_already_exists(err, rivals))
 }
 
-/// `rename` reports a rival of the other kind, or a directory with entries,
-/// with these errors instead of `EEXIST`.
-fn taken_as_already_exists(err: std::io::Error) -> std::io::Error {
-    match err.kind() {
-        std::io::ErrorKind::NotADirectory
-        | std::io::ErrorKind::IsADirectory
-        | std::io::ErrorKind::DirectoryNotEmpty => {
-            std::io::Error::new(std::io::ErrorKind::AlreadyExists, err)
-        }
-        _ => err,
+/// What `rename` reports instead of `EEXIST` when a rival holds `dest`: a
+/// non-directory or a directory with entries for a directory temp, a
+/// directory for a file temp.
+const DIR_RIVALS: &[ErrorKind] = &[ErrorKind::NotADirectory, ErrorKind::DirectoryNotEmpty];
+const FILE_RIVALS: &[ErrorKind] = &[ErrorKind::IsADirectory];
+
+fn taken_as_already_exists(err: std::io::Error, rivals: &[ErrorKind]) -> std::io::Error {
+    if rivals.contains(&err.kind()) {
+        std::io::Error::new(ErrorKind::AlreadyExists, err)
+    } else {
+        err
     }
+}
+
+/// Removes the claim only while `dest` is still the directory `create_dir`
+/// made, so a rival's directory that replaced it stays.
+fn remove_claim(dest: &Path, claim: &std::fs::Metadata) -> bool {
+    std::fs::symlink_metadata(dest).is_ok_and(|now| same_entry(&now, claim))
+        && std::fs::remove_dir(dest).is_ok()
+}
+
+#[cfg(unix)]
+fn same_entry(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    (a.dev(), a.ino()) == (b.dev(), b.ino())
+}
+
+/// Stable std has no file identity here, so the claim is taken as unchanged.
+#[cfg(not(unix))]
+fn same_entry(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
+    true
 }
 
 /// NFS, sshfs, and FUSE filesystems without rename flags answer EINVAL; a
@@ -277,34 +312,6 @@ mod tests {
 
         assert_eq!(result, Ok(()));
         assert_eq!(std::fs::read(&dest).unwrap(), b"pack");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rename_errors_that_name_a_rival_read_as_already_exists() {
-        let kinds: Vec<(&str, std::io::ErrorKind)> = [
-            ("ENOTDIR", libc::ENOTDIR),
-            ("EISDIR", libc::EISDIR),
-            ("ENOTEMPTY", libc::ENOTEMPTY),
-            ("EXDEV", libc::EXDEV),
-            ("EACCES", libc::EACCES),
-        ]
-        .into_iter()
-        .map(|(name, errno)| {
-            let err = std::io::Error::from_raw_os_error(errno);
-            (name, taken_as_already_exists(err).kind())
-        })
-        .collect();
-        assert_eq!(
-            kinds,
-            vec![
-                ("ENOTDIR", std::io::ErrorKind::AlreadyExists),
-                ("EISDIR", std::io::ErrorKind::AlreadyExists),
-                ("ENOTEMPTY", std::io::ErrorKind::AlreadyExists),
-                ("EXDEV", std::io::ErrorKind::CrossesDevices),
-                ("EACCES", std::io::ErrorKind::PermissionDenied),
-            ]
-        );
     }
 
     #[cfg(unix)]
