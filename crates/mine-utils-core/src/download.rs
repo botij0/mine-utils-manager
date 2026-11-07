@@ -452,12 +452,14 @@ fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Whether a failed `renameat2(RENAME_NOREPLACE)` means the kernel or
-/// filesystem cannot do it here (seccomp, exotic fs), so the commit falls
-/// through to the hard-link path rather than failing the install.
+/// NFS, sshfs, and FUSE filesystems without rename flags answer EINVAL; a
+/// seccomp filter answers ENOSYS, EPERM, or EACCES.
 #[cfg(target_os = "linux")]
 fn rename_noreplace_unsupported(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::PermissionDenied || err.raw_os_error() == Some(libc::ENOSYS)
+    matches!(
+        err.raw_os_error(),
+        Some(libc::EINVAL | libc::ENOSYS | libc::EPERM | libc::EACCES)
+    )
 }
 
 fn sync_parent(path: &Path) {
