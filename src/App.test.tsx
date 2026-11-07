@@ -14,6 +14,20 @@ afterEach(() => {
   window.location.hash = '';
 });
 
+const RUNNING: GameRunning = {
+  kind: 'process',
+  detail: 'pid 4242 runs java',
+  lock_path: null,
+  pid: 4242,
+  command: 'java -jar client.jar',
+};
+
+const OPTIONS_BACKUP = {
+  file_name: '20261025T090000.000000000-options.txt',
+  bytes: 4096,
+  display: '2026-10-25 09:00:00 UTC',
+};
+
 function recordGuardDirs(client: FakeClient): (string | null)[] {
   const checkedDirs: (string | null)[] = [];
   const guard = client.getGameGuard;
@@ -222,16 +236,7 @@ describe('App', () => {
       return new Promise((resolve) =>
         answers.set(dir, () =>
           resolve({
-            running:
-              dir === '/home/demo/.minecraft'
-                ? {
-                    kind: 'process',
-                    detail: 'pid 4242 runs java',
-                    lock_path: null,
-                    pid: 4242,
-                    command: 'java -jar client.jar',
-                  }
-                : null,
+            running: dir === '/home/demo/.minecraft' ? RUNNING : null,
             stale_locks: [],
             detection_supported: true,
           }),
@@ -249,12 +254,111 @@ describe('App', () => {
       answers.get('/home/demo/.minecraft')?.();
     });
 
-    expect(await screen.findByRole('button', { name: 'Restore' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: 'Restore' })).toBeDisabled();
 
     await act(async () => {
       answers.get('/home/demo/prism')?.();
     });
     expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
+  });
+
+  it('pauses writes when the folder changes while the window is hidden', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const user = userEvent.setup();
+    const client = makeFakeClient({
+      gameDirs: [gameDir('/home/demo/prism', true, true)],
+      backups: [OPTIONS_BACKUP],
+    });
+    const noFolderGuard = client.getGameGuard;
+    const checkedDirs: (string | null)[] = [];
+    client.getGameGuard = async () => {
+      const dir = client.config.active_game_dir;
+      checkedDirs.push(dir);
+      if (dir === null) return noFolderGuard();
+      return { running: RUNNING, stale_locks: [], detection_supported: true };
+    };
+    render(<App client={client} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Skip for now' }));
+    await user.click(await screen.findByRole('button', { name: 'Settings' }));
+    expect(await screen.findByRole('button', { name: 'Restore' })).toBeEnabled();
+    await waitFor(() => expect(checkedDirs).toEqual([null, null]));
+
+    await act(async () => {
+      setDocumentHidden(true);
+    });
+    await user.click(screen.getByRole('button', { name: 'Use' }));
+    expect(
+      await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
+    ).toBeInTheDocument();
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+    });
+
+    const restore = screen.getByRole('button', { name: 'Restore' });
+    expect(checkedDirs).toEqual([null, null]);
+    expect(restore).toBeDisabled();
+    expect(restore).toHaveAttribute('title', 'Mine Utils could not check whether Minecraft is running');
+
+    await act(async () => {
+      setDocumentHidden(false);
+    });
+    expect(checkedDirs).toEqual([null, null, '/home/demo/prism']);
+    expect(restore).toBeDisabled();
+    expect(restore).toHaveAttribute('title', 'Close Minecraft before restoring');
+  });
+
+  it('keeps polling after a guard check that never answers', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const user = userEvent.setup();
+    const client = makeFakeClient([
+      gameDir('/home/demo/.minecraft', true, true),
+      gameDir('/home/demo/prism', true, true),
+    ]);
+    await client.setActiveGameDir('/home/demo/.minecraft');
+    const guard = client.getGameGuard;
+    const checkedDirs: (string | null)[] = [];
+    client.getGameGuard = () => {
+      checkedDirs.push(client.config.active_game_dir);
+      return checkedDirs.length === 1 ? new Promise(() => {}) : guard();
+    };
+    render(<App client={client} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Settings' }));
+    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await waitFor(() => expect(checkedDirs).toContain('/home/demo/prism'));
+    await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+    await screen.findByRole('list', { name: 'Stack order' });
+    const sentBeforeTicks = checkedDirs.length;
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(checkedDirs.slice(sentBeforeTicks)).toEqual(['/home/demo/prism', '/home/demo/prism']);
+  });
+
+  it('sends no guard request until a window that starts hidden is shown', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    setDocumentHidden(true);
+    const client = await shellClient();
+    const checkedDirs = recordGuardDirs(client);
+    render(<App client={client} />);
+
+    expect(
+      await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/\.minecraft/ }),
+    ).toBeInTheDocument();
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+    });
+    expect(checkedDirs).toEqual([]);
+
+    await act(async () => {
+      setDocumentHidden(false);
+    });
+    expect(checkedDirs).toEqual(['/home/demo/.minecraft']);
   });
 
   it('sends no guard request while the window is hidden and checks once it is shown', async () => {

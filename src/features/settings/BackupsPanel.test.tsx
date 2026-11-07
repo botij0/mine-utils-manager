@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type {
@@ -7,7 +7,7 @@ import type {
   LevelBackupInfo,
 } from '../../lib/types';
 import { IpcError } from '../../lib/types';
-import { makeFakeClient, type FakeClient } from '../../test/fake-ipc';
+import { gameDir, makeFakeClient, type FakeClient } from '../../test/fake-ipc';
 import { resourceStack } from '../../test/fake-packs';
 import BackupsPanel from './BackupsPanel';
 
@@ -123,6 +123,25 @@ describe('BackupsPanel', () => {
         'title',
         'Mine Utils could not check whether Minecraft is running',
       );
+    }
+  });
+
+  it('allows restore without an app guard when options.txt is missing and the game is closed', async () => {
+    const client = makeFakeClient({
+      gameDirs: [gameDir('/home/demo/.minecraft', true, true)],
+      backups: DEFAULT_BACKUPS,
+    });
+    await client.setActiveGameDir('/home/demo/.minecraft');
+    client.getResourceStack = async () => {
+      throw new IpcError('options_txt', 'options.txt is missing at /home/demo/.minecraft/options.txt');
+    };
+    render(<BackupsPanel client={client} activeGameDir="/home/demo/.minecraft" />);
+
+    const optionsTable = await screen.findByRole('table');
+    await act(async () => {});
+
+    for (const button of within(optionsTable).getAllByRole('button', { name: 'Restore' })) {
+      expect(button).toBeEnabled();
     }
   });
 
