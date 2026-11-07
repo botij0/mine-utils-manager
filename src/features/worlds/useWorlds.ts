@@ -58,15 +58,20 @@ export function dataSnapshotOf(stack: DataStack): DataSnapshot {
   };
 }
 
-/** True when the pack's declared range accepts the world's data format. A
- *  pack with no range is treated as unknown, never as a warning. */
-export function isCompatible(range: FormatRange | null, format: FormatVersion | null): boolean {
-  if (!range || !format) return true;
+export type Compatibility = 'compatible' | 'incompatible' | 'unknown';
+
+/** Whether the pack's declared range accepts the world's data format. A missing
+ *  range or a missing world format is `unknown`, never `compatible`. */
+export function checkCompatibility(
+  range: FormatRange | null,
+  format: FormatVersion | null,
+): Compatibility {
+  if (!range || !format) return 'unknown';
   const below = (a: FormatVersion, b: FormatVersion) =>
     a.major < b.major || (a.major === b.major && a.minor <= b.minor);
-  if (range.min && !below(range.min, format)) return false;
-  if (range.max && !below(format, range.max)) return false;
-  return true;
+  if (range.min && !below(range.min, format)) return 'incompatible';
+  if (range.max && !below(format, range.max)) return 'incompatible';
+  return 'compatible';
 }
 
 /** The warning text for an incompatible pack, or null when it fits. */
@@ -76,7 +81,7 @@ export function compatibilityWarning(
   worldName: string | null,
 ): string | null {
   if (!pack.format_range || !format || !worldName) return null;
-  if (isCompatible(pack.format_range, format)) return null;
+  if (checkCompatibility(pack.format_range, format) !== 'incompatible') return null;
   const packLabel = pack.game_label ?? 'an unknown range';
   return `Built for ${packLabel}, but ${worldName} needs data format ${formatVersionLabel(format)}. It may not load, but you can still enable it.`;
 }

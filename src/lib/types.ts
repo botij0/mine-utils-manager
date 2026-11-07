@@ -205,6 +205,10 @@ export interface WorldVersion {
   name: string;
   /** The data pack format the world's datapacks must declare, when known. */
   data_format: FormatVersion | null;
+  /** The newest version the format table covers, set only when this world is
+   *  newer than it. A null `data_format` with this unset is an unrecognised
+   *  version name. */
+  newest_known_version: string | null;
 }
 
 export interface WorldIssue {
