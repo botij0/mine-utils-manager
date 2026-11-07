@@ -505,17 +505,25 @@ pub fn import_pack_with(
     hashes: &HashCache,
     trash: &dyn TrashService,
 ) -> Result<ImportOutcome, AppError> {
-    import_pack_with_hook(source, resourcepacks, icons, choice, hashes, trash, || {})
+    import_pack_with_commit(
+        source,
+        resourcepacks,
+        icons,
+        choice,
+        hashes,
+        trash,
+        atomic_no_replace,
+    )
 }
 
-fn import_pack_with_hook(
+fn import_pack_with_commit(
     source: &Path,
     resourcepacks: &Path,
     icons: &IconCache,
     choice: ImportChoice,
     hashes: &HashCache,
     trash: &dyn TrashService,
-    before_commit: impl FnOnce(),
+    commit: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<ImportOutcome, AppError> {
     // A symlinked source is rejected instead of followed, so no later step can
     // remove a pack that only a link points at.
@@ -642,8 +650,7 @@ fn import_pack_with_hook(
         }
     }
 
-    before_commit();
-    if let Err(err) = atomic_no_replace(&tmp, &destination) {
+    if let Err(err) = commit(&tmp, &destination) {
         let _ = remove_any(&tmp);
         if err.kind() == std::io::ErrorKind::AlreadyExists {
             return Ok(ImportOutcome::Collision { name });
@@ -1460,14 +1467,17 @@ mod tests {
             (&dir_source, "DirPack", "DirPack"),
         ] {
             let rival = resourcepacks.join(file_name);
-            let outcome = import_pack_with_hook(
+            let outcome = import_pack_with_commit(
                 source,
                 &resourcepacks,
                 &icons,
                 ImportChoice::Default,
                 &hashes,
                 &trash,
-                || std::fs::write(&rival, b"rival").unwrap(),
+                |tmp, dest| {
+                    std::fs::write(&rival, b"rival").unwrap();
+                    atomic_no_replace(tmp, dest)
+                },
             )
             .unwrap();
             assert_eq!(
