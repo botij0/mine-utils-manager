@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 use crate::format_table::FormatTable;
+use crate::fs_commit::atomic_no_replace;
 use crate::icon_cache::{icon_within_pixel_cap, IconCache};
 use crate::pack::{
     FormatVersion, ImportChoice, ImportOutcome, Pack, PackError, PackIssue, PackKind, PackLocation,
@@ -642,8 +643,11 @@ fn import_pack_with_hook(
     }
 
     before_commit();
-    if let Err(err) = std::fs::rename(&tmp, &destination) {
+    if let Err(err) = atomic_no_replace(&tmp, &destination) {
         let _ = remove_any(&tmp);
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            return Ok(ImportOutcome::Collision { name });
+        }
         return Err(err.into());
     }
     sync_dir(&root);
