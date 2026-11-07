@@ -121,7 +121,11 @@ export function world(overrides: Partial<World> = {}): World {
     dir_name: 'Survival 1_17',
     path: '/home/demo/.minecraft/saves/Survival 1_17',
     level_name: 'Survival 1.17',
-    version: { name: '1.21.10', data_format: { major: 88, minor: 0 } },
+    version: {
+      name: '1.21.10',
+      data_format: { major: 88, minor: 0 },
+      newest_known_version: null,
+    },
     icon: null,
     running: null,
     world_locked: null,

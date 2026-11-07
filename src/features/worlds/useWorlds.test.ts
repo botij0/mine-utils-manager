@@ -4,7 +4,7 @@ import type { WorldsClient } from '../../lib/ipc';
 import type { DatapackListing, DataStack } from '../../lib/types';
 import { worldsClient } from '../../test/fake-ipc';
 import { datapack, stack, world } from '../../test/fake-packs';
-import { compatibilityWarning, isCompatible, useWorlds } from './useWorlds';
+import { checkCompatibility, compatibilityWarning, useWorlds } from './useWorlds';
 
 describe('useWorlds', () => {
   it('selects the first world and loads its datapacks', async () => {
@@ -25,8 +25,20 @@ describe('useWorlds', () => {
     expect(
       compatibilityWarning(datapack('a.zip'), format, 'Survival 1.17'),
     ).toMatch(/1\.17/);
-    expect(isCompatible({ min: null, max: null }, format)).toBe(true);
-    expect(isCompatible({ min: { major: 88, minor: 0 }, max: null }, format)).toBe(true);
+    expect(checkCompatibility({ min: null, max: null }, format)).toBe('compatible');
+    expect(checkCompatibility({ min: { major: 88, minor: 0 }, max: null }, format)).toBe(
+      'compatible',
+    );
+  });
+
+  it('never calls a pack compatible when the world format or the pack range is missing', () => {
+    const range = { min: { major: 88, minor: 0 }, max: null };
+    expect(checkCompatibility(range, null)).toBe('unknown');
+    expect(checkCompatibility(null, { major: 88, minor: 0 })).toBe('unknown');
+    expect(checkCompatibility(range, { major: 101, minor: 1 })).toBe('compatible');
+    expect(checkCompatibility({ min: { major: 101, minor: 1 }, max: null }, { major: 88, minor: 0 })).toBe(
+      'incompatible',
+    );
   });
 
   it('reports a read-only error for a corrupt level.dat', async () => {

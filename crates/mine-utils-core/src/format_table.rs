@@ -25,6 +25,11 @@ pub struct FormatRangeEntry {
     pub label: String,
 }
 
+/// A game version as `(major, minor, patch)`. `1.21.10` is `(1, 21, 10)` and
+/// the year-based `26.1.2` is `(26, 1, 2)`; a missing patch is 0. Tuples compare
+/// numerically, so `1.21.10` sorts after `1.21.1` and `26.1` after `1.21.11`.
+type GameVersion = (u32, u32, u32);
+
 /// Maps a pack format number to the Minecraft versions that read it. Resource
 /// and data packs moved to separate numbers in 1.21, so they stay separate.
 #[derive(Debug)]
@@ -32,12 +37,19 @@ pub struct FormatTable {
     resource: Vec<FormatRangeEntry>,
     data: Vec<FormatRangeEntry>,
     data_formats: HashMap<String, FormatVersion>,
+    newest_data_version: Option<GameVersion>,
 }
 
-/// The data format for a world version name such as `1.21.10`, or `None` when
-/// the table does not cover it.
+/// The data format for a world version name such as `1.21.10` or `26.1.2`, or
+/// `None` when the table does not cover it.
 pub fn data_format_for_version(version: &str) -> Option<FormatVersion> {
     FormatTable::embedded().data_format_for_version(version)
+}
+
+/// The newest version the embedded table covers, but only when `version` is
+/// newer than that. `None` means the version is covered, older, or unparsable.
+pub fn newest_known_version_if_newer(version: &str) -> Option<String> {
+    FormatTable::embedded().newest_known_version_if_newer(version)
 }
 
 impl FormatTable {
@@ -53,10 +65,12 @@ impl FormatTable {
             serde_json::from_str(json).map_err(|err| format!("invalid format table: {err}"))?;
         let data = convert(raw.data);
         let data_formats = data_versions(&data);
+        let newest_data_version = newest_version(&data);
         Ok(FormatTable {
             resource: convert(raw.resource),
             data,
             data_formats,
+            newest_data_version,
         })
     }
 
@@ -73,6 +87,14 @@ impl FormatTable {
     /// future table row resolves without a probe list.
     pub fn data_format_for_version(&self, version: &str) -> Option<FormatVersion> {
         self.data_formats.get(version.trim()).copied()
+    }
+
+    /// The newest data-row version, named like the labels (`26.3`), when
+    /// `version` sorts after it. A world past this cannot have its datapacks
+    /// checked, which the UI must say instead of reporting compatible.
+    pub fn newest_known_version_if_newer(&self, version: &str) -> Option<String> {
+        let newest = self.newest_data_version?;
+        (version_parts(version.trim())? > newest).then(|| format_version(newest))
     }
 
     /// Game versions for the declared range. A range must map at both ends and
@@ -167,38 +189,42 @@ fn expand_label(label: &str) -> Vec<String> {
     if end < start {
         return Vec::new();
     }
-    // Numeric expansion across the series boundary: every (series, patch)
-    // between the endpoints. Patches cap at 30, which every real span stays
-    // under; nonexistent versions inside the range map harmlessly and rows
-    // stay disjoint because spans never overlap.
+    if start.0 != end.0 {
+        // A span across a renumbering (`1.x` to `26.x`) has no countable
+        // middle, so only the named endpoints resolve.
+        return vec![format_version(start), format_version(end)];
+    }
+    // Numeric expansion inside one major: every (minor, patch) between the
+    // endpoints. Patches cap at 30, which every real span stays under;
+    // nonexistent versions inside the range map harmlessly and rows stay
+    // disjoint because spans never overlap.
     let mut out = Vec::new();
-    for series in start.0..=end.0 {
+    for minor in start.1..=end.1 {
         for patch in 0..=30 {
-            let version = (series, patch);
+            let version = (start.0, minor, patch);
             if version < start || version > end {
                 continue;
             }
-            out.push(format_version(series, patch));
+            out.push(format_version(version));
         }
     }
     out
 }
 
-fn format_version(series: u32, patch: u32) -> String {
+/// `1.21`, `1.21.10`, `26.1`, and `26.1.2` all follow one rule: the patch is
+/// shown only when it is not 0, so a label stays in its endpoints' scheme.
+fn format_version((major, minor, patch): GameVersion) -> String {
     if patch == 0 {
-        format!("1.{series}")
+        format!("{major}.{minor}")
     } else {
-        format!("1.{series}.{patch}")
+        format!("{major}.{minor}.{patch}")
     }
 }
 
-fn version_parts(text: &str) -> Option<(u32, u32)> {
-    // Minecraft versions are `1.<series>[.<patch>]`: `1.21.10` is series 21,
-    // patch 10, and a bare `1.21` is series 21, patch 0. Tuples compare
-    // numerically, so `1.21.10` sorts after `1.21.1` without string tricks.
-    let rest = text.strip_prefix("1.")?;
-    let mut parts = rest.split('.');
-    let series: u32 = parts.next()?.parse().ok()?;
+fn version_parts(text: &str) -> Option<GameVersion> {
+    let mut parts = text.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next()?.parse().ok()?;
     let patch: u32 = match parts.next() {
         Some(patch) => patch.parse().ok()?,
         None => 0,
@@ -206,7 +232,14 @@ fn version_parts(text: &str) -> Option<(u32, u32)> {
     if parts.next().is_some() {
         return None;
     }
-    Some((series, patch))
+    Some((major, minor, patch))
+}
+
+/// The highest version any row's label names at either end.
+fn newest_version(rows: &[FormatRangeEntry]) -> Option<GameVersion> {
+    rows.iter()
+        .filter_map(|row| version_parts(end_of(&row.label).trim()))
+        .max()
 }
 
 fn convert(entries: Vec<RawEntry>) -> Vec<FormatRangeEntry> {
@@ -473,6 +506,58 @@ mod tests {
     }
 
     #[test]
+    fn a_year_based_row_resolves_every_version_in_its_span() {
+        let table = FormatTable::from_json(
+            r#"{"resource": [], "data": [{"format": [101, 1], "label": "26.1 to 26.1.2"}]}"#,
+        )
+        .unwrap();
+        for version in ["26.1", "26.1.1", "26.1.2"] {
+            assert_eq!(
+                table.data_format_for_version(version),
+                Some(FormatVersion::new(101, 1)),
+                "{version} must resolve"
+            );
+        }
+        assert_eq!(table.data_format_for_version("26.2"), None);
+        assert_eq!(table.data_format_for_version("26.1.3"), None);
+    }
+
+    #[test]
+    fn the_embedded_table_resolves_the_26_x_releases() {
+        let table = FormatTable::embedded();
+        for (version, format) in [
+            ("26.1", FormatVersion::new(101, 1)),
+            ("26.1.1", FormatVersion::new(101, 1)),
+            ("26.1.2", FormatVersion::new(101, 1)),
+            ("26.2", FormatVersion::new(107, 1)),
+            ("26.3", FormatVersion::from_major(121)),
+        ] {
+            assert_eq!(
+                table.data_format_for_version(version),
+                Some(format),
+                "{version} must resolve"
+            );
+        }
+        let label = |kind, format| table.label_for(kind, format).map(str::to_string);
+        assert_eq!(
+            label(PackKind::Resource, FormatVersion::from_major(84)).as_deref(),
+            Some("26.1 to 26.1.2")
+        );
+        assert_eq!(
+            label(PackKind::Resource, FormatVersion::from_major(88)).as_deref(),
+            Some("26.2")
+        );
+        assert_eq!(
+            label(PackKind::Resource, FormatVersion::new(97, 1)).as_deref(),
+            Some("26.3")
+        );
+        assert_eq!(
+            label(PackKind::Data, FormatVersion::new(101, 1)).as_deref(),
+            Some("26.1 to 26.1.2")
+        );
+    }
+
+    #[test]
     fn every_embedded_data_row_resolves() {
         let table = FormatTable::embedded();
         for row in &table.data {
@@ -499,7 +584,7 @@ mod tests {
 
     /// The parsed endpoints of one row label: a single version, or both ends
     /// of a span. Compared numerically, so `1.21` and `1.21.0` are the same.
-    fn row_endpoints(label: &str) -> Vec<(u32, u32)> {
+    fn row_endpoints(label: &str) -> Vec<GameVersion> {
         let (start, end) = match label.split_once(" to ") {
             Some((start, end)) => (start.trim(), end.trim()),
             None => return version_parts(label.trim()).into_iter().collect(),
@@ -510,7 +595,7 @@ mod tests {
     /// Over-generated patches (no real release) are exempt from coverage;
     /// endpoints always count.
     fn version_patch_above_known(version: &str) -> bool {
-        let Some((_, patch)) = version_parts(version) else {
+        let Some((_, _, patch)) = version_parts(version) else {
             return false;
         };
         patch > 11

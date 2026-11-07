@@ -54,6 +54,13 @@ export default function WorldHeader({
           )}
           <span className="world-path"> · {world.path}</span>
         </p>
+        {world.version && !world.version.data_format ? (
+          <p className="banner" role="status">
+            {world.version.newest_known_version
+              ? `Minecraft ${world.version.name} is newer than this build knows (newest known: ${world.version.newest_known_version}). Datapack compatibility is not checked.`
+              : `Mine Utils does not know the data format of Minecraft ${world.version.name}. Datapack compatibility is not checked.`}
+          </p>
+        ) : null}
         {world.issue ? (
           <p className="error" role="alert">
             This world is read-only: {world.issue.message}

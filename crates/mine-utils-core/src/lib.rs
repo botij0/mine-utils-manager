@@ -33,7 +33,9 @@ pub use download::{
     VerifiedDownload, ZipRoot,
 };
 pub use error::AppError;
-pub use format_table::{data_format_for_version, FormatRangeEntry, FormatTable};
+pub use format_table::{
+    data_format_for_version, newest_known_version_if_newer, FormatRangeEntry, FormatTable,
+};
 pub use game_dir::{
     contains_entry, discover_game_dirs, entry_for, is_game_dir, merge_game_dirs, validate_game_dir,
     DiscoverySource, GameDir, GameDirEntry,

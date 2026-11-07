@@ -76,6 +76,36 @@ describe('WorldsPage', () => {
     expect(screen.getAllByText('1.21.10', { selector: '.world-rail-version' })).toHaveLength(2);
   });
 
+  it('says so when a world is newer than the format table instead of passing it as compatible', async () => {
+    const client = pageClient({
+      listWorlds: async () => [
+        world({
+          version: { name: '26.9', data_format: null, newest_known_version: '26.3' },
+        }),
+      ],
+    });
+    render(<WorldsPage client={client} />);
+    expect(
+      await screen.findByText(
+        /Minecraft 26\.9 is newer than this build knows \(newest known: 26\.3\)\. Datapack compatibility is not checked\./,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('says so when a world version is not in the format table at all', async () => {
+    const client = pageClient({
+      listWorlds: async () => [
+        world({ version: { name: '1.2.3-odd', data_format: null, newest_known_version: null } }),
+      ],
+    });
+    render(<WorldsPage client={client} />);
+    expect(
+      await screen.findByText(
+        /Mine Utils does not know the data format of Minecraft 1\.2\.3-odd\. Datapack compatibility is not checked\./,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('renders datapacks with a compatibility warning', async () => {
     render(<WorldsPage client={pageClient()} />);
     await screen.findAllByText('Survival 1.17');

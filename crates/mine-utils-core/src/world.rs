@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::format_table::data_format_for_version;
+use crate::format_table::{data_format_for_version, newest_known_version_if_newer};
 use crate::game_lock::{self, GameRunning};
 use crate::icon_cache::IconCache;
 use crate::level_dat;
@@ -19,10 +19,14 @@ use crate::pack::PackIcon;
 
 /// A world's game version: the `Data.Version.Name` string plus the data pack
 /// format the world's datapacks must declare, when the table covers it.
+/// `newest_known_version` is set only when the world is newer than every
+/// version the table covers, so a missing `data_format` can be told apart
+/// from a game that is newer than this build.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorldVersion {
     pub name: String,
     pub data_format: Option<FormatVersion>,
+    pub newest_known_version: Option<String>,
 }
 
 /// Why a world is read-only. The write controls hide while this is set.
@@ -196,6 +200,7 @@ fn read_world(dir: &Path, icons: &IconCache, status: &game_lock::GameStatus) -> 
                 }
                 world.version = Some(WorldVersion {
                     data_format: data_format_for_version(&view.version_name),
+                    newest_known_version: newest_known_version_if_newer(&view.version_name),
                     name: view.version_name,
                 });
             }
