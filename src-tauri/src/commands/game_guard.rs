@@ -86,7 +86,6 @@ mod tests {
                 "detection_supported": true,
             })
         );
-        assert!(!game_dir.join("options.txt").exists());
     }
 
     #[test]

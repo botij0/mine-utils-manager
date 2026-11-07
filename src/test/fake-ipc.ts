@@ -4,7 +4,6 @@ import type {
   Config,
   DataStack,
   GameDirEntry,
-  GameGuard,
   GameDirState,
   GameRunning,
   ImportChoice,
@@ -230,7 +229,7 @@ export function makeFakeClient(
     async getResourceStack() {
       return currentStack();
     },
-    async getGameGuard(): Promise<GameGuard> {
+    async getGameGuard() {
       if (!config.active_game_dir) {
         throw new IpcError('no_active_game_dir', 'no active game dir; pick one in Settings first');
       }

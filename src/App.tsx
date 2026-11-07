@@ -64,7 +64,6 @@ export default function App({ client = ipc }: AppProps) {
   // Guard answers land in the order they were sent: an answer older than the
   // last one applied, or sent before the active folder changed, is dropped.
   const guardChecks = useRef({ issued: 0, applied: 0, inFlight: 0 });
-  const activeGameDir = config.active_game_dir;
 
   useEffect(() => {
     window.location.hash = page;
@@ -128,7 +127,7 @@ export default function App({ client = ipc }: AppProps) {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', tick);
     };
-  }, [configReady, activeGameDir, onboarded, refreshGameRunning]);
+  }, [configReady, config.active_game_dir, onboarded, refreshGameRunning]);
 
   useEffect(() => {
     client
@@ -146,8 +145,9 @@ export default function App({ client = ipc }: AppProps) {
     return () => media.removeEventListener('change', onChange);
   }, [config.theme]);
 
-  const activeLabel = activeGameDir ?? 'No game dir selected';
-  const showOnboarding = configReady && !onboarded && !activeGameDir && !error;
+  const activeLabel = config.active_game_dir ?? 'No game dir selected';
+  const showOnboarding =
+    configReady && !onboarded && !config.active_game_dir && !error;
 
   const finishOnboarding = useCallback(() => {
     setOnboarded(true);
@@ -232,7 +232,7 @@ export default function App({ client = ipc }: AppProps) {
               client={client}
               gameRunning={gameRunning}
               gameGuardUnknown={gameGuardUnknown}
-              hasGameDir={activeGameDir != null}
+              hasGameDir={config.active_game_dir != null}
               refreshGameRunning={refreshGameRunning}
               onInstalled={() => setRefreshEpoch((epoch) => epoch + 1)}
             />
