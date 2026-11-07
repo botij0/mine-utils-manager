@@ -374,7 +374,7 @@ pub struct DatapackDeleteOutcome {
 
 /// Delete one datapack safely: guard, move it to `Disabled`, guard again,
 /// trash, then drop the reference. A failed check or trash leaves the pack
-/// installed but disabled; listed nowhere, Minecraft would enable it again.
+/// installed but disabled, because Minecraft enables a pack listed nowhere.
 pub fn delete_datapack_safely(
     paths: &DataPaths,
     path: &Path,
