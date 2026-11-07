@@ -528,20 +528,88 @@ fn delete_second_guard_failure_leaves_the_pack_disabled_and_untrashed() {
     assert_eq!(view(&world.paths), lists(&["vanilla"], &["file/gone.zip"]));
 }
 
+#[cfg(unix)]
 #[test]
 fn delete_succeeds_when_the_cleanup_after_the_trash_fails() {
-    let world = temp_world(&["vanilla", "file/gone.zip"], &[]);
+    let world = temp_world(
+        &["vanilla", "file/keep.zip", "file/gone.zip"],
+        &["file/old.zip"],
+    );
     let pack = world.paths.datapacks_dir.join("gone.zip");
     std::fs::write(&pack, b"zip").unwrap();
-    // An unreadable level.dat makes the post-trash cleanup fail.
-    let trash = FnTrash(|_: &Path| {
-        std::fs::write(&world.paths.level_dat_path, b"not gzip").unwrap();
+    let trash_then_lock_world = FnTrash(|_: &Path| {
+        std::fs::create_dir(world.paths.world_dir.join("session.lock")).unwrap();
         Ok(())
     });
-    let outcome =
-        data_stack::delete_datapack_safely_with_guard(&world.paths, &pack, &trash, &PassGuard)
-            .unwrap();
+    let outcome = data_stack::delete_datapack_safely_with_guard(
+        &world.paths,
+        &pack,
+        &trash_then_lock_world,
+        &PassGuard,
+    )
+    .unwrap();
     assert!(!outcome.removed_references);
+    assert_eq!(
+        view(&world.paths),
+        lists(
+            &["vanilla", "file/keep.zip"],
+            &["file/old.zip", "file/gone.zip"]
+        )
+    );
+}
+
+fn backed_up_lists(paths: &DataPaths) -> Vec<(Vec<String>, Vec<String>)> {
+    mine_utils_core::level_backup::list(&paths.backups_root, "alpha")
+        .unwrap()
+        .iter()
+        .map(|backup| {
+            let bytes = std::fs::read(paths.backups_root.join(&backup.file_name)).unwrap();
+            let parsed = level_dat::parse(&bytes).unwrap();
+            (parsed.enabled, parsed.disabled)
+        })
+        .collect()
+}
+
+fn delete_gone_pack(enabled: &[&str], disabled: &[&str], keep: u32) -> World {
+    let mut world = temp_world(enabled, disabled);
+    world.paths.backups.keep = keep;
+    let pack = world.paths.datapacks_dir.join("gone.zip");
+    std::fs::write(&pack, b"zip").unwrap();
+    data_stack::delete_datapack_safely_with_guard(
+        &world.paths,
+        &pack,
+        &RecordingTrash::new(),
+        &PassGuard,
+    )
+    .unwrap();
+    world
+}
+
+#[test]
+fn delete_of_an_enabled_pack_backs_up_only_the_pre_delete_file() {
+    let world = delete_gone_pack(&["vanilla", "file/gone.zip"], &["file/old.zip"], 10);
+    assert_eq!(
+        backed_up_lists(&world.paths),
+        vec![lists(&["vanilla", "file/gone.zip"], &["file/old.zip"])]
+    );
+}
+
+#[test]
+fn delete_with_one_kept_backup_keeps_the_pre_delete_file() {
+    let world = delete_gone_pack(&["vanilla", "file/gone.zip"], &["file/old.zip"], 1);
+    assert_eq!(
+        backed_up_lists(&world.paths),
+        vec![lists(&["vanilla", "file/gone.zip"], &["file/old.zip"])]
+    );
+}
+
+#[test]
+fn delete_of_a_disabled_pack_backs_up_the_pre_delete_file() {
+    let world = delete_gone_pack(&["vanilla"], &["file/old.zip", "file/gone.zip"], 10);
+    assert_eq!(
+        backed_up_lists(&world.paths),
+        vec![lists(&["vanilla"], &["file/old.zip", "file/gone.zip"])]
+    );
 }
 
 #[test]
