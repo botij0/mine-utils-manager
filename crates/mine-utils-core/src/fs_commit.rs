@@ -46,16 +46,18 @@ fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<()> {
             Ok(())
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Err(err),
-        Err(_) => {
-            if dest.exists() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::AlreadyExists,
-                    "destination exists",
-                ));
-            }
-            std::fs::rename(temp, dest)
-        }
+        Err(_) => checked_rename(temp, dest),
     }
+}
+
+fn checked_rename(temp: &Path, dest: &Path) -> std::io::Result<()> {
+    if dest.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "destination exists",
+        ));
+    }
+    std::fs::rename(temp, dest)
 }
 
 /// NFS, sshfs, and FUSE filesystems without rename flags answer EINVAL; a
