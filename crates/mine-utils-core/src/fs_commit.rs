@@ -47,17 +47,21 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
             Ok(())
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Err(err),
-        Err(_) => checked_rename(temp, dest),
+        Err(_) => checked_rename(temp, dest, |from, to| std::fs::rename(from, to)),
     }
 }
 
 /// A directory claims `dest` with `create_dir`, which fails for any existing
 /// entry, then renames onto its own empty claim, so no rival is replaced.
 /// The empty claim is visible at `dest` until the rename lands.
-fn checked_rename(temp: &Path, dest: &Path) -> std::io::Result<()> {
+fn checked_rename(
+    temp: &Path,
+    dest: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     if std::fs::symlink_metadata(temp)?.is_dir() {
         std::fs::create_dir(dest)?;
-        return std::fs::rename(temp, dest).map_err(|err| {
+        return rename(temp, dest).map_err(|err| {
             let _ = std::fs::remove_dir(dest);
             taken_as_already_exists(err)
         });
@@ -68,7 +72,7 @@ fn checked_rename(temp: &Path, dest: &Path) -> std::io::Result<()> {
             "destination exists",
         ));
     }
-    std::fs::rename(temp, dest).map_err(taken_as_already_exists)
+    rename(temp, dest).map_err(taken_as_already_exists)
 }
 
 /// `rename` reports a rival of the other kind, or a directory with entries,
@@ -199,7 +203,8 @@ mod tests {
                 let dest = root.path().join("Pack");
                 make_rival(&dest);
 
-                let result = checked_rename(&temp, &dest).map_err(|err| err.kind());
+                let result = checked_rename(&temp, &dest, |from, to| std::fs::rename(from, to))
+                    .map_err(|err| err.kind());
 
                 let entry = std::fs::symlink_metadata(&dest).unwrap();
                 let left = if entry.is_symlink() {
