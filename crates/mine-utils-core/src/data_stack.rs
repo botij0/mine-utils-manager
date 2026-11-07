@@ -364,14 +364,17 @@ pub fn restore_backup_with_guard(
     load(paths)
 }
 
-/// What a guarded delete did before moving the pack to the trash.
+/// What a guarded delete did to `level.dat` after moving the pack to the trash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatapackDeleteOutcome {
+    /// False when there is no `level.dat` or the cleanup after the trash
+    /// failed, which can leave a dead `Disabled` entry behind.
     pub removed_references: bool,
 }
 
-/// Delete one datapack safely: guard, clean both lists, guard again, trash.
-/// A trash failure leaves the pack installed but disabled.
+/// Delete one datapack safely: guard, move it to `Disabled`, guard again,
+/// trash, then drop the reference. A failed check or trash leaves the pack
+/// installed but disabled; listed nowhere, Minecraft would enable it again.
 pub fn delete_datapack_safely(
     paths: &DataPaths,
     path: &Path,
@@ -400,9 +403,17 @@ pub fn delete_datapack_safely_with_guard(
                 filename: path.display().to_string(),
             })
         })?;
-    let removed_references = remove_references(paths, &filename)?;
+    validate_filename(&filename).map_err(AppError::from)?;
+    if paths.level_dat_path.exists() {
+        let disable = stack_core::Change::Toggle {
+            filename: filename.clone(),
+            enabled: false,
+        };
+        commit(paths, None, &disable, &SystemGuard)?;
+    }
     writable(&paths.game_dir, &paths.world_dir, guard)?;
     pack_scan::delete_pack_with(path, &paths.datapacks_dir, trash)?;
+    let removed_references = remove_references(paths, &filename).unwrap_or(false);
     Ok(DatapackDeleteOutcome { removed_references })
 }
 
