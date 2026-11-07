@@ -32,8 +32,10 @@ interface ActiveStackProps {
   /** The live game guard state; the app polls it, so the banner can appear
    *  while the page is open. */
   running: GameRunning | null;
-  /** A failed guard check: unknown, so writes stay blocked. */
+  /** No current guard answer: unknown, so writes stay blocked. */
   guardUnknown?: boolean;
+  /** The unknown state is a new folder's first check, still pending. */
+  guardChecking?: boolean;
   onToggle: (filename: string, enabled: boolean) => void;
   onReorder: (order: string[]) => void;
   onRecheck: () => void;
@@ -58,6 +60,7 @@ export default function ActiveStack({
   busy,
   running,
   guardUnknown = false,
+  guardChecking = false,
   onToggle,
   onReorder,
   onRecheck,
@@ -107,6 +110,7 @@ export default function ActiveStack({
       <GameRunningBanner
         running={running}
         guardUnknown={guardUnknown}
+        checking={guardChecking}
         staleLocks={stack.stale_locks}
         supported={stack.detection_supported}
         onRecheck={onRecheck}

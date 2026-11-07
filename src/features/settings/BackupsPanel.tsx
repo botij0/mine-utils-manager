@@ -15,8 +15,10 @@ interface BackupsPanelProps {
   activeGameDir?: string | null;
   /** When the parent already tracks the game guard, it decides the block. */
   gameRunning?: GameRunning | null;
-  /** A failed app-level guard check: unknown, so restores stay disabled. */
+  /** No current app-level guard answer: unknown, so restores stay disabled. */
   gameGuardUnknown?: boolean;
+  /** The unknown state is a new folder's first check, still pending. */
+  gameGuardChecking?: boolean;
   /** Ask the app-level poll to re-check after a `game_running` error. */
   refreshGameRunning?: () => void | Promise<void>;
   onRestored?: (stack: ResourceStack) => void;
@@ -35,6 +37,7 @@ export default function BackupsPanel({
   activeGameDir,
   gameRunning,
   gameGuardUnknown = false,
+  gameGuardChecking = false,
   refreshGameRunning = () => {},
   onRestored,
 }: BackupsPanelProps) {
@@ -56,6 +59,13 @@ export default function BackupsPanel({
   const guardUnknown =
     gameGuardUnknown || (gameRunning === undefined && ownUnknown);
   const blocked = running !== null || guardUnknown;
+  const restoreTitle = running
+    ? 'Close Minecraft before restoring'
+    : gameGuardChecking
+      ? 'Checking whether Minecraft is running'
+      : guardUnknown
+        ? 'Mine Utils could not check whether Minecraft is running'
+        : undefined;
 
   // A changed game dir replaces the whole table. The five-second running poll
   // object identity is deliberately not a dependency: it would flash the list.
@@ -234,13 +244,7 @@ export default function BackupsPanel({
                     type="button"
                     className="button"
                     disabled={blocked || restoring !== null}
-                    title={
-                      running
-                        ? 'Close Minecraft before restoring'
-                        : guardUnknown
-                          ? 'Mine Utils could not check whether Minecraft is running'
-                          : undefined
-                    }
+                    title={restoreTitle}
                     onClick={() => void handleRestore(backup.file_name)}
                   >
                     {restoring === backup.file_name ? 'Restoring…' : 'Restore'}
@@ -299,13 +303,7 @@ export default function BackupsPanel({
                             type="button"
                             className="button"
                             disabled={blocked || levelRestoring !== null}
-                            title={
-                              running
-                                ? 'Close Minecraft before restoring'
-                                : guardUnknown
-                                  ? 'Mine Utils could not check whether Minecraft is running'
-                                  : undefined
-                            }
+                            title={restoreTitle}
                             onClick={() => void handleLevelRestore(group.dirName, group.label, backup.file_name)}
                           >
                             {levelRestoring === key ? 'Restoring…' : 'Restore'}

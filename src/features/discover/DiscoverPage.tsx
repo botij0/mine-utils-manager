@@ -13,8 +13,10 @@ interface DiscoverPageProps {
   client?: IpcClient;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
-  /** A failed guard check: unknown, so installs stay paused. */
+  /** No current guard answer: unknown, so installs stay paused. */
   gameGuardUnknown?: boolean;
+  /** The unknown state is a new folder's first check, still pending. */
+  gameGuardChecking?: boolean;
   /** False when no game dir is active: installs have nowhere to go. */
   hasGameDir?: boolean;
   /** Force the app-level game guard to re-check now. */
@@ -27,6 +29,7 @@ export default function DiscoverPage({
   client = ipc,
   gameRunning,
   gameGuardUnknown = false,
+  gameGuardChecking = false,
   hasGameDir = false,
   refreshGameRunning = () => {},
   onInstalled = () => {},
@@ -93,6 +96,7 @@ export default function DiscoverPage({
         <GameRunningBanner
           running={gameRunning ?? null}
           guardUnknown={gameGuardUnknown}
+          checking={gameGuardChecking}
           staleLocks={[]}
           supported
           onRecheck={() => void refreshGameRunning()}

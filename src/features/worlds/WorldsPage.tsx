@@ -15,8 +15,10 @@ interface WorldsPageProps {
   client?: WorldsClient;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
-  /** A failed guard check is unknown, so writes stay paused. */
+  /** No current guard answer is unknown, so writes stay paused. */
   gameGuardUnknown?: boolean;
+  /** The unknown state is a new folder's first check, still pending. */
+  gameGuardChecking?: boolean;
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
 }
@@ -25,6 +27,7 @@ export default function WorldsPage({
   client = ipc,
   gameRunning,
   gameGuardUnknown = false,
+  gameGuardChecking = false,
   refreshGameRunning = () => {},
 }: WorldsPageProps) {
   const {
@@ -283,6 +286,7 @@ export default function WorldsPage({
                   world={selected}
                   gameRunning={gameRunning}
                   gameGuardUnknown={gameGuardUnknown}
+                  gameGuardChecking={gameGuardChecking}
                   staleLocks={locked || running ? [] : (stack?.stale_locks ?? [])}
                   refreshGameRunning={refreshGameRunning}
                   onRefresh={refreshAfterGuard}

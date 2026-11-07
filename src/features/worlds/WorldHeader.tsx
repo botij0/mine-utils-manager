@@ -7,8 +7,10 @@ interface WorldHeaderProps {
   world: World;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
-  /** A failed app-level guard check is unknown, so writes stay paused. */
+  /** No current app-level guard answer is unknown, so writes stay paused. */
   gameGuardUnknown?: boolean;
+  /** The unknown state is a new folder's first check, still pending. */
+  gameGuardChecking?: boolean;
   /** Stale `session.lock` files from the world's stack. Never blocking. */
   staleLocks?: string[];
   /** Force the app-level game guard to re-check now. */
@@ -23,6 +25,7 @@ export default function WorldHeader({
   world,
   gameRunning,
   gameGuardUnknown = false,
+  gameGuardChecking = false,
   staleLocks = [],
   refreshGameRunning,
   onRefresh,
@@ -85,6 +88,7 @@ export default function WorldHeader({
         <GameRunningBanner
           running={null}
           guardUnknown={!locked && !running && gameGuardUnknown}
+          checking={gameGuardChecking}
           staleLocks={staleLocks}
           supported={world.detection_supported}
           onRecheck={() => void refresh?.()}

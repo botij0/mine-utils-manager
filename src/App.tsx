@@ -52,9 +52,7 @@ export default function App({ client = ipc }: AppProps) {
   // Undefined until the first check lands, so the pages can tell "not yet
   // checked" apart from a fresh "not running" result.
   const [gameRunning, setGameRunning] = useState<GameRunning | null | undefined>(undefined);
-  // A failed check is unknown, not evidence the game stopped. The last known
-  // running value stays and writes stay paused until a check succeeds.
-  const [gameGuardUnknown, setGameGuardUnknown] = useState(false);
+  const [guardPause, setGuardPause] = useState<'checking' | 'unknown' | null>(null);
   // True once the stored config lands, so onboarding only shows for a real
   // first run and never for the default placeholder.
   const [configReady, setConfigReady] = useState(false);
@@ -101,12 +99,12 @@ export default function App({ client = ipc }: AppProps) {
       if (sent <= checks.applied) return;
       checks.applied = sent;
       setGameRunning(running);
-      setGameGuardUnknown(false);
+      setGuardPause(null);
     } catch {
       if (sent <= checks.applied) return;
       checks.applied = sent;
       // Keep the last known value: only a successful check may clear it.
-      setGameGuardUnknown(true);
+      setGuardPause('unknown');
     } finally {
       clearTimeout(timeout);
     }
@@ -120,7 +118,7 @@ export default function App({ client = ipc }: AppProps) {
     const checks = guardChecks.current;
     checks.applied = checks.issued;
     const folderChanged = checks.dir !== undefined && checks.dir !== config.active_game_dir;
-    if (folderChanged) setGameGuardUnknown(true);
+    if (folderChanged) setGuardPause('checking');
     checks.dir = config.active_game_dir;
     if (!document.hidden) void refreshGameRunning();
     const tick = () => {
@@ -219,7 +217,8 @@ export default function App({ client = ipc }: AppProps) {
               key={`packs-${refreshEpoch}`}
               client={client}
               gameRunning={gameRunning}
-              gameGuardUnknown={gameGuardUnknown}
+              gameGuardUnknown={guardPause !== null}
+              gameGuardChecking={guardPause === 'checking'}
               refreshGameRunning={refreshGameRunning}
             />
           ) : null}
@@ -228,7 +227,8 @@ export default function App({ client = ipc }: AppProps) {
               key={`worlds-${refreshEpoch}`}
               client={client}
               gameRunning={gameRunning}
-              gameGuardUnknown={gameGuardUnknown}
+              gameGuardUnknown={guardPause !== null}
+              gameGuardChecking={guardPause === 'checking'}
               refreshGameRunning={refreshGameRunning}
             />
           ) : null}
@@ -236,7 +236,8 @@ export default function App({ client = ipc }: AppProps) {
             <DiscoverPage
               client={client}
               gameRunning={gameRunning}
-              gameGuardUnknown={gameGuardUnknown}
+              gameGuardUnknown={guardPause !== null}
+              gameGuardChecking={guardPause === 'checking'}
               hasGameDir={config.active_game_dir != null}
               refreshGameRunning={refreshGameRunning}
               onInstalled={() => setRefreshEpoch((epoch) => epoch + 1)}
@@ -247,7 +248,8 @@ export default function App({ client = ipc }: AppProps) {
               client={client}
               config={config}
               gameRunning={gameRunning}
-              gameGuardUnknown={gameGuardUnknown}
+              gameGuardUnknown={guardPause !== null}
+              gameGuardChecking={guardPause === 'checking'}
               refreshGameRunning={refreshGameRunning}
               onConfigChanged={setConfig}
             />
