@@ -442,8 +442,8 @@ describe('App', () => {
     client.getGameGuard = () => {
       const dir = client.config.active_game_dir;
       checkedDirs.push(dir);
-      const firstForPrism = dir === '/home/demo/prism' && !checkedDirs.slice(0, -1).includes(dir);
-      return firstForPrism ? new Promise(() => {}) : guard();
+      const prismChecks = checkedDirs.filter((checked) => checked === '/home/demo/prism').length;
+      return dir === '/home/demo/prism' && prismChecks === 1 ? new Promise(() => {}) : guard();
     };
     render(<App client={client} />);
 

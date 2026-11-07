@@ -13,6 +13,7 @@ import WorldsPage from './features/worlds/WorldsPage';
 type PageId = 'packs' | 'worlds' | 'discover' | 'settings';
 
 const GUARD_POLL_MS = 5000;
+const GUARD_TIMEOUT_MS = 3 * GUARD_POLL_MS;
 
 const PAGES: { id: PageId; label: string }[] = [
   { id: 'packs', label: 'Resource Packs' },
@@ -89,8 +90,14 @@ export default function App({ client = ipc }: AppProps) {
     const checks = guardChecks.current;
     checks.issued += 1;
     const sent = checks.issued;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      const running = await activeGameRunning(client);
+      const running = await Promise.race([
+        activeGameRunning(client),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(reject, GUARD_TIMEOUT_MS);
+        }),
+      ]);
       if (sent <= checks.applied) return;
       checks.applied = sent;
       setGameRunning(running);
@@ -100,6 +107,8 @@ export default function App({ client = ipc }: AppProps) {
       checks.applied = sent;
       // Keep the last known value: only a successful check may clear it.
       setGameGuardUnknown(true);
+    } finally {
+      clearTimeout(timeout);
     }
   }, [client]);
 
