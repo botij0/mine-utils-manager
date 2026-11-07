@@ -952,6 +952,7 @@ pub fn pack_names(resourcepacks: &Path) -> Result<BTreeSet<String>, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs_commit::no_replace_fallback;
     use crate::pack::{FormatVersion, PackKind};
     use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt as _;
@@ -1494,6 +1495,84 @@ mod tests {
             .collect();
         left.sort();
         assert_eq!(left, ["DirPack", "ZipPack.zip"]);
+        assert!(trash.calls().is_empty());
+    }
+
+    fn entry_summary(path: &Path) -> String {
+        let entry = std::fs::symlink_metadata(path).unwrap();
+        if entry.is_symlink() {
+            format!("symlink to {}", std::fs::read_link(path).unwrap().display())
+        } else if entry.is_dir() {
+            format!(
+                "dir with {} entries",
+                std::fs::read_dir(path).unwrap().count()
+            )
+        } else {
+            format!("file {}", std::fs::read_to_string(path).unwrap())
+        }
+    }
+
+    #[test]
+    fn a_folder_import_through_the_link_fallback_lands_or_reports_the_rival() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let source = root.path().join("incoming/DirPack");
+        std::fs::create_dir_all(source.join("assets")).unwrap();
+        std::fs::write(source.join("pack.mcmeta"), mcmeta(7, None, "Dir")).unwrap();
+        let destination = resourcepacks.join("DirPack");
+        type MakeRival = fn(&Path);
+        let rivals: [(&str, MakeRival); 4] = [
+            ("no rival", |_| {}),
+            ("dangling symlink", |path| {
+                std::os::unix::fs::symlink("missing", path).unwrap()
+            }),
+            ("empty dir", |path| std::fs::create_dir(path).unwrap()),
+            ("regular file", |path| {
+                std::fs::write(path, b"rival").unwrap()
+            }),
+        ];
+
+        let mut seen = Vec::new();
+        for (label, make_rival) in rivals {
+            let outcome = import_pack_with_commit(
+                &source,
+                &resourcepacks,
+                &icons,
+                ImportChoice::Default,
+                &hashes,
+                &trash,
+                |tmp, dest| {
+                    make_rival(dest);
+                    no_replace_fallback(tmp, dest)
+                },
+            );
+            let outcome = match outcome {
+                Ok(ImportOutcome::Imported { .. }) => "imported".to_string(),
+                Ok(ImportOutcome::Collision { name }) => format!("collision {name}"),
+                other => format!("{other:?}"),
+            };
+            seen.push(format!(
+                "{label}: {outcome}; destination {}; resourcepacks [{}]",
+                entry_summary(&destination),
+                Vec::from_iter(pack_names(&resourcepacks).unwrap()).join(", ")
+            ));
+            if std::fs::symlink_metadata(&destination).unwrap().is_dir() {
+                std::fs::remove_dir_all(&destination).unwrap();
+            } else {
+                std::fs::remove_file(&destination).unwrap();
+            }
+        }
+
+        assert_eq!(
+            seen,
+            [
+                "no rival: imported; destination dir with 2 entries; resourcepacks [DirPack]",
+                "dangling symlink: collision DirPack; destination symlink to missing; resourcepacks [DirPack]",
+                "empty dir: collision DirPack; destination dir with 0 entries; resourcepacks [DirPack]",
+                "regular file: collision DirPack; destination file rival; resourcepacks [DirPack]",
+            ]
+        );
         assert!(trash.calls().is_empty());
     }
 

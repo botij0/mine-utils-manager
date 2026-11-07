@@ -37,7 +37,7 @@ pub(crate) fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()>
 
 /// A hard link (same directory, so same filesystem) is the atomic
 /// no-replace, with an exists-checked rename as the last resort.
-fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<()> {
+pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<()> {
     match std::fs::hard_link(temp, dest) {
         Ok(()) => {
             if std::fs::remove_file(temp).is_err() {
@@ -119,5 +119,67 @@ mod tests {
 
         assert_eq!(result, Ok(()));
         assert_eq!(std::fs::read(&dest).unwrap(), b"pack");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_checked_rename_never_replaces_a_rival() {
+        type MakeRival = fn(&Path);
+        let rivals: [(&str, MakeRival); 3] = [
+            ("dangling symlink", |path| {
+                std::os::unix::fs::symlink("missing", path).unwrap()
+            }),
+            ("empty dir", |path| std::fs::create_dir(path).unwrap()),
+            ("regular file", |path| {
+                std::fs::write(path, b"rival").unwrap()
+            }),
+        ];
+        let mut seen = Vec::new();
+        for temp_kind in ["dir", "file"] {
+            for (label, make_rival) in rivals {
+                let root = tempfile::tempdir().unwrap();
+                let temp = root.path().join(".Pack.tmp");
+                if temp_kind == "dir" {
+                    std::fs::create_dir(&temp).unwrap();
+                } else {
+                    std::fs::write(&temp, b"pack").unwrap();
+                }
+                let dest = root.path().join("Pack");
+                make_rival(&dest);
+
+                let result = checked_rename(&temp, &dest).map_err(|err| err.kind());
+
+                let entry = std::fs::symlink_metadata(&dest).unwrap();
+                let left = if entry.is_symlink() {
+                    format!(
+                        "symlink to {}",
+                        std::fs::read_link(&dest).unwrap().display()
+                    )
+                } else if entry.is_dir() {
+                    format!(
+                        "dir with {} entries",
+                        std::fs::read_dir(&dest).unwrap().count()
+                    )
+                } else {
+                    format!("file {}", std::fs::read_to_string(&dest).unwrap())
+                };
+                seen.push(format!(
+                    "{temp_kind} temp, {label}: {result:?}; dest {left}; temp kept {}",
+                    temp.exists()
+                ));
+            }
+        }
+
+        assert_eq!(
+            seen,
+            [
+                "dir temp, dangling symlink: Err(AlreadyExists); dest symlink to missing; temp kept true",
+                "dir temp, empty dir: Err(AlreadyExists); dest dir with 0 entries; temp kept true",
+                "dir temp, regular file: Err(AlreadyExists); dest file rival; temp kept true",
+                "file temp, dangling symlink: Err(AlreadyExists); dest symlink to missing; temp kept true",
+                "file temp, empty dir: Err(AlreadyExists); dest dir with 0 entries; temp kept true",
+                "file temp, regular file: Err(AlreadyExists); dest file rival; temp kept true",
+            ]
+        );
     }
 }
