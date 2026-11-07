@@ -1,7 +1,11 @@
 import type { FormatRange, FormatVersion, Pack, PackKind } from './types';
 
+/** The minor the backend uses for a max written as a whole number, which
+ *  accepts every minor of that major. */
+export const ANY_MINOR = 0x7fffffff;
+
 export function formatVersionLabel(version: FormatVersion): string {
-  return version.minor === 0
+  return version.minor === 0 || version.minor === ANY_MINOR
     ? String(version.major)
     : `${version.major}.${version.minor}`;
 }
@@ -10,10 +14,9 @@ export function formatRangeLabel(range: FormatRange | null): string {
   if (!range || (!range.min && !range.max)) return 'Unknown format';
   const { min, max } = range;
   if (min && max) {
-    if (min.major === max.major && min.minor === max.minor) {
-      return formatVersionLabel(min);
-    }
-    return `${formatVersionLabel(min)} to ${formatVersionLabel(max)}`;
+    const low = formatVersionLabel(min);
+    const high = formatVersionLabel(max);
+    return low === high ? low : `${low} to ${high}`;
   }
   if (min) return `${formatVersionLabel(min)} and up`;
   if (max) return `up to ${formatVersionLabel(max)}`;

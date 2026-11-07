@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 
 /// A pack format number. Minecraft writes integers and, since 1.21.9, dotted
 /// numbers such as 75.0 and 94.1. The minor part is always present so the two
-/// spellings compare and sort the same way.
+/// spellings compare and sort the same way. A `max_format` written as `94` or
+/// `[94]` accepts every minor of that major; the game stores that as the minor
+/// `ANY_MINOR`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FormatVersion {
     pub major: u32,
@@ -13,6 +15,8 @@ pub struct FormatVersion {
 }
 
 impl FormatVersion {
+    pub const ANY_MINOR: u32 = 0x7fff_ffff;
+
     pub fn new(major: u32, minor: u32) -> Self {
         FormatVersion { major, minor }
     }
@@ -21,9 +25,17 @@ impl FormatVersion {
         FormatVersion { major, minor: 0 }
     }
 
-    /// "34", "75", or "94.1". A zero minor stays hidden.
+    /// The upper bound that accepts every minor of `major`.
+    pub fn any_minor_of(major: u32) -> Self {
+        FormatVersion {
+            major,
+            minor: Self::ANY_MINOR,
+        }
+    }
+
+    /// "34", "75", or "94.1". A zero or any-minor minor stays hidden.
     pub fn label(&self) -> String {
-        if self.minor == 0 {
+        if self.minor == 0 || self.minor == Self::ANY_MINOR {
             self.major.to_string()
         } else {
             format!("{}.{}", self.major, self.minor)
@@ -68,8 +80,14 @@ impl FormatRange {
             (None, None) => "unknown".to_string(),
             (Some(min), None) => format!("{} and up", min.label()),
             (None, Some(max)) => format!("up to {}", max.label()),
-            (Some(min), Some(max)) if min == max => min.label(),
-            (Some(min), Some(max)) => format!("{} to {}", min.label(), max.label()),
+            (Some(min), Some(max)) => {
+                let (min, max) = (min.label(), max.label());
+                if min == max {
+                    min
+                } else {
+                    format!("{min} to {max}")
+                }
+            }
         }
     }
 }
