@@ -90,9 +90,9 @@ fn checked_rename(
     rename(temp, dest).map_err(|err| taken_as_already_exists(err, rivals))
 }
 
-/// What `rename` reports instead of `EEXIST` when a rival holds `dest`: a
-/// non-directory or a directory with entries for a directory temp, a
-/// directory for a file temp.
+/// `rename` reports a rival at `dest` with these errors instead of `EEXIST`.
+/// A directory temp gets them for a non-directory or a directory with
+/// entries, and a file temp gets them for a directory.
 const DIR_RIVALS: &[ErrorKind] = &[ErrorKind::NotADirectory, ErrorKind::DirectoryNotEmpty];
 const FILE_RIVALS: &[ErrorKind] = &[ErrorKind::IsADirectory];
 
@@ -104,8 +104,6 @@ fn taken_as_already_exists(err: std::io::Error, rivals: &[ErrorKind]) -> std::io
     }
 }
 
-/// Removes the claim only while `dest` is still the directory `create_dir`
-/// made, so a rival's directory that replaced it stays.
 fn remove_claim(dest: &Path, claim: &std::fs::Metadata) -> bool {
     std::fs::symlink_metadata(dest).is_ok_and(|now| same_entry(&now, claim))
         && std::fs::remove_dir(dest).is_ok()
@@ -137,6 +135,7 @@ fn rename_noreplace_unsupported(err: &std::io::Error) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn entry_summary(path: &Path) -> String {
         let Ok(entry) = std::fs::symlink_metadata(path) else {
             return "missing".to_string();
@@ -157,11 +156,11 @@ mod tests {
     fn first_rename_fails_with(errno: i32) -> impl FnMut(&Path, &Path) -> std::io::Result<()> {
         let mut failed = false;
         move |from, to| {
-            if std::mem::replace(&mut failed, true) {
-                std::fs::rename(from, to)
-            } else {
-                Err(std::io::Error::from_raw_os_error(errno))
+            if failed {
+                return std::fs::rename(from, to);
             }
+            failed = true;
+            Err(std::io::Error::from_raw_os_error(errno))
         }
     }
 
