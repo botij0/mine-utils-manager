@@ -3,7 +3,7 @@ import { ipc } from './lib/ipc';
 import type { IpcClient } from './lib/ipc';
 import type { AppError, Config, GameRunning, Theme } from './lib/types';
 import { defaultConfig } from './lib/types';
-import { toAppError } from './lib/ipc';
+import { activeGameRunning, toAppError } from './lib/ipc';
 import DiscoverPage from './features/discover/DiscoverPage';
 import Onboarding from './features/onboarding/Onboarding';
 import PacksPage from './features/packs/PacksPage';
@@ -63,7 +63,10 @@ export default function App({ client = ipc }: AppProps) {
   const [refreshEpoch, setRefreshEpoch] = useState(0);
   // Guard answers land in the order they were sent: an answer older than the
   // last one applied, or sent before the active folder changed, is dropped.
-  const guardChecks = useRef({ issued: 0, applied: 0, inFlight: 0 });
+  const guardChecks = useRef<{ issued: number; applied: number; dir?: string | null }>({
+    issued: 0,
+    applied: 0,
+  });
 
   useEffect(() => {
     window.location.hash = page;
@@ -86,27 +89,17 @@ export default function App({ client = ipc }: AppProps) {
     const checks = guardChecks.current;
     checks.issued += 1;
     const sent = checks.issued;
-    checks.inFlight += 1;
     try {
-      const guard = await client.getGameGuard();
+      const running = await activeGameRunning(client);
       if (sent <= checks.applied) return;
       checks.applied = sent;
-      setGameRunning(guard.running);
+      setGameRunning(running);
       setGameGuardUnknown(false);
-    } catch (err) {
+    } catch {
       if (sent <= checks.applied) return;
       checks.applied = sent;
-      // Without a folder there is nothing to guard, and every write already
-      // needs one, so this is an answer rather than a failed check.
-      if (toAppError(err).code === 'no_active_game_dir') {
-        setGameRunning(null);
-        setGameGuardUnknown(false);
-        return;
-      }
       // Keep the last known value: only a successful check may clear it.
       setGameGuardUnknown(true);
-    } finally {
-      checks.inFlight -= 1;
     }
   }, [client]);
 
@@ -117,9 +110,12 @@ export default function App({ client = ipc }: AppProps) {
     if (!configReady) return undefined;
     const checks = guardChecks.current;
     checks.applied = checks.issued;
+    const folderChanged = checks.dir !== undefined && checks.dir !== config.active_game_dir;
+    if (folderChanged) setGameGuardUnknown(true);
+    checks.dir = config.active_game_dir;
     if (!document.hidden) void refreshGameRunning();
     const tick = () => {
-      if (!document.hidden && checks.inFlight === 0) void refreshGameRunning();
+      if (!document.hidden && checks.applied === checks.issued) void refreshGameRunning();
     };
     const timer = setInterval(tick, GUARD_POLL_MS);
     document.addEventListener('visibilitychange', tick);

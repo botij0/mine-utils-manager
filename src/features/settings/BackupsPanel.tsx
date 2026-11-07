@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { BackupsClient } from '../../lib/ipc';
-import { toAppError } from '../../lib/ipc';
+import { activeGameRunning, toAppError } from '../../lib/ipc';
 import type {
   BackupInfo,
   GameRunning,
@@ -86,11 +86,10 @@ export default function BackupsPanel({
   useEffect(() => {
     if (gameRunning !== undefined) return undefined;
     let cancelled = false;
-    client
-      .getResourceStack()
-      .then((stack) => {
+    activeGameRunning(client)
+      .then((running) => {
         if (cancelled) return;
-        setOwnRunning(stack.running);
+        setOwnRunning(running);
         setOwnUnknown(false);
       })
       .catch(() => {

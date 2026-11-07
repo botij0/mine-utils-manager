@@ -12,6 +12,7 @@ import type {
   GameDirEntry,
   GameDirState,
   GameGuard,
+  GameRunning,
   ImportChoice,
   ImportOutcome,
   LevelBackupInfo,
@@ -61,11 +62,9 @@ export interface WorldsClient {
 /** The narrow surface `BackupsPanel` needs: options backups, the game guard,
  *  and every world's `level.dat` backups in one batch call. Tests fake this
  *  instead of the whole `IpcClient`. */
-export type BackupsClient = Pick<
-  PackClient,
-  'listOptionsBackups' | 'restoreOptionsBackup' | 'getResourceStack'
-> &
-  Pick<WorldsClient, 'listLevelBackups' | 'listAllLevelBackups' | 'restoreLevelBackup'>;
+export type BackupsClient = Pick<PackClient, 'listOptionsBackups' | 'restoreOptionsBackup'> &
+  Pick<WorldsClient, 'listLevelBackups' | 'listAllLevelBackups' | 'restoreLevelBackup'> &
+  Pick<IpcClient, 'getGameGuard'>;
 
 /** The Modrinth discovery surface. Search fires only from the Discover page:
  *  the local tabs never trigger a network request. */
@@ -108,6 +107,19 @@ export function toAppError(err: unknown): IpcError {
   }
   if (err instanceof Error) return new IpcError('unknown', err.message);
   return new IpcError('unknown', String(err));
+}
+
+/** Without a folder there is nothing to guard, and every write already needs
+ *  one, so `no_active_game_dir` is an answer rather than a failed check. */
+export async function activeGameRunning(
+  client: Pick<IpcClient, 'getGameGuard'>,
+): Promise<GameRunning | null> {
+  try {
+    return (await client.getGameGuard()).running;
+  } catch (err) {
+    if (toAppError(err).code === 'no_active_game_dir') return null;
+    throw err;
+  }
 }
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
