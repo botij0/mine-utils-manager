@@ -14,8 +14,7 @@ afterEach(() => {
   window.location.hash = '';
 });
 
-/** Counts guard requests and records the folder each one was sent for. */
-function countGuardChecks(client: FakeClient): (string | null)[] {
+function recordGuardDirs(client: FakeClient): (string | null)[] {
   const checkedDirs: (string | null)[] = [];
   const guard = client.getGameGuard;
   client.getGameGuard = () => {
@@ -173,7 +172,7 @@ describe('App', () => {
     client.getResourceStack = async () => {
       throw new IpcError('no_active_game_dir', 'no active game dir; pick one in Settings first');
     };
-    const checkedDirs = countGuardChecks(client);
+    const checkedDirs = recordGuardDirs(client);
     render(<App client={client} />);
 
     await user.click(await screen.findByRole('button', { name: 'Skip for now' }));
@@ -192,7 +191,7 @@ describe('App', () => {
       gameDir('/home/demo/prism', true, true),
     ]);
     await client.setActiveGameDir('/home/demo/.minecraft');
-    const checkedDirs = countGuardChecks(client);
+    const checkedDirs = recordGuardDirs(client);
     render(<App client={client} />);
 
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
@@ -204,10 +203,64 @@ describe('App', () => {
     );
   });
 
+  it('drops a guard answer sent for the previous folder', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient({
+      gameDirs: [gameDir('/home/demo/.minecraft', true, true), gameDir('/home/demo/prism', true, true)],
+      backups: [
+        {
+          file_name: '20261025T090000.000000000-options.txt',
+          bytes: 4096,
+          display: '2026-10-25 09:00:00 UTC',
+        },
+      ],
+    });
+    await client.setActiveGameDir('/home/demo/.minecraft');
+    const answers = new Map<string | null, () => void>();
+    client.getGameGuard = () => {
+      const dir = client.config.active_game_dir;
+      return new Promise((resolve) =>
+        answers.set(dir, () =>
+          resolve({
+            running:
+              dir === '/home/demo/.minecraft'
+                ? {
+                    kind: 'process',
+                    detail: 'pid 4242 runs java',
+                    lock_path: null,
+                    pid: 4242,
+                    command: 'java -jar client.jar',
+                  }
+                : null,
+            stale_locks: [],
+            detection_supported: true,
+          }),
+        ),
+      );
+    };
+    render(<App client={client} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Settings' }));
+    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await waitFor(() =>
+      expect([...answers.keys()]).toEqual(['/home/demo/.minecraft', '/home/demo/prism']),
+    );
+    await act(async () => {
+      answers.get('/home/demo/.minecraft')?.();
+    });
+
+    expect(await screen.findByRole('button', { name: 'Restore' })).toBeEnabled();
+
+    await act(async () => {
+      answers.get('/home/demo/prism')?.();
+    });
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
+  });
+
   it('sends no guard request while the window is hidden and checks once it is shown', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const client = await shellClient();
-    const checkedDirs = countGuardChecks(client);
+    const checkedDirs = recordGuardDirs(client);
     render(<App client={client} />);
     await waitFor(() => expect(checkedDirs).toHaveLength(1));
 
