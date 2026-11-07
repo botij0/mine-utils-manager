@@ -205,7 +205,7 @@ World selection determines a `WorldPaths` or `DataPaths` context. The backend co
 
 The UI merges these inputs into rows. This lets it show enabled entries, disabled entries, missing references, and files that exist on disk but are absent from `level.dat`.
 
-Writes reject symlinked `level.dat` or `datapacks` targets. Datapack updates check both the game-wide guard and the selected world's own lock. Deletion removes stack references before moving the pack to the system trash. A missing reference can be removed without requiring the file to exist.
+Writes reject symlinked `level.dat` or `datapacks` targets. Datapack updates check both the game-wide guard and the selected world's own lock. Deletion moves the pack into `Disabled` before moving it to the system trash, then removes the reference once the trash succeeds. Once the pack is in `Disabled`, a failure of the guard check before the trash, or of the trash itself, leaves it installed and disabled, so Minecraft does not enable it again as a newly found pack. Only the first of these `level.dat` writes takes a backup, so the newest backup is the file from before the delete. A missing reference can be removed without requiring the file to exist.
 
 ## Write safety model
 

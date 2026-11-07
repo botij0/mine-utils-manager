@@ -125,8 +125,8 @@ pub async fn reorder_datapacks(
     .map_err(join_error)?
 }
 
-/// Delete one datapack: guard, clean both lists, guard again, trash. Returns
-/// the refreshed stack.
+/// Delete one datapack: guard, move it to `Disabled`, guard again, trash,
+/// then drop the reference. Returns the refreshed stack.
 #[tauri::command]
 pub async fn delete_datapack(
     state: State<'_, AppState>,
