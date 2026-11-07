@@ -134,12 +134,17 @@ fn exact(entries: &[FormatRangeEntry], version: FormatVersion) -> Option<&str> {
 }
 
 /// A lower bound: the exact row, or for a whole number such as `101` the
-/// lowest row of that major (`101.1`), the first one it admits.
-fn lookup_min(entries: &[FormatRangeEntry], version: FormatVersion) -> Option<&str> {
-    exact(entries, version).or_else(|| {
+/// lowest row of that major (`101.1`) that `max` still admits.
+fn lookup_min(
+    entries: &[FormatRangeEntry],
+    min: FormatVersion,
+    max: Option<FormatVersion>,
+) -> Option<&str> {
+    exact(entries, min).or_else(|| {
         entries
             .iter()
-            .filter(|entry| entry.format.major == version.major && entry.format > version)
+            .filter(|entry| entry.format.major == min.major && entry.format > min)
+            .filter(|entry| max.is_none_or(|max| entry.format <= max))
             .min_by_key(|entry| entry.format)
             .map(|entry| entry.label.as_str())
     })
@@ -172,7 +177,7 @@ fn half_label(entries: &[FormatRangeEntry], range: &FormatRange) -> Option<Strin
             if min > max {
                 return None;
             }
-            let start = lookup_min(entries, min)?;
+            let start = lookup_min(entries, min, range.max)?;
             if min == max {
                 return Some(start.to_string());
             }
@@ -185,7 +190,7 @@ fn half_label(entries: &[FormatRangeEntry], range: &FormatRange) -> Option<Strin
             }
         }
         (Some(min), None) => {
-            lookup_min(entries, min).map(|label| format!("{} and newer", start_of(label)))
+            lookup_min(entries, min, None).map(|label| format!("{} and newer", start_of(label)))
         }
         (None, Some(max)) => {
             lookup_max(entries, max).map(|label| format!("up to {}", end_of(label)))

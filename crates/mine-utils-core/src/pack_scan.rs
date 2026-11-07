@@ -13,7 +13,7 @@ use crate::error::AppError;
 use crate::format_table::FormatTable;
 use crate::icon_cache::{icon_within_pixel_cap, IconCache};
 use crate::pack::{
-    ImportChoice, ImportOutcome, Pack, PackError, PackIssue, PackKind, PackLocation,
+    FormatVersion, ImportChoice, ImportOutcome, Pack, PackError, PackIssue, PackKind, PackLocation,
 };
 use crate::pack_meta::parse_pack_meta;
 
@@ -350,7 +350,9 @@ fn finish_pack(
         location,
         kind,
         description: meta.description.clone(),
-        format: range.and_then(|range| range.min.or(range.max)),
+        format: range
+            .and_then(|range| range.min.or(range.max))
+            .map(FormatVersion::declared),
         format_range: range,
         game_label,
         icon,

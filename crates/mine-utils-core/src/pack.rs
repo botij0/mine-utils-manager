@@ -33,12 +33,23 @@ impl FormatVersion {
         }
     }
 
+    /// The version as pack.mcmeta wrote it: an any-minor max reads back as
+    /// its whole major.
+    pub fn declared(self) -> Self {
+        if self.minor == Self::ANY_MINOR {
+            Self::from_major(self.major)
+        } else {
+            self
+        }
+    }
+
     /// "34", "75", or "94.1". A zero or any-minor minor stays hidden.
     pub fn label(&self) -> String {
-        if self.minor == 0 || self.minor == Self::ANY_MINOR {
-            self.major.to_string()
+        let FormatVersion { major, minor } = self.declared();
+        if minor == 0 {
+            major.to_string()
         } else {
-            format!("{}.{}", self.major, self.minor)
+            format!("{major}.{minor}")
         }
     }
 }
