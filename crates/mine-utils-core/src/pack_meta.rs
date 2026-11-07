@@ -203,6 +203,37 @@ mod tests {
     }
 
     #[test]
+    fn one_element_and_integer_formats_follow_the_mcmeta_spec() {
+        let meta = parse(r#"{"pack":{"min_format":[82],"max_format":94}}"#);
+        assert_eq!(meta.min_format, Some(FormatVersion::new(82, 0)));
+        assert_eq!(meta.max_format, Some(FormatVersion::new(94, 0x7fff_ffff)));
+
+        let meta = parse(r#"{"pack":{"min_format":82,"max_format":[94]}}"#);
+        assert_eq!(meta.min_format, Some(FormatVersion::new(82, 0)));
+        assert_eq!(meta.max_format, Some(FormatVersion::new(94, 0x7fff_ffff)));
+
+        let meta = parse(r#"{"pack":{"min_format":[82,1],"max_format":[94,1]}}"#);
+        assert_eq!(meta.min_format, Some(FormatVersion::new(82, 1)));
+        assert_eq!(meta.max_format, Some(FormatVersion::new(94, 1)));
+    }
+
+    #[test]
+    fn supported_formats_accepts_an_integer_and_a_single_element_array() {
+        for json in [
+            r#"{"pack":{"supported_formats":42}}"#,
+            r#"{"pack":{"supported_formats":[42]}}"#,
+        ] {
+            let range = parse(json).supported_formats.unwrap();
+            assert_eq!(range.min, Some(FormatVersion::new(42, 0)), "{json}");
+            assert_eq!(
+                range.max,
+                Some(FormatVersion::new(42, 0x7fff_ffff)),
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
     fn plain_string_formats_parse_as_a_major_number() {
         let meta = parse(r#"{"pack":{"pack_format":"34","description":"S"}}"#);
         assert_eq!(meta.pack_format, Some(FormatVersion::from_major(34)));

@@ -46,6 +46,13 @@ describe('format labels', () => {
     expect(formatRangeLabel(null)).toBe('Unknown format');
   });
 
+  it('hides the any-minor marker of a max written as a whole number', () => {
+    const anyMinor = 2147483647;
+    expect(formatVersionLabel(version(94, anyMinor))).toBe('94');
+    expect(formatRangeLabel({ min: version(88), max: version(94, anyMinor) })).toBe('88 to 94');
+    expect(formatRangeLabel({ min: version(94), max: version(94, anyMinor) })).toBe('94');
+  });
+
   it('labels a lone min or max as open instead of dropping it', () => {
     expect(formatRangeLabel({ min: version(48), max: null })).toBe('48 and up');
     expect(formatRangeLabel({ min: null, max: version(42) })).toBe('up to 42');

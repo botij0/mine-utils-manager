@@ -365,6 +365,40 @@ mod tests {
     }
 
     #[test]
+    fn an_any_minor_max_labels_the_highest_row_of_that_major() {
+        let table = FormatTable::embedded();
+        let range = FormatRange {
+            min: Some(FormatVersion::from_major(88)),
+            max: Some(FormatVersion::new(94, 0x7fff_ffff)),
+        };
+        assert_eq!(
+            table.game_label(PackKind::Data, &range).as_deref(),
+            Some("1.21.9 to 1.21.11")
+        );
+        let lone_max = FormatRange {
+            min: None,
+            max: Some(FormatVersion::new(101, 0x7fff_ffff)),
+        };
+        assert_eq!(
+            table.game_label(PackKind::Data, &lone_max).as_deref(),
+            Some("up to 26.1.2")
+        );
+    }
+
+    #[test]
+    fn a_whole_number_min_matches_the_lowest_row_of_its_major() {
+        let table = FormatTable::embedded();
+        let range = FormatRange {
+            min: Some(FormatVersion::from_major(101)),
+            max: Some(FormatVersion::new(101, 0x7fff_ffff)),
+        };
+        assert_eq!(
+            table.game_label(PackKind::Data, &range).as_deref(),
+            Some("26.1 to 26.1.2")
+        );
+    }
+
+    #[test]
     fn open_ranges_name_the_open_end() {
         let table = FormatTable::embedded();
         assert_eq!(
