@@ -613,6 +613,27 @@ fn delete_of_a_disabled_pack_backs_up_the_pre_delete_file() {
 }
 
 #[test]
+fn delete_of_an_unlisted_pack_backs_up_the_pre_delete_file() {
+    let mut world = temp_world(&["vanilla"], &["file/old.zip"]);
+    world.paths.backups.keep = 10;
+    let pack = world.paths.datapacks_dir.join("gone.zip");
+    std::fs::write(&pack, b"zip").unwrap();
+    let outcome = data_stack::delete_datapack_safely_with_guard(
+        &world.paths,
+        &pack,
+        &RecordingTrash::new(),
+        &PassGuard,
+    )
+    .unwrap();
+    assert!(outcome.removed_references);
+    assert_eq!(
+        backed_up_lists(&world.paths),
+        vec![lists(&["vanilla"], &["file/old.zip"])]
+    );
+    assert_eq!(view(&world.paths), lists(&["vanilla"], &["file/old.zip"]));
+}
+
+#[test]
 fn restore_replaces_and_backs_up_current() {
     let world = temp_world(&["vanilla"], &[]);
     let first = std::fs::read(&world.paths.level_dat_path).unwrap();
