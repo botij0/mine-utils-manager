@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ipc } from './lib/ipc';
 import type { IpcClient } from './lib/ipc';
 import type { AppError, Config, GameRunning, Theme } from './lib/types';
@@ -11,6 +11,8 @@ import SettingsPage from './features/settings/SettingsPage';
 import WorldsPage from './features/worlds/WorldsPage';
 
 type PageId = 'packs' | 'worlds' | 'discover' | 'settings';
+
+const GUARD_POLL_MS = 5000;
 
 const PAGES: { id: PageId; label: string }[] = [
   { id: 'packs', label: 'Resource Packs' },
@@ -59,6 +61,10 @@ export default function App({ client = ipc }: AppProps) {
   const [onboarded, setOnboarded] = useState(false);
   // Bumped after a Discover install so Packs/Worlds refetch on return.
   const [refreshEpoch, setRefreshEpoch] = useState(0);
+  // Guard answers land in the order they were sent: an answer older than the
+  // last one applied, or sent before the active folder changed, is dropped.
+  const guardChecks = useRef({ issued: 0, applied: 0, inFlight: 0 });
+  const activeGameDir = config.active_game_dir;
 
   useEffect(() => {
     window.location.hash = page;
@@ -78,23 +84,51 @@ export default function App({ client = ipc }: AppProps) {
   }, [client]);
 
   const refreshGameRunning = useCallback(async () => {
+    const checks = guardChecks.current;
+    checks.issued += 1;
+    const sent = checks.issued;
+    checks.inFlight += 1;
     try {
-      const stack = await client.getResourceStack();
-      setGameRunning(stack.running);
+      const guard = await client.getGameGuard();
+      if (sent <= checks.applied) return;
+      checks.applied = sent;
+      setGameRunning(guard.running);
       setGameGuardUnknown(false);
-    } catch {
+    } catch (err) {
+      if (sent <= checks.applied) return;
+      checks.applied = sent;
+      // Without a folder there is nothing to guard, and every write already
+      // needs one, so this is an answer rather than a failed check.
+      if (toAppError(err).code === 'no_active_game_dir') {
+        setGameRunning(null);
+        setGameGuardUnknown(false);
+        return;
+      }
       // Keep the last known value: only a successful check may clear it.
       setGameGuardUnknown(true);
+    } finally {
+      checks.inFlight -= 1;
     }
   }, [client]);
 
   // Writes on any page stop while Minecraft runs. The callback is stable, so
-  // pages can force a fresh check without re-subscribing the poll.
+  // pages can force a fresh check without re-subscribing the poll. A new
+  // folder or a finished onboarding checks at once instead of waiting a tick.
   useEffect(() => {
-    void refreshGameRunning();
-    const timer = setInterval(() => void refreshGameRunning(), 5000);
-    return () => clearInterval(timer);
-  }, [refreshGameRunning]);
+    if (!configReady) return undefined;
+    const checks = guardChecks.current;
+    checks.applied = checks.issued;
+    if (!document.hidden) void refreshGameRunning();
+    const tick = () => {
+      if (!document.hidden && checks.inFlight === 0) void refreshGameRunning();
+    };
+    const timer = setInterval(tick, GUARD_POLL_MS);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [configReady, activeGameDir, onboarded, refreshGameRunning]);
 
   useEffect(() => {
     client
@@ -112,9 +146,8 @@ export default function App({ client = ipc }: AppProps) {
     return () => media.removeEventListener('change', onChange);
   }, [config.theme]);
 
-  const activeLabel = config.active_game_dir ?? 'No game dir selected';
-  const showOnboarding =
-    configReady && !onboarded && !config.active_game_dir && !error;
+  const activeLabel = activeGameDir ?? 'No game dir selected';
+  const showOnboarding = configReady && !onboarded && !activeGameDir && !error;
 
   const finishOnboarding = useCallback(() => {
     setOnboarded(true);
@@ -199,7 +232,7 @@ export default function App({ client = ipc }: AppProps) {
               client={client}
               gameRunning={gameRunning}
               gameGuardUnknown={gameGuardUnknown}
-              hasGameDir={config.active_game_dir != null}
+              hasGameDir={activeGameDir != null}
               refreshGameRunning={refreshGameRunning}
               onInstalled={() => setRefreshEpoch((epoch) => epoch + 1)}
             />

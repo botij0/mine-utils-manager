@@ -11,6 +11,7 @@ import type {
   FormatRange,
   GameDirEntry,
   GameDirState,
+  GameGuard,
   ImportChoice,
   ImportOutcome,
   LevelBackupInfo,
@@ -311,6 +312,16 @@ export const mockClient: IpcClient = {
   async getStartupWarning() {
     await delay();
     return null;
+  },
+  async getGameGuard() {
+    await delay();
+    if (!loadConfig().active_game_dir) {
+      throw new IpcError(
+        'no_active_game_dir',
+        'no active game dir; pick one in Settings first',
+      );
+    }
+    return mockGameGuard();
   },
   async listResourcePacks() {
     await delay();
@@ -1058,26 +1069,31 @@ function mockDeleteDatapack(world: string, path: string) {
   snapshotLevelBackup(world);
 }
 
-function mockResourceStack(): ResourceStack {
-  const running =
-    mockGameState === 'running'
-      ? {
-          kind: 'session_lock' as const,
-          detail: '/home/demo/.minecraft/saves/world/session.lock is locked by pid 4242',
-          lock_path: '/home/demo/.minecraft/saves/world/session.lock',
-          pid: 4242,
-          command: null,
-        }
-      : null;
+function mockGameGuard(): GameGuard {
   return {
-    entries: mockStack.resource.map(stackEntry),
-    incompatible: [...mockStack.incompatible],
-    running,
+    running:
+      mockGameState === 'running'
+        ? {
+            kind: 'session_lock',
+            detail: '/home/demo/.minecraft/saves/world/session.lock is locked by pid 4242',
+            lock_path: '/home/demo/.minecraft/saves/world/session.lock',
+            pid: 4242,
+            command: null,
+          }
+        : null,
     stale_locks:
       mockGameState === 'stale-lock'
         ? ['/home/demo/.minecraft/saves/world/session.lock']
         : [],
     detection_supported: true,
+  };
+}
+
+function mockResourceStack(): ResourceStack {
+  return {
+    entries: mockStack.resource.map(stackEntry),
+    incompatible: [...mockStack.incompatible],
+    ...mockGameGuard(),
   };
 }
 

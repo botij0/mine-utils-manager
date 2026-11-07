@@ -52,7 +52,6 @@ export interface FakeClient extends IpcClient {
   readonly restores: string[];
   readonly levelRestores: string[];
   restoredStack: ResourceStack | null;
-  getGameGuard(): Promise<GameGuard>;
 }
 
 export interface FakeClientOptions {

@@ -76,9 +76,10 @@ describe('App', () => {
       command: 'java -jar client.jar',
     };
     let fail = false;
-    client.getResourceStack = async () => {
+    client.getResourceStack = async () => stackResponse(null);
+    client.getGameGuard = async () => {
       if (fail) throw new IpcError('io', 'guard read failed');
-      return stackResponse(running);
+      return { running, stale_locks: [], detection_supported: true };
     };
 
     render(<App client={client} />);
@@ -99,7 +100,7 @@ describe('App', () => {
 
   it('shows the unavailable banner when the first guard check fails', async () => {
     const client = await shellClient();
-    client.getResourceStack = async () => {
+    client.getGameGuard = async () => {
       throw new IpcError('io', 'guard read failed');
     };
 

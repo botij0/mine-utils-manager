@@ -1,5 +1,6 @@
 pub mod discover;
 pub mod game_dirs;
+pub mod game_guard;
 pub mod packs;
 pub mod resource_stack;
 pub mod worlds;

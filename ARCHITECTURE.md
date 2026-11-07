@@ -85,8 +85,9 @@ There is no global frontend store or router dependency. `App.tsx` owns app-level
 
 - Loads `Config` before deciding whether to show onboarding.
 - Applies `system`, `light`, or `dark` to the document and follows system theme changes when needed.
-- Polls the resource stack every five seconds to obtain the shared game-running state.
-- Keeps writes paused when a guard check fails. Only a successful check can clear that state.
+- Polls `get_game_guard` every five seconds for the shared game-running state. The command only probes session locks and processes, so a missing or malformed `options.txt` cannot pause writes.
+- Checks at once when the active folder changes or onboarding finishes. A poll tick is skipped while the window is hidden or a check is in flight, and the window becoming visible triggers a check.
+- Treats `no_active_game_dir` as nothing to guard. Keeps writes paused when any other guard check fails. Only a successful check can clear that state.
 - Remounts Packs and Worlds after a Discover install so they reread Minecraft's files.
 
 ### Feature state
@@ -135,7 +136,7 @@ sequenceDiagram
     Tauri->>Tauri: Manage AppState, PackState, StackState, ModrinthState
     Tauri->>UI: Load frontend
     UI->>Tauri: get_config
-    UI->>Tauri: get_resource_stack for game guard
+    UI->>Tauri: get_game_guard
     alt No active game folder
         UI->>UI: Show onboarding
     else Active folder exists

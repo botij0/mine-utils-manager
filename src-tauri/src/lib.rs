@@ -72,6 +72,7 @@ pub fn run() {
             commands::game_dirs::get_config,
             commands::game_dirs::set_theme,
             commands::game_dirs::get_startup_warning,
+            commands::game_guard::get_game_guard,
             commands::packs::list_resource_packs,
             commands::packs::import_resource_pack,
             commands::packs::delete_resource_pack,

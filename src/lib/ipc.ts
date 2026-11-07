@@ -11,6 +11,7 @@ import type {
   DatapackListing,
   GameDirEntry,
   GameDirState,
+  GameGuard,
   ImportChoice,
   ImportOutcome,
   LevelBackupInfo,
@@ -90,6 +91,8 @@ export interface IpcClient extends PackClient, WorldsClient, DiscoverClient {
   getConfig(): Promise<Config>;
   setTheme(theme: Theme): Promise<Config>;
   getStartupWarning(): Promise<string | null>;
+  /** Only the game-running guard; it never reads `options.txt`. */
+  getGameGuard(): Promise<GameGuard>;
 }
 
 export function isTauriRuntime(win: Window = window): boolean {
@@ -163,6 +166,7 @@ const tauriClient: IpcClient = {
   getConfig: () => call<Config>('get_config'),
   setTheme: (theme) => call<Config>('set_theme', { theme }),
   getStartupWarning: () => call<string | null>('get_startup_warning'),
+  getGameGuard: () => call<GameGuard>('get_game_guard'),
   async listResourcePacks() {
     const listing = await call<Omit<PackListing, 'packs'> & { packs: WirePack[] }>(
       'list_resource_packs',
@@ -265,6 +269,7 @@ export const ipc: IpcClient = {
   getConfig: () => pick().getConfig(),
   setTheme: (theme) => pick().setTheme(theme),
   getStartupWarning: () => pick().getStartupWarning(),
+  getGameGuard: () => pick().getGameGuard(),
   listResourcePacks: () => pick().listResourcePacks(),
   importResourcePack: (path, choice) => pick().importResourcePack(path, choice),
   deleteResourcePack: (path) => pick().deleteResourcePack(path),
