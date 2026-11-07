@@ -1,7 +1,7 @@
 use std::io::Write as _;
 use std::path::Path;
 
-use mine_utils_core::{scan_packs, IconCache};
+use mine_utils_core::{data_format_for_version, scan_packs, FormatRange, IconCache, Pack};
 
 fn write_zip(path: &Path, mcmeta: &str, root: &str) {
     let file = std::fs::File::create(path).unwrap();
@@ -17,7 +17,7 @@ fn write_zip(path: &Path, mcmeta: &str, root: &str) {
     writer.finish().unwrap();
 }
 
-fn scan(packs: &[(&str, &str, &str)]) -> Vec<(String, serde_json::Value, Option<String>)> {
+fn scan_listing(packs: &[(&str, &str, &str)]) -> Vec<Pack> {
     let dir = tempfile::tempdir().unwrap();
     let resourcepacks = dir.path().join("resourcepacks");
     std::fs::create_dir_all(&resourcepacks).unwrap();
@@ -25,9 +25,11 @@ fn scan(packs: &[(&str, &str, &str)]) -> Vec<(String, serde_json::Value, Option<
         write_zip(&resourcepacks.join(name), mcmeta, root);
     }
     let icons = IconCache::new(&dir.path().join("cache"));
-    let listing = scan_packs(&resourcepacks, &icons).unwrap();
-    listing
-        .packs
+    scan_packs(&resourcepacks, &icons).unwrap().packs
+}
+
+fn scan(packs: &[(&str, &str, &str)]) -> Vec<(String, serde_json::Value, Option<String>)> {
+    scan_listing(packs)
         .iter()
         .map(|pack| {
             (
@@ -90,4 +92,98 @@ fn integer_supported_formats_is_one_major_covering_its_minors() {
         })
     );
     assert_eq!(packs[0].2.as_deref(), Some("1.21.11"));
+}
+
+fn frontend_admits(range: Option<FormatRange>, world: &str) -> bool {
+    let world = data_format_for_version(world).unwrap();
+    let range = range.unwrap();
+    range.min.is_none_or(|min| min <= world) && range.max.is_none_or(|max| world <= max)
+}
+
+#[test]
+fn a_label_never_names_a_version_the_range_rejects() {
+    let packs = scan_listing(&[
+        (
+            "a_legacy_94.zip",
+            r#"{"pack":{"description":"d","pack_format":94}}"#,
+            "data",
+        ),
+        (
+            "b_pinned_94_0.zip",
+            r#"{"pack":{"description":"d","min_format":[94,0],"max_format":[94,0]}}"#,
+            "data",
+        ),
+        (
+            "c_whole_94.zip",
+            r#"{"pack":{"description":"d","min_format":94,"max_format":94}}"#,
+            "data",
+        ),
+        (
+            "d_legacy_101.zip",
+            r#"{"pack":{"description":"d","pack_format":101}}"#,
+            "data",
+        ),
+    ]);
+    let seen: Vec<_> = packs
+        .iter()
+        .zip(["1.21.11", "1.21.11", "1.21.11", "26.1"])
+        .map(|(pack, world)| {
+            (
+                pack.name.as_str(),
+                pack.game_label.as_deref(),
+                world,
+                frontend_admits(pack.format_range, world),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("a_legacy_94", None, "1.21.11", false),
+            ("b_pinned_94_0", None, "1.21.11", false),
+            ("c_whole_94", Some("1.21.11"), "1.21.11", true),
+            ("d_legacy_101", None, "26.1", false),
+        ]
+    );
+}
+
+#[test]
+fn pack_format_never_carries_the_any_minor_marker() {
+    let packs = scan_listing(&[
+        (
+            "a_max_only.zip",
+            r#"{"pack":{"description":"d","max_format":88}}"#,
+            "data",
+        ),
+        (
+            "b_max_minor.zip",
+            r#"{"pack":{"description":"d","max_format":[88,1]}}"#,
+            "data",
+        ),
+        (
+            "c_legacy.zip",
+            r#"{"pack":{"description":"d","pack_format":94}}"#,
+            "data",
+        ),
+    ]);
+    let formats: Vec<_> = packs
+        .iter()
+        .map(|pack| {
+            (
+                pack.name.as_str(),
+                serde_json::to_value(pack.format).unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        formats,
+        vec![
+            ("a_max_only", serde_json::json!({ "major": 88, "minor": 0 })),
+            (
+                "b_max_minor",
+                serde_json::json!({ "major": 88, "minor": 1 })
+            ),
+            ("c_legacy", serde_json::json!({ "major": 94, "minor": 0 })),
+        ]
+    );
 }
