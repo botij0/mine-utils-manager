@@ -405,9 +405,8 @@ fn commit_path(temp: &Path, target_dir: &Path, filename: &str) -> Result<PathBuf
 
 /// Move `temp` to `dest` without replacing an existing file. On Linux the
 /// rename is a single `renameat2` with `RENAME_NOREPLACE`, so the
-/// exists-then-rename race cannot happen; elsewhere a hard link (same
-/// directory, so same filesystem) provides the atomic no-replace, with an
-/// exists-checked rename as the last resort.
+/// exists-then-rename race cannot happen. Elsewhere, and on filesystems that
+/// refuse the flag, [`no_replace_fallback`] commits instead.
 fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -437,6 +436,12 @@ fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
             }
         }
     }
+    no_replace_fallback(temp, dest)
+}
+
+/// A hard link (same directory, so same filesystem) is the atomic
+/// no-replace, with an exists-checked rename as the last resort.
+fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<()> {
     match std::fs::hard_link(temp, dest) {
         Ok(()) => std::fs::remove_file(temp),
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Err(err),
@@ -518,5 +523,24 @@ mod tests {
                 ("EEXIST", false),
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_link_fallback_commits_even_when_the_temp_will_not_unlink() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        let locked = root.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let temp = locked.join(".Pack.zip.tmp");
+        std::fs::write(&temp, b"pack").unwrap();
+        let dest = root.path().join("Pack.zip");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = no_replace_fallback(&temp, &dest).map_err(|err| err.kind());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"pack");
     }
 }
