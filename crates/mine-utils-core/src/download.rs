@@ -432,11 +432,7 @@ fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
                 return Ok(());
             }
             let err = std::io::Error::last_os_error();
-            // ENOSYS/EPERM (seccomp, exotic fs): fall through to the link
-            // path rather than failing the install.
-            if err.kind() != std::io::ErrorKind::PermissionDenied
-                && err.raw_os_error() != Some(libc::ENOSYS)
-            {
+            if !rename_noreplace_unsupported(&err) {
                 return Err(err);
             }
         }
@@ -454,6 +450,14 @@ fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
             std::fs::rename(temp, dest)
         }
     }
+}
+
+/// Whether a failed `renameat2(RENAME_NOREPLACE)` means the kernel or
+/// filesystem cannot do it here (seccomp, exotic fs), so the commit falls
+/// through to the hard-link path rather than failing the install.
+#[cfg(target_os = "linux")]
+fn rename_noreplace_unsupported(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::PermissionDenied || err.raw_os_error() == Some(libc::ENOSYS)
 }
 
 fn sync_parent(path: &Path) {
@@ -484,5 +488,33 @@ mod tests {
             assert!(validate_filename(bad).is_err(), "{bad:?} must be refused");
         }
         assert!(validate_filename("Fresh Animations v1.9.zip").is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn renameat2_errors_that_mean_unsupported_take_the_link_fallback() {
+        let decisions: Vec<(&str, bool)> = [
+            ("EINVAL", libc::EINVAL),
+            ("ENOSYS", libc::ENOSYS),
+            ("EPERM", libc::EPERM),
+            ("EACCES", libc::EACCES),
+            ("EEXIST", libc::EEXIST),
+        ]
+        .into_iter()
+        .map(|(name, errno)| {
+            let err = std::io::Error::from_raw_os_error(errno);
+            (name, rename_noreplace_unsupported(&err))
+        })
+        .collect();
+        assert_eq!(
+            decisions,
+            vec![
+                ("EINVAL", true),
+                ("ENOSYS", true),
+                ("EPERM", true),
+                ("EACCES", true),
+                ("EEXIST", false),
+            ]
+        );
     }
 }
