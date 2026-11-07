@@ -504,6 +504,18 @@ pub fn import_pack_with(
     hashes: &HashCache,
     trash: &dyn TrashService,
 ) -> Result<ImportOutcome, AppError> {
+    import_pack_with_hook(source, resourcepacks, icons, choice, hashes, trash, || {})
+}
+
+fn import_pack_with_hook(
+    source: &Path,
+    resourcepacks: &Path,
+    icons: &IconCache,
+    choice: ImportChoice,
+    hashes: &HashCache,
+    trash: &dyn TrashService,
+    before_commit: impl FnOnce(),
+) -> Result<ImportOutcome, AppError> {
     // A symlinked source is rejected instead of followed, so no later step can
     // remove a pack that only a link points at.
     let source_meta = std::fs::symlink_metadata(source).map_err(|_| PackError::NotFound {
@@ -629,6 +641,7 @@ pub fn import_pack_with(
         }
     }
 
+    before_commit();
     if let Err(err) = std::fs::rename(&tmp, &destination) {
         let _ = remove_any(&tmp);
         return Err(err.into());
@@ -1424,6 +1437,49 @@ mod tests {
         .unwrap();
         assert!(matches!(outcome, ImportOutcome::Imported { .. }));
         assert!(resourcepacks.join("DirPack/pack.mcmeta").is_file());
+        assert!(trash.calls().is_empty());
+    }
+
+    #[test]
+    fn a_rival_created_after_the_collision_check_keeps_its_bytes() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("game/resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let zip_source = root.path().join("incoming/ZipPack.zip");
+        simple_zip(&zip_source, 34, None);
+        let dir_source = root.path().join("incoming/DirPack");
+        std::fs::create_dir_all(dir_source.join("assets")).unwrap();
+        std::fs::write(dir_source.join("pack.mcmeta"), mcmeta(7, None, "Dir")).unwrap();
+
+        for (source, file_name, name) in [
+            (&zip_source, "ZipPack.zip", "ZipPack"),
+            (&dir_source, "DirPack", "DirPack"),
+        ] {
+            let rival = resourcepacks.join(file_name);
+            let outcome = import_pack_with_hook(
+                source,
+                &resourcepacks,
+                &icons,
+                ImportChoice::Default,
+                &hashes,
+                &trash,
+                || std::fs::write(&rival, b"rival").unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                outcome,
+                ImportOutcome::Collision {
+                    name: name.to_string()
+                }
+            );
+            assert_eq!(std::fs::read(&rival).unwrap(), b"rival");
+        }
+        let mut left: Vec<String> = std::fs::read_dir(&resourcepacks)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["DirPack", "ZipPack.zip"]);
         assert!(trash.calls().is_empty());
     }
 
