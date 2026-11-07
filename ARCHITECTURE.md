@@ -69,7 +69,7 @@ flowchart LR
 | `src/lib/ipc.mock.ts` | Offline browser implementation with synthetic data |
 | `src/lib/types.ts` | TypeScript counterparts of the Rust request and response shapes |
 | `src-tauri/src/lib.rs` | Desktop setup, plugins, managed state, and command registration |
-| `src-tauri/src/commands/` | Tauri adapters for game folders, packs, stacks, worlds, and Discover |
+| `src-tauri/src/commands/` | Tauri adapters for game folders, the game guard, packs, stacks, worlds, and Discover |
 | `crates/mine-utils-core/src/` | Filesystem, Minecraft formats, backups, locking, Modrinth, and install logic |
 | `crates/mine-utils-core/src/bin/mine-utils-probe.rs` | CLI access to selected core operations |
 | `assets/` | Project artwork |
@@ -86,7 +86,8 @@ There is no global frontend store or router dependency. `App.tsx` owns app-level
 - Loads `Config` before deciding whether to show onboarding.
 - Applies `system`, `light`, or `dark` to the document and follows system theme changes when needed.
 - Polls `get_game_guard` every five seconds for the shared game-running state. The command only probes session locks and processes, so a missing or malformed `options.txt` cannot pause writes.
-- Checks at once when the active folder changes or onboarding finishes. A poll tick is skipped while the window is hidden or a check is in flight, and the window becoming visible triggers a check.
+- Checks at once when the active folder changes or onboarding finishes. A folder change pauses writes until that folder's answer lands, even while the window is hidden and no check goes out.
+- Skips a poll tick while the window is hidden or the newest check is unanswered, so a call that never settles cannot stop the poll. The window becoming visible triggers a check.
 - Treats `no_active_game_dir` as nothing to guard. Keeps writes paused when any other guard check fails. Only a successful check can clear that state.
 - Remounts Packs and Worlds after a Discover install so they reread Minecraft's files.
 
