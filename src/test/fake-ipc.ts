@@ -4,6 +4,7 @@ import type {
   Config,
   DataStack,
   GameDirEntry,
+  GameGuard,
   GameDirState,
   GameRunning,
   ImportChoice,
@@ -51,6 +52,7 @@ export interface FakeClient extends IpcClient {
   readonly restores: string[];
   readonly levelRestores: string[];
   restoredStack: ResourceStack | null;
+  getGameGuard(): Promise<GameGuard>;
 }
 
 export interface FakeClientOptions {
@@ -228,6 +230,12 @@ export function makeFakeClient(
     },
     async getResourceStack() {
       return currentStack();
+    },
+    async getGameGuard(): Promise<GameGuard> {
+      if (!config.active_game_dir) {
+        throw new IpcError('no_active_game_dir', 'no active game dir; pick one in Settings first');
+      }
+      return { running, stale_locks: [...staleLocks], detection_supported: true };
     },
     async setResourcePackEnabled(filename: string, enabled: boolean) {
       toggles.push({ filename, enabled });
