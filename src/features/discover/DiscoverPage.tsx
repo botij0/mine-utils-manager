@@ -62,9 +62,11 @@ export default function DiscoverPage({
     ? 'No game dir is active. Pick a game dir in Settings first, then install.'
     : gameRunning != null
       ? `Minecraft is running (${gameRunning.detail}); installs are paused until it closes.`
-      : gameGuardUnknown || gameRunning === undefined
-        ? 'Checking whether Minecraft is running; installs are paused until the check lands.'
-        : null;
+      : gameGuardUnknown && !gameGuardChecking
+        ? 'Mine Utils could not check whether Minecraft is running; installs are paused until a check succeeds.'
+        : gameGuardUnknown || gameRunning === undefined
+          ? 'Checking whether Minecraft is running; installs are paused until the check lands.'
+          : null;
 
   const selectedVersion =
     discover.versions.find((version) => version.id === discover.selectedVersionId) ?? null;

@@ -60,12 +60,17 @@ export default function App({ client = ipc }: AppProps) {
   const [onboarded, setOnboarded] = useState(false);
   // Bumped after a Discover install so Packs/Worlds refetch on return.
   const [refreshEpoch, setRefreshEpoch] = useState(0);
-  // Guard answers land in the order they were sent: an answer older than the
-  // last one applied, or sent before the active folder changed, is dropped.
-  const guardChecks = useRef<{ issued: number; applied: number; dir?: string | null }>({
-    issued: 0,
-    applied: 0,
-  });
+  // At most one get_game_guard is outstanding: a hung call parks a backend
+  // thread, so only its real settle frees the slot. A check wanted meanwhile
+  // runs once the slot frees. An answer that outlived its deadline, or was
+  // sent for another folder, is dropped.
+  const guard = useRef<{
+    busy: boolean;
+    wanted: boolean;
+    expired: boolean;
+    deadline?: ReturnType<typeof setTimeout>;
+    dir?: string | null;
+  }>({ busy: false, wanted: false, expired: false });
 
   useEffect(() => {
     window.location.hash = page;
@@ -84,53 +89,64 @@ export default function App({ client = ipc }: AppProps) {
       });
   }, [client]);
 
-  const refreshGameRunning = useCallback(async () => {
-    const checks = guardChecks.current;
-    checks.issued += 1;
-    const sent = checks.issued;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const running = await Promise.race([
-        activeGameRunning(client),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(reject, GUARD_TIMEOUT_MS);
-        }),
-      ]);
-      if (sent <= checks.applied) return;
-      checks.applied = sent;
-      setGameRunning(running);
-      setGuardPause(null);
-    } catch {
-      if (sent <= checks.applied) return;
-      checks.applied = sent;
-      // Keep the last known value: only a successful check may clear it.
+  const armGuardDeadline = useCallback(() => {
+    const slot = guard.current;
+    clearTimeout(slot.deadline);
+    slot.deadline = setTimeout(() => {
+      slot.expired = true;
       setGuardPause('unknown');
-    } finally {
-      clearTimeout(timeout);
-    }
-  }, [client]);
+    }, GUARD_TIMEOUT_MS);
+  }, []);
+
+  const refreshGameRunning = useCallback(() => {
+    const slot = guard.current;
+    const send = () => {
+      slot.busy = true;
+      slot.wanted = false;
+      slot.expired = false;
+      const dir = slot.dir;
+      armGuardDeadline();
+      const settle = (apply: () => void) => {
+        slot.busy = false;
+        clearTimeout(slot.deadline);
+        if (!slot.expired && dir === slot.dir) apply();
+        if (slot.wanted) send();
+      };
+      activeGameRunning(client).then(
+        (running) =>
+          settle(() => {
+            setGameRunning(running);
+            setGuardPause(null);
+          }),
+        // Keep the last known value: only a successful check may clear it.
+        () => settle(() => setGuardPause('unknown')),
+      );
+    };
+    if (slot.busy) slot.wanted = true;
+    else send();
+  }, [client, armGuardDeadline]);
 
   // Writes on any page stop while Minecraft runs. The callback is stable, so
   // pages can force a fresh check without re-subscribing the poll. A new
   // folder or a finished onboarding checks at once instead of waiting a tick.
   useEffect(() => {
     if (!configReady) return undefined;
-    const checks = guardChecks.current;
-    checks.applied = checks.issued;
-    const folderChanged = checks.dir !== undefined && checks.dir !== config.active_game_dir;
+    const slot = guard.current;
+    const folderChanged = slot.dir !== undefined && slot.dir !== config.active_game_dir;
+    slot.dir = config.active_game_dir;
     if (folderChanged) setGuardPause('checking');
-    checks.dir = config.active_game_dir;
-    if (!document.hidden) void refreshGameRunning();
     const tick = () => {
-      if (!document.hidden && checks.applied === checks.issued) void refreshGameRunning();
+      if (!document.hidden) refreshGameRunning();
     };
+    if (folderChanged && slot.busy && !document.hidden) armGuardDeadline();
+    tick();
     const timer = setInterval(tick, GUARD_POLL_MS);
     document.addEventListener('visibilitychange', tick);
     return () => {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', tick);
     };
-  }, [configReady, config.active_game_dir, onboarded, refreshGameRunning]);
+  }, [configReady, config.active_game_dir, onboarded, refreshGameRunning, armGuardDeadline]);
 
   useEffect(() => {
     client

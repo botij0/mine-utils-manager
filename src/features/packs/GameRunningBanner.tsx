@@ -41,7 +41,7 @@ export default function GameRunningBanner({
 
   if (guardUnknown && checking) {
     return (
-      <div className="banner" role="status">
+      <div key="checking" className="banner" role="status">
         Checking whether Minecraft is running; writes are paused until the check lands.
       </div>
     );
@@ -49,7 +49,7 @@ export default function GameRunningBanner({
 
   if (guardUnknown) {
     return (
-      <div className="banner banner-danger" role="alert">
+      <div key="unknown" className="banner banner-danger" role="alert">
         <div>
           <strong>Game guard unavailable.</strong> Mine Utils could not check
           whether Minecraft is running, so writes are paused.
