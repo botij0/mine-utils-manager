@@ -469,6 +469,62 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_temp_that_vanished_without_landing_keeps_the_rename_error() {
+        let seen: Vec<String> = [
+            ("folder claim rename", "temp deleted"),
+            ("file", "temp deleted, other-size rival at dest"),
+            ("file", "temp deleted, nothing at dest"),
+        ]
+        .into_iter()
+        .map(|(case, renames)| {
+            let root = tempfile::tempdir().unwrap();
+            let temp = root.path().join(".Pack.tmp");
+            if case == "file" {
+                std::fs::write(&temp, b"pack").unwrap();
+            } else {
+                std::fs::create_dir(&temp).unwrap();
+                std::fs::write(temp.join("pack.mcmeta"), b"{}").unwrap();
+            }
+            let dest = root.path().join("Pack");
+            let rival_lands = renames.contains("rival");
+
+            let result = checked_rename(
+                &temp,
+                &dest,
+                |path| std::fs::symlink_metadata(path),
+                |from, to| {
+                    if from.is_dir() {
+                        std::fs::remove_dir_all(from).unwrap();
+                    } else {
+                        std::fs::remove_file(from).unwrap();
+                    }
+                    if rival_lands {
+                        std::fs::write(to, b"rival").unwrap();
+                    }
+                    Err(std::io::Error::from_raw_os_error(libc::EIO))
+                },
+            )
+            .map_err(|err| err.raw_os_error().ok_or(err.kind()));
+
+            format!(
+                "{case} ({renames}): {result:?}; dest {}",
+                entry_summary(&dest)
+            )
+        })
+        .collect();
+
+        assert_eq!(
+            seen,
+            [
+                "folder claim rename (temp deleted): Err(Ok(5)); dest missing",
+                "file (temp deleted, other-size rival at dest): Err(Err(AlreadyExists)); dest file rival",
+                "file (temp deleted, nothing at dest): Err(Ok(5)); dest missing",
+            ]
+        );
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn renameat2_errors_that_mean_unsupported_take_the_link_fallback() {
