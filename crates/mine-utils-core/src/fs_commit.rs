@@ -165,16 +165,21 @@ mod tests {
     }
 
     #[cfg(unix)]
-    const RENAME_ERRNOS: [(&str, i32); 4] = [
+    const RENAME_ERRNOS: [(&str, i32); 9] = [
         ("ENOTDIR", libc::ENOTDIR),
         ("EISDIR", libc::EISDIR),
         ("ENOTEMPTY", libc::ENOTEMPTY),
+        ("EEXIST", libc::EEXIST),
         ("EPERM", libc::EPERM),
+        ("EACCES", libc::EACCES),
+        ("EXDEV", libc::EXDEV),
+        ("ENOSPC", libc::ENOSPC),
+        ("EIO", libc::EIO),
     ];
 
     #[cfg(unix)]
     #[test]
-    fn a_folder_whose_rename_onto_the_claim_fails_retries_unless_a_rival_took_it() {
+    fn a_folder_whose_rename_onto_the_claim_fails_retries_only_a_plain_rename_refusal() {
         let seen: Vec<String> = RENAME_ERRNOS
             .into_iter()
             .map(|(name, errno)| {
@@ -199,9 +204,14 @@ mod tests {
             seen,
             [
                 "ENOTDIR: Err(AlreadyExists); dest missing; temp kept true",
-                "EISDIR: Ok(()); dest dir with 1 entries; temp kept false",
+                "EISDIR: Err(IsADirectory); dest missing; temp kept true",
                 "ENOTEMPTY: Err(AlreadyExists); dest missing; temp kept true",
+                "EEXIST: Ok(()); dest dir with 1 entries; temp kept false",
                 "EPERM: Ok(()); dest dir with 1 entries; temp kept false",
+                "EACCES: Err(PermissionDenied); dest missing; temp kept true",
+                "EXDEV: Err(CrossesDevices); dest missing; temp kept true",
+                "ENOSPC: Err(StorageFull); dest missing; temp kept true",
+                "EIO: Err(Uncategorized); dest missing; temp kept true",
             ]
         );
     }
@@ -234,7 +244,12 @@ mod tests {
                 "ENOTDIR: Err(NotADirectory); dest missing; temp kept true",
                 "EISDIR: Err(AlreadyExists); dest missing; temp kept true",
                 "ENOTEMPTY: Err(DirectoryNotEmpty); dest missing; temp kept true",
+                "EEXIST: Err(AlreadyExists); dest missing; temp kept true",
                 "EPERM: Err(PermissionDenied); dest missing; temp kept true",
+                "EACCES: Err(PermissionDenied); dest missing; temp kept true",
+                "EXDEV: Err(CrossesDevices); dest missing; temp kept true",
+                "ENOSPC: Err(StorageFull); dest missing; temp kept true",
+                "EIO: Err(Uncategorized); dest missing; temp kept true",
             ]
         );
     }
