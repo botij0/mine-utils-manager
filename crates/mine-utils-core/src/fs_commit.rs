@@ -400,6 +400,59 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_rename_that_lands_but_returns_an_error_commits() {
+        let seen: Vec<String> = [
+            ("file", "lands"),
+            ("folder claim rename", "lands"),
+            ("folder retry", "refused, then lands"),
+        ]
+        .into_iter()
+        .map(|(case, renames)| {
+            let root = tempfile::tempdir().unwrap();
+            let temp = root.path().join(".Pack.tmp");
+            if case == "file" {
+                std::fs::write(&temp, b"pack").unwrap();
+            } else {
+                std::fs::create_dir(&temp).unwrap();
+                std::fs::write(temp.join("pack.mcmeta"), b"{}").unwrap();
+            }
+            let dest = root.path().join("Pack");
+            let mut refuse_first = case == "folder retry";
+
+            let result = checked_rename(
+                &temp,
+                &dest,
+                |path| std::fs::symlink_metadata(path),
+                |from, to| {
+                    if std::mem::take(&mut refuse_first) {
+                        return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+                    }
+                    std::fs::rename(from, to).unwrap();
+                    Err(std::io::Error::from_raw_os_error(libc::EIO))
+                },
+            )
+            .map_err(|err| err.raw_os_error().ok_or(err.kind()));
+
+            format!(
+                "{case} ({renames}): {result:?}; dest {}; temp kept {}",
+                entry_summary(&dest),
+                temp.exists()
+            )
+        })
+        .collect();
+
+        assert_eq!(
+            seen,
+            [
+                "file (lands): Ok(()); dest file pack; temp kept false",
+                "folder claim rename (lands): Ok(()); dest dir with 1 entries; temp kept false",
+                "folder retry (refused, then lands): Ok(()); dest dir with 1 entries; temp kept false",
+            ]
+        );
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn renameat2_errors_that_mean_unsupported_take_the_link_fallback() {
