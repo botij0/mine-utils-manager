@@ -83,7 +83,13 @@ fn checked_rename(
 ) -> std::io::Result<()> {
     let rivals = if std::fs::symlink_metadata(temp)?.is_dir() {
         std::fs::create_dir(dest)?;
-        let claim = read_claim(dest)?;
+        let claim = match read_claim(dest) {
+            Ok(claim) => claim,
+            Err(err) => {
+                let _ = std::fs::remove_dir(dest);
+                return Err(err);
+            }
+        };
         let Err(err) = rename(temp, dest) else {
             return Ok(());
         };
@@ -100,7 +106,10 @@ fn checked_rename(
             "destination exists",
         ));
     }
-    rename(temp, dest).map_err(|err| taken_as_already_exists(err, rivals))
+    rename(temp, dest).map_err(|err| match std::fs::symlink_metadata(dest) {
+        Ok(_) => std::io::Error::new(ErrorKind::AlreadyExists, err),
+        Err(_) => taken_as_already_exists(err, rivals),
+    })
 }
 
 /// `rename` reports a rival at `dest` with these errors instead of `EEXIST`.
