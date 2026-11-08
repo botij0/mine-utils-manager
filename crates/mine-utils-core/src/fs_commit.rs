@@ -49,7 +49,12 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
             Ok(())
         }
         Err(err) if err.kind() == ErrorKind::AlreadyExists => Err(err),
-        Err(_) => checked_rename(temp, dest, |from, to| std::fs::rename(from, to)),
+        Err(_) => checked_rename(
+            temp,
+            dest,
+            |path| std::fs::symlink_metadata(path),
+            |from, to| std::fs::rename(from, to),
+        ),
     }
 }
 
@@ -73,11 +78,12 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
 fn checked_rename(
     temp: &Path,
     dest: &Path,
+    read_claim: impl FnOnce(&Path) -> std::io::Result<std::fs::Metadata>,
     mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     let rivals = if std::fs::symlink_metadata(temp)?.is_dir() {
         std::fs::create_dir(dest)?;
-        let claim = std::fs::symlink_metadata(dest)?;
+        let claim = read_claim(dest)?;
         let Err(err) = rename(temp, dest) else {
             return Ok(());
         };
@@ -206,8 +212,13 @@ mod tests {
                 std::fs::write(temp.join("pack.mcmeta"), b"{}").unwrap();
                 let dest = root.path().join("Pack");
 
-                let result = checked_rename(&temp, &dest, first_rename_fails_with(errno))
-                    .map_err(|err| err.kind());
+                let result = checked_rename(
+                    &temp,
+                    &dest,
+                    |path| std::fs::symlink_metadata(path),
+                    first_rename_fails_with(errno),
+                )
+                .map_err(|err| err.kind());
 
                 format!(
                     "{name}: {result:?}; dest {}; temp kept {}",
@@ -243,8 +254,13 @@ mod tests {
                 std::fs::write(&temp, b"pack").unwrap();
                 let dest = root.path().join("Pack.zip");
 
-                let result = checked_rename(&temp, &dest, first_rename_fails_with(errno))
-                    .map_err(|err| err.kind());
+                let result = checked_rename(
+                    &temp,
+                    &dest,
+                    |path| std::fs::symlink_metadata(path),
+                    first_rename_fails_with(errno),
+                )
+                .map_err(|err| err.kind());
 
                 format!(
                     "{name}: {result:?}; dest {}; temp kept {}",
@@ -278,12 +294,17 @@ mod tests {
         let dest = root.path().join("Pack");
         let rival = root.path().join("rival");
 
-        let result = checked_rename(&temp, &dest, |_, to| {
-            std::fs::create_dir(&rival).unwrap();
-            std::fs::remove_dir(to).unwrap();
-            std::fs::rename(&rival, to).unwrap();
-            Err(std::io::Error::from_raw_os_error(libc::EPERM))
-        })
+        let result = checked_rename(
+            &temp,
+            &dest,
+            |path| std::fs::symlink_metadata(path),
+            |_, to| {
+                std::fs::create_dir(&rival).unwrap();
+                std::fs::remove_dir(to).unwrap();
+                std::fs::rename(&rival, to).unwrap();
+                Err(std::io::Error::from_raw_os_error(libc::EPERM))
+            },
+        )
         .map_err(|err| err.kind());
 
         assert_eq!(
@@ -293,6 +314,72 @@ mod tests {
                 temp.exists()
             ),
             "Err(PermissionDenied); dest dir with 0 entries; temp kept true"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_claim_that_cannot_be_read_back_is_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let temp = root.path().join(".Pack.tmp");
+        std::fs::create_dir(&temp).unwrap();
+        let dest = root.path().join("Pack");
+
+        let result = checked_rename(
+            &temp,
+            &dest,
+            |_| Err(std::io::Error::from_raw_os_error(libc::EIO)),
+            |from, to| std::fs::rename(from, to),
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|err| err.raw_os_error()),
+                entry_summary(&dest),
+                temp.exists()
+            ),
+            (Err(Some(libc::EIO)), "missing".to_string(), true)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_rename_refused_over_a_rival_reads_as_taken() {
+        let seen: Vec<String> = [true, false]
+            .into_iter()
+            .map(|rival_lands| {
+                let root = tempfile::tempdir().unwrap();
+                let temp = root.path().join(".Pack.zip.tmp");
+                std::fs::write(&temp, b"pack").unwrap();
+                let dest = root.path().join("Pack.zip");
+
+                let result = checked_rename(
+                    &temp,
+                    &dest,
+                    |path| std::fs::symlink_metadata(path),
+                    |_, to| {
+                        if rival_lands {
+                            std::fs::write(to, b"rival").unwrap();
+                        }
+                        Err(std::io::Error::from_raw_os_error(libc::EPERM))
+                    },
+                )
+                .map_err(|err| err.kind());
+
+                format!(
+                    "rival {rival_lands}: {result:?}; dest {}; temp kept {}",
+                    entry_summary(&dest),
+                    temp.exists()
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            seen,
+            [
+                "rival true: Err(AlreadyExists); dest file rival; temp kept true",
+                "rival false: Err(PermissionDenied); dest missing; temp kept true",
+            ]
         );
     }
 
@@ -369,8 +456,13 @@ mod tests {
                 let dest = root.path().join("Pack");
                 make_rival(&dest);
 
-                let result = checked_rename(&temp, &dest, |from, to| std::fs::rename(from, to))
-                    .map_err(|err| err.kind());
+                let result = checked_rename(
+                    &temp,
+                    &dest,
+                    |path| std::fs::symlink_metadata(path),
+                    |from, to| std::fs::rename(from, to),
+                )
+                .map_err(|err| err.kind());
 
                 seen.push(format!(
                     "{temp_kind} temp, {label}: {result:?}; dest {}; temp kept {}",
