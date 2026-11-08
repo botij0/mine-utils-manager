@@ -38,6 +38,20 @@ function recordGuardDirs(client: FakeClient): (string | null)[] {
   return checkedDirs;
 }
 
+function holdGuardCalls(client: FakeClient) {
+  const calls: { dir: string | null; answer: (running: GameRunning | null) => void }[] = [];
+  client.getGameGuard = () => {
+    const dir = client.config.active_game_dir;
+    return new Promise((resolve) =>
+      calls.push({
+        dir,
+        answer: (running) => resolve({ running, stale_locks: [], detection_supported: true }),
+      }),
+    );
+  };
+  return calls;
+}
+
 function setDocumentHidden(hidden: boolean) {
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
   document.dispatchEvent(new Event('visibilitychange'));
@@ -679,5 +693,53 @@ describe('App', () => {
       vi.advanceTimersByTime(5000);
     });
     expect(checks).toBe(2);
+  });
+  it('keeps one guard call outstanding when Settings opens first and the user moves around', async () => {
+    window.location.hash = 'settings';
+    const user = userEvent.setup();
+    const client = makeFakeClient({
+      gameDirs: [gameDir('/home/demo/.minecraft', true, true), gameDir('/home/demo/prism', true, true)],
+      backups: [OPTIONS_BACKUP],
+    });
+    await client.setActiveGameDir('/home/demo/.minecraft');
+    client.getResourceStack = async () => stackResponse(null);
+    const calls = holdGuardCalls(client);
+    render(<App client={client} />);
+
+    expect(await screen.findByRole('button', { name: 'Restore' })).toBeInTheDocument();
+    for (let trip = 0; trip < 4; trip += 1) {
+      await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+      await screen.findByRole('list', { name: 'Stack order' });
+      await user.click(screen.getByRole('button', { name: 'Settings' }));
+      await screen.findByRole('button', { name: 'Restore' });
+    }
+    await user.click(screen.getByRole('button', { name: 'Use' }));
+    expect(
+      await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
+    ).toBeInTheDocument();
+    await act(async () => {});
+
+    expect(calls.map((call) => call.dir)).toEqual(['/home/demo/.minecraft']);
+  });
+
+  it('blocks Restore with the checking reason until the first guard answer lands', async () => {
+    window.location.hash = 'settings';
+    const client = makeFakeClient({
+      gameDirs: [gameDir('/home/demo/.minecraft', true, true)],
+      backups: [OPTIONS_BACKUP],
+    });
+    await client.setActiveGameDir('/home/demo/.minecraft');
+    const calls = holdGuardCalls(client);
+    render(<App client={client} />);
+
+    const restore = await screen.findByRole('button', { name: 'Restore' });
+    await act(async () => {});
+    expect(restore).toBeDisabled();
+    expect(restore).toHaveAttribute('title', 'Checking whether Minecraft is running');
+
+    await act(async () => {
+      for (const call of calls) call.answer(null);
+    });
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
   });
 });
