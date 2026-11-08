@@ -405,9 +405,7 @@ fn commit_path(temp: &Path, target_dir: &Path, filename: &str) -> Result<PathBuf
 
 /// Move `temp` to `dest` without replacing an existing file. On Linux the
 /// rename is a single `renameat2` with `RENAME_NOREPLACE`, so the
-/// exists-then-rename race cannot happen; elsewhere a hard link (same
-/// directory, so same filesystem) provides the atomic no-replace, with an
-/// exists-checked rename as the last resort.
+/// exists-then-rename race cannot happen.
 fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -432,17 +430,24 @@ fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
                 return Ok(());
             }
             let err = std::io::Error::last_os_error();
-            // ENOSYS/EPERM (seccomp, exotic fs): fall through to the link
-            // path rather than failing the install.
-            if err.kind() != std::io::ErrorKind::PermissionDenied
-                && err.raw_os_error() != Some(libc::ENOSYS)
-            {
+            if !rename_noreplace_unsupported(&err) {
                 return Err(err);
             }
         }
     }
+    no_replace_fallback(temp, dest)
+}
+
+/// A hard link (same directory, so same filesystem) is the atomic
+/// no-replace, with an exists-checked rename as the last resort.
+fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<()> {
     match std::fs::hard_link(temp, dest) {
-        Ok(()) => std::fs::remove_file(temp),
+        Ok(()) => {
+            if std::fs::remove_file(temp).is_err() {
+                let _ = std::fs::remove_file(temp);
+            }
+            Ok(())
+        }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Err(err),
         Err(_) => {
             if dest.exists() {
@@ -454,6 +459,16 @@ fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
             std::fs::rename(temp, dest)
         }
     }
+}
+
+/// NFS, sshfs, and FUSE filesystems without rename flags answer EINVAL; a
+/// seccomp filter answers ENOSYS, EPERM, or EACCES.
+#[cfg(target_os = "linux")]
+fn rename_noreplace_unsupported(err: &std::io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(libc::EINVAL | libc::ENOSYS | libc::EPERM | libc::EACCES)
+    )
 }
 
 fn sync_parent(path: &Path) {
@@ -484,5 +499,52 @@ mod tests {
             assert!(validate_filename(bad).is_err(), "{bad:?} must be refused");
         }
         assert!(validate_filename("Fresh Animations v1.9.zip").is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn renameat2_errors_that_mean_unsupported_take_the_link_fallback() {
+        let decisions: Vec<(&str, bool)> = [
+            ("EINVAL", libc::EINVAL),
+            ("ENOSYS", libc::ENOSYS),
+            ("EPERM", libc::EPERM),
+            ("EACCES", libc::EACCES),
+            ("EEXIST", libc::EEXIST),
+        ]
+        .into_iter()
+        .map(|(name, errno)| {
+            let err = std::io::Error::from_raw_os_error(errno);
+            (name, rename_noreplace_unsupported(&err))
+        })
+        .collect();
+        assert_eq!(
+            decisions,
+            vec![
+                ("EINVAL", true),
+                ("ENOSYS", true),
+                ("EPERM", true),
+                ("EACCES", true),
+                ("EEXIST", false),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_link_fallback_commits_even_when_the_temp_will_not_unlink() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        let locked = root.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let temp = locked.join(".Pack.zip.tmp");
+        std::fs::write(&temp, b"pack").unwrap();
+        let dest = root.path().join("Pack.zip");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = no_replace_fallback(&temp, &dest).map_err(|err| err.kind());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"pack");
     }
 }
