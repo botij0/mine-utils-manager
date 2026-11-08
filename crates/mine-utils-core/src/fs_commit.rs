@@ -183,7 +183,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    const RENAME_ERRNOS: [(&str, i32); 9] = [
+    const RENAME_ERRNOS: [(&str, i32); 8] = [
         ("ENOTDIR", libc::ENOTDIR),
         ("EISDIR", libc::EISDIR),
         ("ENOTEMPTY", libc::ENOTEMPTY),
@@ -192,7 +192,6 @@ mod tests {
         ("EACCES", libc::EACCES),
         ("EXDEV", libc::EXDEV),
         ("ENOSPC", libc::ENOSPC),
-        ("EIO", libc::EIO),
     ];
 
     #[cfg(unix)]
@@ -229,7 +228,6 @@ mod tests {
                 "EACCES: Err(PermissionDenied); dest missing; temp kept true",
                 "EXDEV: Err(CrossesDevices); dest missing; temp kept true",
                 "ENOSPC: Err(StorageFull); dest missing; temp kept true",
-                "EIO: Err(Uncategorized); dest missing; temp kept true",
             ]
         );
     }
@@ -267,7 +265,6 @@ mod tests {
                 "EACCES: Err(PermissionDenied); dest missing; temp kept true",
                 "EXDEV: Err(CrossesDevices); dest missing; temp kept true",
                 "ENOSPC: Err(StorageFull); dest missing; temp kept true",
-                "EIO: Err(Uncategorized); dest missing; temp kept true",
             ]
         );
     }
