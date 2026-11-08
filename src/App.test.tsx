@@ -330,7 +330,10 @@ describe('App', () => {
   });
 
   it('pauses writes when the folder changes while the window is hidden', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    vi.useFakeTimers({
+      toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
+      shouldAdvanceTime: true,
+    });
     const user = userEvent.setup();
     const client = makeFakeClient({
       gameDirs: [gameDir('/home/demo/prism', true, true)],
@@ -375,7 +378,7 @@ describe('App', () => {
     expect(restore).toHaveAttribute('title', 'Close Minecraft before restoring');
   });
 
-  it('retries a guard check that never answers once it times out', async () => {
+  it('keeps one guard check outstanding after it times out and checks again once it settles', async () => {
     // The guard timeout is a setTimeout. The clock still follows real time so
     // Testing Library and user-event can await their own short timers.
     vi.useFakeTimers({
@@ -386,9 +389,13 @@ describe('App', () => {
     client.getResourceStack = async () => stackResponse(null);
     const guard = client.getGameGuard;
     let checks = 0;
+    let settleHung = () => {};
     client.getGameGuard = () => {
       checks += 1;
-      return checks === 2 ? new Promise(() => {}) : guard();
+      if (checks !== 2) return guard();
+      return new Promise((resolve) => {
+        settleHung = () => resolve(guard());
+      });
     };
     render(<App client={client} />);
     const list = await screen.findByRole('list', { name: 'Stack order' });
@@ -410,23 +417,78 @@ describe('App', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Game guard unavailable.');
     expect(remove).toBeDisabled();
 
-    await act(async () => {
-      vi.advanceTimersByTime(5000);
-    });
-    expect(checks).toBe(3);
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(remove).toBeEnabled();
-
+    for (let tick = 0; tick < 12; tick += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+    }
     await act(async () => {
       setDocumentHidden(true);
     });
     await act(async () => {
       setDocumentHidden(false);
     });
+    expect(checks).toBe(2);
+    expect(remove).toBeDisabled();
+
+    await act(async () => {
+      settleHung();
+    });
+    expect(checks).toBe(3);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(remove).toBeEnabled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
     expect(checks).toBe(4);
   });
 
-  it('retries the check a folder switch sent once it times out and lifts the pause on its answer', async () => {
+  it('keeps writes paused when a timed-out check answers late until a fresh check succeeds', async () => {
+    vi.useFakeTimers({
+      toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
+      shouldAdvanceTime: true,
+    });
+    const client = await shellClient();
+    client.getResourceStack = async () => stackResponse(null);
+    const guard = client.getGameGuard;
+    const held: Array<() => void> = [];
+    let checks = 0;
+    client.getGameGuard = () => {
+      checks += 1;
+      if (checks === 1) return guard();
+      return new Promise((resolve) => held.push(() => resolve(guard())));
+    };
+    render(<App client={client} />);
+    const list = await screen.findByRole('list', { name: 'Stack order' });
+    const remove = within(list).getByRole('button', { name: 'Remove' });
+    await waitFor(() => expect(remove).toBeEnabled());
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Game guard unavailable.');
+    expect(checks).toBe(2);
+
+    await act(async () => {
+      held[0]();
+    });
+    expect(checks).toBe(3);
+    expect(screen.getByRole('alert')).toHaveTextContent('Game guard unavailable.');
+    expect(remove).toBeDisabled();
+
+    await act(async () => {
+      held[1]();
+    });
+    expect(checks).toBe(3);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(remove).toBeEnabled();
+  });
+
+  it('times out the check a folder switch sent and checks that folder again once it settles', async () => {
     vi.useFakeTimers({
       toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
       shouldAdvanceTime: true,
@@ -439,11 +501,15 @@ describe('App', () => {
     await client.setActiveGameDir('/home/demo/.minecraft');
     const guard = client.getGameGuard;
     const checkedDirs: (string | null)[] = [];
+    let settleHung = () => {};
     client.getGameGuard = () => {
       const dir = client.config.active_game_dir;
       checkedDirs.push(dir);
       const prismChecks = checkedDirs.filter((checked) => checked === '/home/demo/prism').length;
-      return dir === '/home/demo/prism' && prismChecks === 1 ? new Promise(() => {}) : guard();
+      if (dir !== '/home/demo/prism' || prismChecks !== 1) return guard();
+      return new Promise((resolve) => {
+        settleHung = () => resolve(guard());
+      });
     };
     render(<App client={client} />);
 
@@ -460,12 +526,91 @@ describe('App', () => {
     const restore = screen.getByRole('button', { name: 'Restore' });
     expect(restore).toBeDisabled();
     expect(restore).toHaveAttribute('title', 'Mine Utils could not check whether Minecraft is running');
-    expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/prism']);
 
+    for (let tick = 0; tick < 4; tick += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+    }
+    expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/prism']);
+    expect(restore).toBeDisabled();
+
+    await act(async () => {
+      settleHung();
+    });
+    expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/prism', '/home/demo/prism']);
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
+  });
+
+  it('shows unknown one window after a folder switch finds a timed-out check still hung', async () => {
+    vi.useFakeTimers({
+      toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
+      shouldAdvanceTime: true,
+    });
+    const user = userEvent.setup();
+    const client = makeFakeClient({
+      gameDirs: [gameDir('/home/demo/.minecraft', true, true), gameDir('/home/demo/prism', true, true)],
+      backups: [OPTIONS_BACKUP],
+    });
+    await client.setActiveGameDir('/home/demo/.minecraft');
+    const guard = client.getGameGuard;
+    const checkedDirs: (string | null)[] = [];
+    let settleHung = () => {};
+    client.getGameGuard = () => {
+      checkedDirs.push(client.config.active_game_dir);
+      if (checkedDirs.length !== 2) return guard();
+      return new Promise((resolve) => {
+        settleHung = () => resolve({ running: null, stale_locks: [], detection_supported: true });
+      });
+    };
+    render(<App client={client} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Settings' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled());
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
-    expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/prism', '/home/demo/prism']);
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+    });
+    expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+      'title',
+      'Mine Utils could not check whether Minecraft is running',
+    );
+    expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/.minecraft']);
+
+    await user.click(screen.getByRole('button', { name: 'Use' }));
+    expect(
+      await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
+    ).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Restore' })).toHaveAttribute(
+      'title',
+      'Checking whether Minecraft is running',
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+      'title',
+      'Checking whether Minecraft is running',
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    const restore = screen.getByRole('button', { name: 'Restore' });
+    expect(restore).toBeDisabled();
+    expect(restore).toHaveAttribute('title', 'Mine Utils could not check whether Minecraft is running');
+    expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/.minecraft']);
+
+    await act(async () => {
+      settleHung();
+    });
+    expect(checkedDirs).toEqual([
+      '/home/demo/.minecraft',
+      '/home/demo/.minecraft',
+      '/home/demo/prism',
+    ]);
     expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
   });
 

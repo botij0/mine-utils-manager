@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { userEvent } from '@testing-library/user-event';
 import DiscoverPage from './DiscoverPage';
@@ -147,6 +147,36 @@ describe('discover dialogs', () => {
       <DiscoverPage client={client} gameRunning={undefined} gameGuardUnknown={false} hasGameDir />,
     );
     expect(screen.queryByText(/Game guard unavailable/)).toBeNull();
+  });
+
+  it('tells a failed guard check apart from one still running in the install sheet', async () => {
+    const client = makeFakeClient([]);
+    const { rerender } = render(
+      <DiscoverPage client={client} gameRunning={null} gameGuardUnknown hasGameDir />,
+    );
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), {
+      target: { value: 'fresh' },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Install…' }));
+    const sheet = await screen.findByRole('dialog');
+
+    expect(within(sheet).getByRole('status')).toHaveTextContent(
+      'Mine Utils could not check whether Minecraft is running; installs are paused until a check succeeds.',
+    );
+
+    rerender(
+      <DiscoverPage
+        client={client}
+        gameRunning={null}
+        gameGuardUnknown
+        gameGuardChecking
+        hasGameDir
+      />,
+    );
+    expect(within(sheet).getByRole('status')).toHaveTextContent(
+      'Checking whether Minecraft is running; installs are paused until the check lands.',
+    );
   });
 
   it('renders one dialog with aria-modal and closes on Escape', async () => {
