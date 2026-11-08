@@ -445,7 +445,7 @@ mod tests {
                     if std::mem::take(&mut refuse_first) {
                         return Err(std::io::Error::from_raw_os_error(libc::EPERM));
                     }
-                    std::fs::rename(from, to).unwrap();
+                    std::fs::rename(from, to)?;
                     Err(std::io::Error::from_raw_os_error(libc::EIO))
                 },
             )
