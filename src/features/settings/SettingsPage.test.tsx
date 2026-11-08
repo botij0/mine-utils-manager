@@ -14,6 +14,7 @@ function Harness({ client }: { client: FakeClient }) {
     <SettingsPage
       client={client}
       config={config}
+      gameRunning={null}
       onConfigChanged={setConfig}
     />
   );

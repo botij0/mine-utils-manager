@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { BackupsClient } from '../../lib/ipc';
-import { activeGameRunning, toAppError } from '../../lib/ipc';
+import { toAppError } from '../../lib/ipc';
 import type {
   BackupInfo,
   GameRunning,
@@ -13,8 +13,8 @@ interface BackupsPanelProps {
   client: BackupsClient;
   /** Changes here must reload the list; a game-running change must not. */
   activeGameDir?: string | null;
-  /** When the parent already tracks the game guard, it decides the block. */
-  gameRunning?: GameRunning | null;
+  /** The app-level guard answer. Undefined until the first check lands. */
+  gameRunning: GameRunning | null | undefined;
   /** No current app-level guard answer: unknown, so restores stay disabled. */
   gameGuardUnknown?: boolean;
   /** The unknown state is a new folder's first check, still pending. */
@@ -44,8 +44,6 @@ export default function BackupsPanel({
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<IpcError | null>(null);
-  const [ownRunning, setOwnRunning] = useState<GameRunning | null>(null);
-  const [ownUnknown, setOwnUnknown] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [levelGroups, setLevelGroups] = useState<
@@ -55,16 +53,13 @@ export default function BackupsPanel({
   const [levelError, setLevelError] = useState<IpcError | null>(null);
   const [levelRestoring, setLevelRestoring] = useState<string | null>(null);
 
-  const running = gameRunning !== undefined ? gameRunning : ownRunning;
-  const guardUnknown =
-    gameGuardUnknown || (gameRunning === undefined && ownUnknown);
-  const blocked = running !== null || guardUnknown;
-  const restoreTitle = running
+  const blocked = gameRunning !== null || gameGuardUnknown;
+  const restoreTitle = gameRunning
     ? 'Close Minecraft before restoring'
-    : gameGuardChecking
-      ? 'Checking whether Minecraft is running'
-      : guardUnknown
-        ? 'Mine Utils could not check whether Minecraft is running'
+    : gameGuardUnknown && !gameGuardChecking
+      ? 'Mine Utils could not check whether Minecraft is running'
+      : gameGuardUnknown || gameRunning === undefined
+        ? 'Checking whether Minecraft is running'
         : undefined;
 
   // A changed game dir replaces the whole table. The five-second running poll
@@ -91,26 +86,6 @@ export default function BackupsPanel({
       cancelled = true;
     };
   }, [client, activeGameDir]);
-
-  // Only used when the parent does not track the guard at all.
-  useEffect(() => {
-    if (gameRunning !== undefined) return undefined;
-    let cancelled = false;
-    activeGameRunning(client)
-      .then((running) => {
-        if (cancelled) return;
-        setOwnRunning(running);
-        setOwnUnknown(false);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        // Keep the last known running value; a failed check is unknown.
-        setOwnUnknown(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, activeGameDir, gameRunning]);
 
   // The `level.dat` backups of every world in one batch call, grouped by
   // world. Groups come from the backups themselves, so a corrupt `level.dat`

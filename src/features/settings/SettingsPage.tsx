@@ -17,7 +17,7 @@ interface SettingsPageProps {
   config: Config;
   onConfigChanged: (config: Config) => void;
   /** From the app-level game guard poll. Undefined until the first check. */
-  gameRunning?: GameRunning | null;
+  gameRunning: GameRunning | null | undefined;
   /** No current guard answer: unknown, so writes stay paused. */
   gameGuardUnknown?: boolean;
   /** The unknown state is a new folder's first check, still pending. */

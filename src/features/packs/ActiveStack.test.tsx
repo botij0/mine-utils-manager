@@ -196,7 +196,7 @@ describe('ActiveStack', () => {
               onRecheck={() => {}}
             />
           ) : null}
-          <BackupsPanel client={client} onRestored={setStack} />
+          <BackupsPanel client={client} gameRunning={null} onRestored={setStack} />
         </div>
       );
     }

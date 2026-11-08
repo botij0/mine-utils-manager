@@ -60,7 +60,7 @@ function makeClient({
 
 describe('BackupsPanel', () => {
   it('lists date, file, size, and a restore action', async () => {
-    render(<BackupsPanel client={makeClient()} />);
+    render(<BackupsPanel client={makeClient()} gameRunning={null} />);
 
     expect(await screen.findByText('2026-10-25 09:00:00 UTC')).toBeInTheDocument();
     expect(
@@ -72,7 +72,7 @@ describe('BackupsPanel', () => {
   });
 
   it('shows the empty state when there are no backups', async () => {
-    render(<BackupsPanel client={makeClient({ backups: [] })} />);
+    render(<BackupsPanel client={makeClient({ backups: [] })} gameRunning={null} />);
 
     expect(
       await screen.findByText(/No backups yet/),
@@ -83,6 +83,7 @@ describe('BackupsPanel', () => {
     render(
       <BackupsPanel
         client={makeClient({ error: new IpcError('no_active_game_dir', 'no active game dir') })}
+        gameRunning={null}
       />,
     );
 
@@ -95,6 +96,7 @@ describe('BackupsPanel', () => {
     render(
       <BackupsPanel
         client={makeClient({ error: new IpcError('backup', 'backup failed: disk on fire') })}
+        gameRunning={null}
       />,
     );
 
@@ -126,7 +128,7 @@ describe('BackupsPanel', () => {
     }
   });
 
-  it('allows restore without an app guard when options.txt is missing and the game is closed', async () => {
+  it('allows restore when options.txt is missing and the guard says the game is closed', async () => {
     const client = makeFakeClient({
       gameDirs: [gameDir('/home/demo/.minecraft', true, true)],
       backups: DEFAULT_BACKUPS,
@@ -135,7 +137,7 @@ describe('BackupsPanel', () => {
     client.getResourceStack = async () => {
       throw new IpcError('options_txt', 'options.txt is missing at /home/demo/.minecraft/options.txt');
     };
-    render(<BackupsPanel client={client} activeGameDir="/home/demo/.minecraft" />);
+    render(<BackupsPanel client={client} activeGameDir="/home/demo/.minecraft" gameRunning={null} />);
 
     const optionsTable = await screen.findByRole('table');
     await act(async () => {});
@@ -148,7 +150,7 @@ describe('BackupsPanel', () => {
   it('restores a backup and reports the refreshed stack', async () => {
     const user = userEvent.setup();
     const client = makeClient();
-    render(<BackupsPanel client={client} />);
+    render(<BackupsPanel client={client} gameRunning={null} />);
 
     const buttons = await screen.findAllByRole('button', { name: 'Restore' });
     await user.click(buttons[0]);
@@ -163,7 +165,7 @@ describe('BackupsPanel', () => {
   it('lists world level.dat backups grouped by world and restores one', async () => {
     const user = userEvent.setup();
     const client = makeClient();
-    render(<BackupsPanel client={client} />);
+    render(<BackupsPanel client={client} gameRunning={null} />);
 
     expect(await screen.findByText('World level.dat')).toBeInTheDocument();
     expect(await screen.findByText('Survival 1_17')).toBeInTheDocument();
@@ -200,7 +202,7 @@ describe('BackupsPanel', () => {
         display: '2026-10-25 10:15:00 UTC',
       },
     ];
-    render(<BackupsPanel client={client} />);
+    render(<BackupsPanel client={client} gameRunning={null} />);
 
     expect(await screen.findByText('Broken World')).toBeInTheDocument();
     expect(await screen.findByText('Deleted World')).toBeInTheDocument();
