@@ -26,9 +26,15 @@ pub fn parse_pack_meta(bytes: &[u8]) -> Result<PackMeta, PackError> {
         reason: "missing pack object".to_string(),
     })?;
 
-    let pack_format = pack.get("pack_format").and_then(parse_format);
-    let min_format = pack.get("min_format").and_then(parse_format);
-    let max_format = pack.get("max_format").and_then(parse_format);
+    let pack_format = pack
+        .get("pack_format")
+        .and_then(|value| parse_format(value, Bound::Exact));
+    let min_format = pack
+        .get("min_format")
+        .and_then(|value| parse_format(value, Bound::Exact));
+    let max_format = pack
+        .get("max_format")
+        .and_then(|value| parse_format(value, Bound::Upper));
     let supported_formats = pack.get("supported_formats").and_then(parse_supported);
 
     let description = pack
@@ -47,11 +53,29 @@ pub fn parse_pack_meta(bytes: &[u8]) -> Result<PackMeta, PackError> {
     })
 }
 
-fn parse_format(value: &Value) -> Option<FormatVersion> {
+/// How a bare major number reads. A lower bound or a pack's own format is that
+/// exact version (`82` is `82.0`); an upper bound written without a minor
+/// accepts every minor of that major.
+#[derive(Clone, Copy)]
+enum Bound {
+    Exact,
+    Upper,
+}
+
+impl Bound {
+    fn whole_major(self, major: u32) -> FormatVersion {
+        match self {
+            Bound::Exact => FormatVersion::from_major(major),
+            Bound::Upper => FormatVersion::any_minor_of(major),
+        }
+    }
+}
+
+fn parse_format(value: &Value, bound: Bound) -> Option<FormatVersion> {
     match value {
         Value::Number(number) => {
             if let Some(major) = number.as_u64() {
-                return Some(FormatVersion::from_major(u32::try_from(major).ok()?));
+                return Some(bound.whole_major(u32::try_from(major).ok()?));
             }
             let float = number.as_f64()?;
             let major = float.trunc();
@@ -61,35 +85,59 @@ fn parse_format(value: &Value) -> Option<FormatVersion> {
             let minor = ((float - major) * 10.0).round();
             Some(FormatVersion::new(major as u32, minor as u32))
         }
-        Value::Array(items) if items.len() == 2 => Some(FormatVersion::new(
-            u32::try_from(items[0].as_u64()?).ok()?,
-            u32::try_from(items[1].as_u64()?).ok()?,
-        )),
-        Value::String(text) => parse_format_string(text),
+        Value::Array(items) => match items.as_slice() {
+            [major] => Some(bound.whole_major(u32::try_from(major.as_u64()?).ok()?)),
+            [major, minor] => Some(FormatVersion::new(
+                u32::try_from(major.as_u64()?).ok()?,
+                u32::try_from(minor.as_u64()?).ok()?,
+            )),
+            _ => None,
+        },
+        Value::String(text) => parse_format_string(text, bound),
         _ => None,
     }
 }
 
-fn parse_format_string(text: &str) -> Option<FormatVersion> {
+fn parse_format_string(text: &str, bound: Bound) -> Option<FormatVersion> {
     let text = text.trim();
     match text.split_once('.') {
         Some((major, minor)) => Some(FormatVersion::new(major.parse().ok()?, minor.parse().ok()?)),
-        None => Some(FormatVersion::from_major(text.parse().ok()?)),
+        None => Some(bound.whole_major(text.parse().ok()?)),
     }
 }
 
+/// `supported_formats` lists major versions, so its upper end covers every
+/// minor of that major. An integer or one-element array is a single major.
 fn parse_supported(value: &Value) -> Option<FormatRange> {
     match value {
-        Value::Array(items) if items.len() == 2 => Some(FormatRange {
-            min: Some(parse_format(&items[0])?),
-            max: Some(parse_format(&items[1])?),
-        }),
+        Value::Array(items) => match items.as_slice() {
+            [major] => single_major(major),
+            [min, max] => Some(FormatRange {
+                min: Some(parse_format(min, Bound::Exact)?),
+                max: Some(parse_format(max, Bound::Upper)?),
+            }),
+            _ => None,
+        },
+        Value::Number(_) => single_major(value),
         Value::Object(map) => Some(FormatRange {
-            min: Some(map.get("min_inclusive").and_then(parse_format)?),
-            max: Some(map.get("max_inclusive").and_then(parse_format)?),
+            min: Some(
+                map.get("min_inclusive")
+                    .and_then(|value| parse_format(value, Bound::Exact))?,
+            ),
+            max: Some(
+                map.get("max_inclusive")
+                    .and_then(|value| parse_format(value, Bound::Upper))?,
+            ),
         }),
         _ => None,
     }
+}
+
+fn single_major(value: &Value) -> Option<FormatRange> {
+    Some(FormatRange {
+        min: Some(parse_format(value, Bound::Exact)?),
+        max: Some(parse_format(value, Bound::Upper)?),
+    })
 }
 
 /// Flatten a Minecraft text component. Strings, `{"text": ...}` objects, and
@@ -203,6 +251,38 @@ mod tests {
     }
 
     #[test]
+    fn one_element_and_integer_formats_follow_the_mcmeta_spec() {
+        let meta = parse(r#"{"pack":{"min_format":[82],"max_format":94}}"#);
+        assert_eq!(meta.min_format, Some(FormatVersion::new(82, 0)));
+        assert_eq!(meta.max_format, Some(FormatVersion::new(94, 0x7fff_ffff)));
+
+        let meta = parse(r#"{"pack":{"min_format":82,"max_format":[94]}}"#);
+        assert_eq!(meta.min_format, Some(FormatVersion::new(82, 0)));
+        assert_eq!(meta.max_format, Some(FormatVersion::new(94, 0x7fff_ffff)));
+
+        let meta = parse(r#"{"pack":{"min_format":[82,1],"max_format":[94,1]}}"#);
+        assert_eq!(meta.min_format, Some(FormatVersion::new(82, 1)));
+        assert_eq!(meta.max_format, Some(FormatVersion::new(94, 1)));
+    }
+
+    #[test]
+    fn supported_formats_accepts_an_integer_and_a_single_element_array() {
+        for json in [
+            r#"{"pack":{"supported_formats":42}}"#,
+            r#"{"pack":{"supported_formats":[42]}}"#,
+        ] {
+            let range = parse(json).supported_formats.unwrap();
+            assert_eq!(range.min, Some(FormatVersion::new(42, 0)), "{json}");
+            assert_eq!(
+                range.max,
+                Some(FormatVersion::new(42, 0x7fff_ffff)),
+                "{json}"
+            );
+            assert_eq!(range.label(), "42", "{json}");
+        }
+    }
+
+    #[test]
     fn plain_string_formats_parse_as_a_major_number() {
         let meta = parse(r#"{"pack":{"pack_format":"34","description":"S"}}"#);
         assert_eq!(meta.pack_format, Some(FormatVersion::from_major(34)));
@@ -220,7 +300,7 @@ mod tests {
         );
         let range = meta.supported_formats.unwrap();
         assert_eq!(range.min, Some(FormatVersion::from_major(34)));
-        assert_eq!(range.max, Some(FormatVersion::from_major(69)));
+        assert_eq!(range.max, Some(FormatVersion::new(69, 0x7fff_ffff)));
     }
 
     #[test]

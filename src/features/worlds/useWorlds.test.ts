@@ -41,6 +41,32 @@ describe('useWorlds', () => {
     );
   });
 
+  it('treats a max written as a whole number as covering every minor of that major', () => {
+    const anyMinor = 2147483647;
+    const range = { min: { major: 88, minor: 0 }, max: { major: 94, minor: anyMinor } };
+    expect(checkCompatibility(range, { major: 94, minor: 1 })).toBe('compatible');
+    expect(checkCompatibility(range, { major: 95, minor: 0 })).toBe('incompatible');
+    expect(checkCompatibility(range, { major: 87, minor: 5 })).toBe('incompatible');
+  });
+
+  it('names no game version for a pack pinned to 94.0, which a 94.1 world rejects', () => {
+    const world = { major: 94, minor: 1 };
+    const pinned = datapack('pinned.zip', null, null, {
+      format_range: { min: { major: 94, minor: 0 }, max: { major: 94, minor: 0 } },
+      game_label: null,
+    });
+    const whole = datapack('whole.zip', null, null, {
+      format_range: { min: { major: 94, minor: 0 }, max: { major: 94, minor: 2147483647 } },
+      game_label: '1.21.11',
+    });
+    expect(checkCompatibility(pinned.format_range, world)).toBe('incompatible');
+    expect(compatibilityWarning(pinned, world, 'World')).toBe(
+      'Built for an unknown range, but World needs data format 94.1. It may not load, but you can still enable it.',
+    );
+    expect(checkCompatibility(whole.format_range, world)).toBe('compatible');
+    expect(compatibilityWarning(whole, world, 'World')).toBeNull();
+  });
+
   it('reports a read-only error for a corrupt level.dat', async () => {
     const broken = world({ issue: { code: 'level_dat', message: 'corrupt' }, version: null });
     const failing: WorldsClient = {

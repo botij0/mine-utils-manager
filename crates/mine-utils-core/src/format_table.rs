@@ -79,7 +79,7 @@ impl FormatTable {
             PackKind::Data => &self.data,
             _ => &self.resource,
         };
-        lookup(entries, version)
+        exact(entries, version)
     }
 
     /// The data format for a world version name such as `1.21.10`, or `None`
@@ -126,10 +126,40 @@ impl FormatTable {
     }
 }
 
-fn lookup(entries: &[FormatRangeEntry], version: FormatVersion) -> Option<&str> {
+fn exact(entries: &[FormatRangeEntry], version: FormatVersion) -> Option<&str> {
     entries
         .iter()
         .find(|entry| entry.format == version)
+        .map(|entry| entry.label.as_str())
+}
+
+/// A lower bound: the exact row, or for a whole number such as `101` the
+/// lowest row of that major (`101.1`) that `max` still admits.
+fn lookup_min(
+    entries: &[FormatRangeEntry],
+    min: FormatVersion,
+    max: Option<FormatVersion>,
+) -> Option<&str> {
+    exact(entries, min).or_else(|| {
+        entries
+            .iter()
+            .filter(|entry| entry.format.major == min.major && entry.format > min)
+            .filter(|entry| max.is_none_or(|max| entry.format <= max))
+            .min_by_key(|entry| entry.format)
+            .map(|entry| entry.label.as_str())
+    })
+}
+
+/// An upper bound: the exact row, or for an any-minor max the highest row of
+/// that major.
+fn lookup_max(entries: &[FormatRangeEntry], version: FormatVersion) -> Option<&str> {
+    if version.minor != FormatVersion::ANY_MINOR {
+        return exact(entries, version);
+    }
+    entries
+        .iter()
+        .filter(|entry| entry.format.major == version.major)
+        .max_by_key(|entry| entry.format)
         .map(|entry| entry.label.as_str())
 }
 
@@ -147,11 +177,11 @@ fn half_label(entries: &[FormatRangeEntry], range: &FormatRange) -> Option<Strin
             if min > max {
                 return None;
             }
-            let start = lookup(entries, min)?;
+            let start = lookup_min(entries, min, range.max)?;
             if min == max {
                 return Some(start.to_string());
             }
-            let end = end_of(lookup(entries, max)?);
+            let end = end_of(lookup_max(entries, max)?);
             let start = start_of(start);
             if start == end {
                 Some(start.to_string())
@@ -160,9 +190,11 @@ fn half_label(entries: &[FormatRangeEntry], range: &FormatRange) -> Option<Strin
             }
         }
         (Some(min), None) => {
-            lookup(entries, min).map(|label| format!("{} and newer", start_of(label)))
+            lookup_min(entries, min, None).map(|label| format!("{} and newer", start_of(label)))
         }
-        (None, Some(max)) => lookup(entries, max).map(|label| format!("up to {}", end_of(label))),
+        (None, Some(max)) => {
+            lookup_max(entries, max).map(|label| format!("up to {}", end_of(label)))
+        }
         (None, None) => None,
     }
 }
@@ -361,6 +393,40 @@ mod tests {
             ),
             None,
             "a reversed range is unknown"
+        );
+    }
+
+    #[test]
+    fn an_any_minor_max_labels_the_highest_row_of_that_major() {
+        let table = FormatTable::embedded();
+        let range = FormatRange {
+            min: Some(FormatVersion::from_major(88)),
+            max: Some(FormatVersion::new(94, 0x7fff_ffff)),
+        };
+        assert_eq!(
+            table.game_label(PackKind::Data, &range).as_deref(),
+            Some("1.21.9 to 1.21.11")
+        );
+        let lone_max = FormatRange {
+            min: None,
+            max: Some(FormatVersion::new(101, 0x7fff_ffff)),
+        };
+        assert_eq!(
+            table.game_label(PackKind::Data, &lone_max).as_deref(),
+            Some("up to 26.1.2")
+        );
+    }
+
+    #[test]
+    fn a_whole_number_min_matches_the_lowest_row_of_its_major() {
+        let table = FormatTable::embedded();
+        let range = FormatRange {
+            min: Some(FormatVersion::from_major(101)),
+            max: Some(FormatVersion::new(101, 0x7fff_ffff)),
+        };
+        assert_eq!(
+            table.game_label(PackKind::Data, &range).as_deref(),
+            Some("26.1 to 26.1.2")
         );
     }
 
