@@ -742,4 +742,110 @@ describe('App', () => {
     });
     expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
   });
+  it('shows unknown one window after a hidden folder switch finds a timed-out check still hung', async () => {
+    vi.useFakeTimers({
+      toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
+      shouldAdvanceTime: true,
+    });
+    window.location.hash = 'settings';
+    const user = userEvent.setup();
+    const client = makeFakeClient({
+      gameDirs: [gameDir('/home/demo/.minecraft', true, true), gameDir('/home/demo/prism', true, true)],
+      backups: [OPTIONS_BACKUP],
+    });
+    await client.setActiveGameDir('/home/demo/.minecraft');
+    client.getResourceStack = async () => stackResponse(null);
+    const calls = holdGuardCalls(client);
+    render(<App client={client} />);
+
+    await screen.findByRole('button', { name: 'Restore' });
+    await waitFor(() => expect(calls).toHaveLength(1));
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+    });
+    expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+      'title',
+      'Mine Utils could not check whether Minecraft is running',
+    );
+
+    await act(async () => {
+      setDocumentHidden(true);
+    });
+    await user.click(screen.getByRole('button', { name: 'Use' }));
+    expect(
+      await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
+    ).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Restore' })).toHaveAttribute(
+      'title',
+      'Checking whether Minecraft is running',
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+    });
+    expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+      'title',
+      'Mine Utils could not check whether Minecraft is running',
+    );
+    await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+    expect(await screen.findByText('Game guard unavailable.')).toBeInTheDocument();
+    expect(calls.map((call) => call.dir)).toEqual(['/home/demo/.minecraft']);
+  });
+
+  it('drops a hung answer after switching away and back, and lets a fresh check answer', async () => {
+    window.location.hash = 'settings';
+    const user = userEvent.setup();
+    const client = makeFakeClient({
+      gameDirs: [gameDir('/home/demo/.minecraft', true, true), gameDir('/home/demo/prism', true, true)],
+      backups: [OPTIONS_BACKUP],
+    });
+    await client.setActiveGameDir('/home/demo/.minecraft');
+    const calls = holdGuardCalls(client);
+    render(<App client={client} />);
+
+    await screen.findByRole('button', { name: 'Restore' });
+    await user.click(screen.getByRole('button', { name: 'Use' }));
+    expect(
+      await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
+    ).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    expect(
+      await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/\.minecraft/ }),
+    ).toBeInTheDocument();
+    expect(calls.map((call) => call.dir)).toEqual(['/home/demo/.minecraft']);
+
+    await act(async () => {
+      calls[0].answer(RUNNING);
+    });
+    const restore = await screen.findByRole('button', { name: 'Restore' });
+    expect(restore).toBeDisabled();
+    expect(restore).toHaveAttribute('title', 'Checking whether Minecraft is running');
+    expect(calls.map((call) => call.dir)).toEqual(['/home/demo/.minecraft', '/home/demo/.minecraft']);
+
+    await act(async () => {
+      calls[1].answer(null);
+    });
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
+  });
+
+  it('sends nothing and leaves no timer after unmount', async () => {
+    vi.useFakeTimers({
+      toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
+      shouldAdvanceTime: true,
+    });
+    const client = await shellClient();
+    const calls = holdGuardCalls(client);
+    const { unmount } = render(<App client={client} />);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => {
+      calls[0].answer(null);
+    });
+    expect(calls).toHaveLength(1);
+  });
 });
