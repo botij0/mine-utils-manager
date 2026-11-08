@@ -62,15 +62,16 @@ export default function App({ client = ipc }: AppProps) {
   const [refreshEpoch, setRefreshEpoch] = useState(0);
   // At most one get_game_guard is outstanding: a hung call parks a backend
   // thread, so only its real settle frees the slot. A check wanted meanwhile
-  // runs once the slot frees. An answer that outlived its deadline, or was
-  // sent for another folder, is dropped.
+  // runs once the slot frees. The outstanding answer goes stale when it
+  // outlives its deadline, the folder changes, or App unmounts, and a stale
+  // answer is dropped.
   const guard = useRef<{
     busy: boolean;
     wanted: boolean;
-    expired: boolean;
+    stale: boolean;
     deadline?: ReturnType<typeof setTimeout>;
     dir?: string | null;
-  }>({ busy: false, wanted: false, expired: false });
+  }>({ busy: false, wanted: false, stale: false });
 
   useEffect(() => {
     window.location.hash = page;
@@ -93,7 +94,7 @@ export default function App({ client = ipc }: AppProps) {
     const slot = guard.current;
     clearTimeout(slot.deadline);
     slot.deadline = setTimeout(() => {
-      slot.expired = true;
+      slot.stale = true;
       setGuardPause('unknown');
     }, GUARD_TIMEOUT_MS);
   }, []);
@@ -103,13 +104,12 @@ export default function App({ client = ipc }: AppProps) {
     const send = () => {
       slot.busy = true;
       slot.wanted = false;
-      slot.expired = false;
-      const dir = slot.dir;
+      slot.stale = false;
       armGuardDeadline();
       const settle = (apply: () => void) => {
         slot.busy = false;
         clearTimeout(slot.deadline);
-        if (!slot.expired && dir === slot.dir) apply();
+        if (!slot.stale) apply();
         if (slot.wanted) send();
       };
       activeGameRunning(client).then(
@@ -135,10 +135,13 @@ export default function App({ client = ipc }: AppProps) {
     const folderChanged = slot.dir !== undefined && slot.dir !== config.active_game_dir;
     slot.dir = config.active_game_dir;
     if (folderChanged) setGuardPause('checking');
+    if (folderChanged && slot.busy) {
+      slot.stale = true;
+      armGuardDeadline();
+    }
     const tick = () => {
       if (!document.hidden) refreshGameRunning();
     };
-    if (folderChanged && slot.busy && !document.hidden) armGuardDeadline();
     tick();
     const timer = setInterval(tick, GUARD_POLL_MS);
     document.addEventListener('visibilitychange', tick);
@@ -147,6 +150,15 @@ export default function App({ client = ipc }: AppProps) {
       document.removeEventListener('visibilitychange', tick);
     };
   }, [configReady, config.active_game_dir, onboarded, refreshGameRunning, armGuardDeadline]);
+
+  useEffect(() => {
+    const slot = guard.current;
+    return () => {
+      clearTimeout(slot.deadline);
+      slot.stale = true;
+      slot.wanted = false;
+    };
+  }, []);
 
   useEffect(() => {
     client
