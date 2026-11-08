@@ -83,12 +83,20 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
 /// rename. A plain SFTP rename refuses any rival with `EPERM` and keeps it.
 /// When the rename fails and an entry now sits at `dest`, the error is
 /// `AlreadyExists`.
+///
+/// A rename can land and still return an error, as a flaky sshfs or NFS link
+/// reports it. When `temp` is then gone and `dest` exists, either rename
+/// returns `Ok`.
 fn checked_rename(
     temp: &Path,
     dest: &Path,
     read_claim: impl FnOnce(&Path) -> std::io::Result<std::fs::Metadata>,
     mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
+    let mut rename = |from: &Path, to: &Path| match rename(from, to) {
+        Err(_) if rename_landed(from, to) => Ok(()),
+        result => result,
+    };
     let rivals = if std::fs::symlink_metadata(temp)?.is_dir() {
         std::fs::create_dir(dest)?;
         let claim = match read_claim(dest) {
@@ -118,6 +126,13 @@ fn checked_rename(
         Ok(_) => std::io::Error::new(ErrorKind::AlreadyExists, err),
         Err(_) => taken_as_already_exists(err, rivals),
     })
+}
+
+/// Temp names are unique to this process, so a missing `temp` was moved by
+/// our own rename.
+fn rename_landed(temp: &Path, dest: &Path) -> bool {
+    std::fs::symlink_metadata(temp).is_err_and(|err| err.kind() == ErrorKind::NotFound)
+        && std::fs::symlink_metadata(dest).is_ok()
 }
 
 /// `rename` reports a rival at `dest` with these errors instead of `EEXIST`.
