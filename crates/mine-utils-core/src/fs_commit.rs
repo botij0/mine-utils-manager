@@ -62,10 +62,11 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
 /// entry, then renames onto its own empty claim. A rival that removes the
 /// claim and puts its own empty folder there is replaced by that rename.
 ///
-/// If reading the claim back fails, the claim is removed with `remove_dir`,
-/// which refuses a folder with entries. If the rename onto the claim fails,
-/// the claim is removed only while it is empty and still has the claim's
-/// device and inode (Unix only). sshfs numbers inodes by path, so an empty
+/// If reading the claim back fails, the name is removed with `remove_dir`,
+/// which refuses a folder with entries, so it removes the claim or a rival's
+/// empty folder put there after it. If the rename onto the claim fails, the
+/// claim is removed only while it is empty and still has the claim's device
+/// and inode (Unix only). sshfs numbers inodes by path, so an empty
 /// folder that a rival puts at `dest` on the server passes the check and is
 /// removed. When the claim was removed and the error is a plain rename's
 /// refusal, the folder is moved like a file, and that retry can replace
