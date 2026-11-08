@@ -13,8 +13,10 @@ interface DiscoverPageProps {
   client?: IpcClient;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
-  /** A failed guard check: unknown, so installs stay paused. */
+  /** No current guard answer: unknown, so installs stay paused. */
   gameGuardUnknown?: boolean;
+  /** The unknown state is a new folder's first check, still pending. */
+  gameGuardChecking?: boolean;
   /** False when no game dir is active: installs have nowhere to go. */
   hasGameDir?: boolean;
   /** Force the app-level game guard to re-check now. */
@@ -27,6 +29,7 @@ export default function DiscoverPage({
   client = ipc,
   gameRunning,
   gameGuardUnknown = false,
+  gameGuardChecking = false,
   hasGameDir = false,
   refreshGameRunning = () => {},
   onInstalled = () => {},
@@ -59,9 +62,11 @@ export default function DiscoverPage({
     ? 'No game dir is active. Pick a game dir in Settings first, then install.'
     : gameRunning != null
       ? `Minecraft is running (${gameRunning.detail}); installs are paused until it closes.`
-      : gameGuardUnknown || gameRunning === undefined
-        ? 'Checking whether Minecraft is running; installs are paused until the check lands.'
-        : null;
+      : gameGuardUnknown && !gameGuardChecking
+        ? 'Mine Utils could not check whether Minecraft is running; installs are paused until a check succeeds.'
+        : gameGuardUnknown || gameRunning === undefined
+          ? 'Checking whether Minecraft is running; installs are paused until the check lands.'
+          : null;
 
   const selectedVersion =
     discover.versions.find((version) => version.id === discover.selectedVersionId) ?? null;
@@ -93,6 +98,7 @@ export default function DiscoverPage({
         <GameRunningBanner
           running={gameRunning ?? null}
           guardUnknown={gameGuardUnknown}
+          checking={gameGuardChecking}
           staleLocks={[]}
           supported
           onRecheck={() => void refreshGameRunning()}

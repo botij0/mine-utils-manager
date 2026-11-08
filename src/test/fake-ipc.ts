@@ -229,6 +229,12 @@ export function makeFakeClient(
     async getResourceStack() {
       return currentStack();
     },
+    async getGameGuard() {
+      if (!config.active_game_dir) {
+        throw new IpcError('no_active_game_dir', 'no active game dir; pick one in Settings first');
+      }
+      return { running, stale_locks: [...staleLocks], detection_supported: true };
+    },
     async setResourcePackEnabled(filename: string, enabled: boolean) {
       toggles.push({ filename, enabled });
       const value = `file/${filename}`;

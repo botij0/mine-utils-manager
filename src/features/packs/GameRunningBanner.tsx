@@ -2,8 +2,10 @@ import type { GameRunning } from '../../lib/types';
 
 interface GameRunningBannerProps {
   running: GameRunning | null;
-  /** True when the last guard check failed, so the state is unknown. */
+  /** True when no current guard answer exists, so the state is unknown. */
   guardUnknown: boolean;
+  /** The unknown state is a new folder's first check, still pending. */
+  checking?: boolean;
   staleLocks: string[];
   supported: boolean;
   onRecheck: () => void;
@@ -12,12 +14,14 @@ interface GameRunningBannerProps {
 /**
  * Blocks every write while Minecraft is open, naming the lock path or the
  * process so the operator knows what to close. A failed check is unknown, so it
- * pauses writes instead of claiming the game stopped. A stale `session.lock`
- * nobody holds is only noted; it never blocks.
+ * pauses writes instead of claiming the game stopped. A new folder's first
+ * check pauses writes with a neutral status line, not an alert. A stale
+ * `session.lock` nobody holds is only noted; it never blocks.
  */
 export default function GameRunningBanner({
   running,
   guardUnknown,
+  checking = false,
   staleLocks,
   supported,
   onRecheck,
@@ -35,9 +39,17 @@ export default function GameRunningBanner({
     );
   }
 
+  if (guardUnknown && checking) {
+    return (
+      <div key="checking" className="banner" role="status">
+        Checking whether Minecraft is running; writes are paused until the check lands.
+      </div>
+    );
+  }
+
   if (guardUnknown) {
     return (
-      <div className="banner banner-danger" role="alert">
+      <div key="unknown" className="banner banner-danger" role="alert">
         <div>
           <strong>Game guard unavailable.</strong> Mine Utils could not check
           whether Minecraft is running, so writes are paused.

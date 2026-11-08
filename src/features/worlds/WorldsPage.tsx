@@ -15,8 +15,10 @@ interface WorldsPageProps {
   client?: WorldsClient;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
-  /** A failed guard check is unknown, so writes stay paused. */
+  /** No current guard answer is unknown, so writes stay paused. */
   gameGuardUnknown?: boolean;
+  /** The unknown state is a new folder's first check, still pending. */
+  gameGuardChecking?: boolean;
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
 }
@@ -25,6 +27,7 @@ export default function WorldsPage({
   client = ipc,
   gameRunning,
   gameGuardUnknown = false,
+  gameGuardChecking = false,
   refreshGameRunning = () => {},
 }: WorldsPageProps) {
   const {
@@ -62,10 +65,11 @@ export default function WorldsPage({
   const selectedDirRef = useRef<string | null>(null);
   selectedDirRef.current = selected?.dir_name ?? null;
 
-  // Re-check everything after a lock release: the app guard, the world's
-  // listing, and the world list itself (a release is never blocked by issue).
+  // Re-check everything after a lock release: queue an app guard check, then
+  // reread the world's listing and the world list itself (a release is never
+  // blocked by issue).
   const refreshAfterGuard = useCallback(async () => {
-    await refreshGameRunning();
+    void refreshGameRunning();
     await refreshListing();
     await reload();
   }, [refreshGameRunning, refreshListing, reload]);
@@ -283,6 +287,7 @@ export default function WorldsPage({
                   world={selected}
                   gameRunning={gameRunning}
                   gameGuardUnknown={gameGuardUnknown}
+                  gameGuardChecking={gameGuardChecking}
                   staleLocks={locked || running ? [] : (stack?.stale_locks ?? [])}
                   refreshGameRunning={refreshGameRunning}
                   onRefresh={refreshAfterGuard}

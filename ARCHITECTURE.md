@@ -69,7 +69,7 @@ flowchart LR
 | `src/lib/ipc.mock.ts` | Offline browser implementation with synthetic data |
 | `src/lib/types.ts` | TypeScript counterparts of the Rust request and response shapes |
 | `src-tauri/src/lib.rs` | Desktop setup, plugins, managed state, and command registration |
-| `src-tauri/src/commands/` | Tauri adapters for game folders, packs, stacks, worlds, and Discover |
+| `src-tauri/src/commands/` | Tauri adapters for game folders, the game guard, packs, stacks, worlds, and Discover |
 | `crates/mine-utils-core/src/` | Filesystem, Minecraft formats, backups, locking, Modrinth, and install logic |
 | `crates/mine-utils-core/src/bin/mine-utils-probe.rs` | CLI access to selected core operations |
 | `assets/` | Project artwork |
@@ -85,8 +85,12 @@ There is no global frontend store or router dependency. `App.tsx` owns app-level
 
 - Loads `Config` before deciding whether to show onboarding.
 - Applies `system`, `light`, or `dark` to the document and follows system theme changes when needed.
-- Polls the resource stack every five seconds to obtain the shared game-running state.
-- Keeps writes paused when a guard check fails. Only a successful check can clear that state.
+- Polls `get_game_guard` every five seconds for the shared game-running state. The command only probes session locks and processes, so a missing or malformed `options.txt` cannot pause writes.
+- Checks at once when the active folder changes or onboarding finishes. A folder change pauses writes until that folder's answer lands, even while the window is hidden and no check goes out. Until then the banner shows a neutral "Checking whether Minecraft is running" line instead of the "Game guard unavailable" alert, unless the last answer said Minecraft was running, in which case the banner keeps showing that running alert. Before the app's first answer, Settings disables Restore and Discover disables installs with the same checking reason.
+- Skips a poll tick while the window is hidden. The window becoming visible triggers a check.
+- Keeps at most one `get_game_guard` call outstanding across the whole app, because a call that hangs on a dead mount parks a backend thread. App is the only caller; pages, Settings included, read its answer. A tick, a Recheck, a visibility change, a folder change, or finished onboarding that finds a call outstanding is remembered, and one fresh check runs as soon as that call settles.
+- Gives each check 15 seconds, three poll intervals. A check with no answer by then counts as failed and its late answer is ignored, but the slot stays busy until the call settles. A folder change that finds the slot busy drops that call's answer, even if the user switches back before it lands, so only a check sent after the change can answer. It also restarts the 15 seconds, hidden window or not, so the banner moves from checking to the unavailable alert instead of checking forever. Unmounting App clears the deadline and drops the outstanding answer and any remembered check.
+- Treats `no_active_game_dir` as nothing to guard. Keeps writes paused and shows the unavailable alert when any other guard check fails or times out. Only a successful check can clear that state.
 - Remounts Packs and Worlds after a Discover install so they reread Minecraft's files.
 
 ### Feature state
@@ -135,7 +139,7 @@ sequenceDiagram
     Tauri->>Tauri: Manage AppState, PackState, StackState, ModrinthState
     Tauri->>UI: Load frontend
     UI->>Tauri: get_config
-    UI->>Tauri: get_resource_stack for game guard
+    UI->>Tauri: get_game_guard
     alt No active game folder
         UI->>UI: Show onboarding
     else Active folder exists

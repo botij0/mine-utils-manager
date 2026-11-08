@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ipc } from './lib/ipc';
 import type { IpcClient } from './lib/ipc';
 import type { AppError, Config, GameRunning, Theme } from './lib/types';
 import { defaultConfig } from './lib/types';
-import { toAppError } from './lib/ipc';
+import { activeGameRunning, toAppError } from './lib/ipc';
 import DiscoverPage from './features/discover/DiscoverPage';
 import Onboarding from './features/onboarding/Onboarding';
 import PacksPage from './features/packs/PacksPage';
@@ -11,6 +11,9 @@ import SettingsPage from './features/settings/SettingsPage';
 import WorldsPage from './features/worlds/WorldsPage';
 
 type PageId = 'packs' | 'worlds' | 'discover' | 'settings';
+
+const GUARD_POLL_MS = 5000;
+const GUARD_TIMEOUT_MS = 3 * GUARD_POLL_MS;
 
 const PAGES: { id: PageId; label: string }[] = [
   { id: 'packs', label: 'Resource Packs' },
@@ -49,9 +52,7 @@ export default function App({ client = ipc }: AppProps) {
   // Undefined until the first check lands, so the pages can tell "not yet
   // checked" apart from a fresh "not running" result.
   const [gameRunning, setGameRunning] = useState<GameRunning | null | undefined>(undefined);
-  // A failed check is unknown, not evidence the game stopped. The last known
-  // running value stays and writes stay paused until a check succeeds.
-  const [gameGuardUnknown, setGameGuardUnknown] = useState(false);
+  const [guardPause, setGuardPause] = useState<'checking' | 'unknown' | null>(null);
   // True once the stored config lands, so onboarding only shows for a real
   // first run and never for the default placeholder.
   const [configReady, setConfigReady] = useState(false);
@@ -59,6 +60,18 @@ export default function App({ client = ipc }: AppProps) {
   const [onboarded, setOnboarded] = useState(false);
   // Bumped after a Discover install so Packs/Worlds refetch on return.
   const [refreshEpoch, setRefreshEpoch] = useState(0);
+  // At most one get_game_guard is outstanding: a hung call parks a backend
+  // thread, so only its real settle frees the slot. A check wanted meanwhile
+  // runs once the slot frees. The outstanding answer goes stale when it
+  // outlives its deadline, the folder changes, or App unmounts, and a stale
+  // answer is dropped.
+  const guard = useRef<{
+    busy: boolean;
+    wanted: boolean;
+    stale: boolean;
+    deadline?: ReturnType<typeof setTimeout>;
+    dir?: string | null;
+  }>({ busy: false, wanted: false, stale: false });
 
   useEffect(() => {
     window.location.hash = page;
@@ -77,24 +90,75 @@ export default function App({ client = ipc }: AppProps) {
       });
   }, [client]);
 
-  const refreshGameRunning = useCallback(async () => {
-    try {
-      const stack = await client.getResourceStack();
-      setGameRunning(stack.running);
-      setGameGuardUnknown(false);
-    } catch {
-      // Keep the last known value: only a successful check may clear it.
-      setGameGuardUnknown(true);
-    }
-  }, [client]);
+  const armGuardDeadline = useCallback(() => {
+    const slot = guard.current;
+    clearTimeout(slot.deadline);
+    slot.deadline = setTimeout(() => {
+      slot.stale = true;
+      setGuardPause('unknown');
+    }, GUARD_TIMEOUT_MS);
+  }, []);
+
+  const refreshGameRunning = useCallback(() => {
+    const slot = guard.current;
+    const send = () => {
+      slot.busy = true;
+      slot.wanted = false;
+      slot.stale = false;
+      armGuardDeadline();
+      const settle = (apply: () => void) => {
+        slot.busy = false;
+        clearTimeout(slot.deadline);
+        if (!slot.stale) apply();
+        if (slot.wanted) send();
+      };
+      activeGameRunning(client).then(
+        (running) =>
+          settle(() => {
+            setGameRunning(running);
+            setGuardPause(null);
+          }),
+        // Keep the last known value: only a successful check may clear it.
+        () => settle(() => setGuardPause('unknown')),
+      );
+    };
+    if (slot.busy) slot.wanted = true;
+    else send();
+  }, [client, armGuardDeadline]);
 
   // Writes on any page stop while Minecraft runs. The callback is stable, so
-  // pages can force a fresh check without re-subscribing the poll.
+  // pages can force a fresh check without re-subscribing the poll. A new
+  // folder or a finished onboarding checks at once instead of waiting a tick.
   useEffect(() => {
-    void refreshGameRunning();
-    const timer = setInterval(() => void refreshGameRunning(), 5000);
-    return () => clearInterval(timer);
-  }, [refreshGameRunning]);
+    if (!configReady) return undefined;
+    const slot = guard.current;
+    const folderChanged = slot.dir !== undefined && slot.dir !== config.active_game_dir;
+    slot.dir = config.active_game_dir;
+    if (folderChanged) setGuardPause('checking');
+    if (folderChanged && slot.busy) {
+      slot.stale = true;
+      armGuardDeadline();
+    }
+    const tick = () => {
+      if (!document.hidden) refreshGameRunning();
+    };
+    tick();
+    const timer = setInterval(tick, GUARD_POLL_MS);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [configReady, config.active_game_dir, onboarded, refreshGameRunning, armGuardDeadline]);
+
+  useEffect(() => {
+    const slot = guard.current;
+    return () => {
+      clearTimeout(slot.deadline);
+      slot.stale = true;
+      slot.wanted = false;
+    };
+  }, []);
 
   useEffect(() => {
     client
@@ -181,7 +245,8 @@ export default function App({ client = ipc }: AppProps) {
               key={`packs-${refreshEpoch}`}
               client={client}
               gameRunning={gameRunning}
-              gameGuardUnknown={gameGuardUnknown}
+              gameGuardUnknown={guardPause !== null}
+              gameGuardChecking={guardPause === 'checking'}
               refreshGameRunning={refreshGameRunning}
             />
           ) : null}
@@ -190,7 +255,8 @@ export default function App({ client = ipc }: AppProps) {
               key={`worlds-${refreshEpoch}`}
               client={client}
               gameRunning={gameRunning}
-              gameGuardUnknown={gameGuardUnknown}
+              gameGuardUnknown={guardPause !== null}
+              gameGuardChecking={guardPause === 'checking'}
               refreshGameRunning={refreshGameRunning}
             />
           ) : null}
@@ -198,7 +264,8 @@ export default function App({ client = ipc }: AppProps) {
             <DiscoverPage
               client={client}
               gameRunning={gameRunning}
-              gameGuardUnknown={gameGuardUnknown}
+              gameGuardUnknown={guardPause !== null}
+              gameGuardChecking={guardPause === 'checking'}
               hasGameDir={config.active_game_dir != null}
               refreshGameRunning={refreshGameRunning}
               onInstalled={() => setRefreshEpoch((epoch) => epoch + 1)}
@@ -209,7 +276,8 @@ export default function App({ client = ipc }: AppProps) {
               client={client}
               config={config}
               gameRunning={gameRunning}
-              gameGuardUnknown={gameGuardUnknown}
+              gameGuardUnknown={guardPause !== null}
+              gameGuardChecking={guardPause === 'checking'}
               refreshGameRunning={refreshGameRunning}
               onConfigChanged={setConfig}
             />

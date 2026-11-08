@@ -17,9 +17,11 @@ interface SettingsPageProps {
   config: Config;
   onConfigChanged: (config: Config) => void;
   /** From the app-level game guard poll. Undefined until the first check. */
-  gameRunning?: GameRunning | null;
-  /** A failed guard check: unknown, so writes stay paused. */
+  gameRunning: GameRunning | null | undefined;
+  /** No current guard answer: unknown, so writes stay paused. */
   gameGuardUnknown?: boolean;
+  /** The unknown state is a new folder's first check, still pending. */
+  gameGuardChecking?: boolean;
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
 }
@@ -30,6 +32,7 @@ export default function SettingsPage({
   onConfigChanged,
   gameRunning,
   gameGuardUnknown = false,
+  gameGuardChecking = false,
   refreshGameRunning = () => {},
 }: SettingsPageProps) {
   const [error, setError] = useState<AppError | null>(null);
@@ -77,6 +80,7 @@ export default function SettingsPage({
         activeGameDir={config.active_game_dir}
         gameRunning={gameRunning}
         gameGuardUnknown={gameGuardUnknown}
+        gameGuardChecking={gameGuardChecking}
         refreshGameRunning={refreshGameRunning}
       />
     </div>

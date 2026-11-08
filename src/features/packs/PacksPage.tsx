@@ -23,8 +23,10 @@ interface PacksPageProps {
   pickPath?: (directory: boolean) => Promise<string | null>;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
-  /** A failed guard check: unknown, so writes stay paused. */
+  /** No current guard answer: unknown, so writes stay paused. */
   gameGuardUnknown?: boolean;
+  /** The unknown state is a new folder's first check, still pending. */
+  gameGuardChecking?: boolean;
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
 }
@@ -47,6 +49,7 @@ export default function PacksPage({
   pickPath = pickPackPath,
   gameRunning,
   gameGuardUnknown = false,
+  gameGuardChecking = false,
   refreshGameRunning = () => {},
 }: PacksPageProps) {
   const {
@@ -348,6 +351,7 @@ export default function PacksPage({
             busy={busy}
             running={running}
             guardUnknown={gameGuardUnknown}
+            guardChecking={gameGuardChecking}
             onToggle={(filename, enabled) => void handleToggle(filename, enabled)}
             onReorder={(order) => void handleReorder(order)}
             onRecheck={() => {
@@ -363,6 +367,7 @@ export default function PacksPage({
             <GameRunningBanner
               running={running}
               guardUnknown={gameGuardUnknown}
+              checking={gameGuardChecking}
               staleLocks={[]}
               supported
               onRecheck={() => {
