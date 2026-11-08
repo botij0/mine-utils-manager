@@ -87,8 +87,9 @@ There is no global frontend store or router dependency. `App.tsx` owns app-level
 - Applies `system`, `light`, or `dark` to the document and follows system theme changes when needed.
 - Polls `get_game_guard` every five seconds for the shared game-running state. The command only probes session locks and processes, so a missing or malformed `options.txt` cannot pause writes.
 - Checks at once when the active folder changes or onboarding finishes. A folder change pauses writes until that folder's answer lands, even while the window is hidden and no check goes out. Until then the banner shows a neutral "Checking whether Minecraft is running" line instead of the "Game guard unavailable" alert.
-- Skips a poll tick while the window is hidden or the newest check is unanswered. The window becoming visible triggers a check.
-- Gives each check 15 seconds, three poll intervals. A check with no answer by then counts as failed, its late answer is ignored, and the next tick retries. A call that never settles holds the poll for at most 15 seconds plus one poll interval.
+- Skips a poll tick while the window is hidden. The window becoming visible triggers a check.
+- Keeps at most one `get_game_guard` call outstanding, because a call that hangs on a dead mount parks a backend thread. A tick, a Recheck, a visibility change, a folder change, or finished onboarding that finds a call outstanding is remembered, and one fresh check runs as soon as that call settles.
+- Gives each check 15 seconds, three poll intervals. A check with no answer by then counts as failed and its late answer is ignored, but the slot stays busy until the call settles. A folder change that finds the slot busy restarts the 15 seconds, so the banner moves from checking to the unavailable alert instead of checking forever.
 - Treats `no_active_game_dir` as nothing to guard. Keeps writes paused and shows the unavailable alert when any other guard check fails or times out. Only a successful check can clear that state.
 - Remounts Packs and Worlds after a Discover install so they reread Minecraft's files.
 
