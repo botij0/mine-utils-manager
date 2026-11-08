@@ -65,10 +65,11 @@ export default function WorldsPage({
   const selectedDirRef = useRef<string | null>(null);
   selectedDirRef.current = selected?.dir_name ?? null;
 
-  // Re-check everything after a lock release: the app guard, the world's
-  // listing, and the world list itself (a release is never blocked by issue).
+  // Re-check everything after a lock release: queue an app guard check, then
+  // reread the world's listing and the world list itself (a release is never
+  // blocked by issue).
   const refreshAfterGuard = useCallback(async () => {
-    await refreshGameRunning();
+    void refreshGameRunning();
     await refreshListing();
     await reload();
   }, [refreshGameRunning, refreshListing, reload]);
