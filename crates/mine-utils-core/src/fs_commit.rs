@@ -86,19 +86,25 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
 /// `AlreadyExists`.
 ///
 /// A rename can land and still return an error, as a flaky sshfs or NFS link
-/// reports it. When `temp` is then gone and `dest` exists, either rename
-/// returns `Ok`.
+/// reports it. After a rename error, either rename returns `Ok` only when
+/// `temp` is now `NotFound` and `dest` looks like `temp` did before the
+/// rename. A folder needs a folder with at least one entry at `dest`, so the
+/// empty claim never counts. A file needs a regular file of the same length.
+/// Otherwise the rename error is handled as above. A same-length rival file,
+/// or a rival folder with entries, still reads as landed when someone else
+/// also removed our `temp`.
 fn checked_rename(
     temp: &Path,
     dest: &Path,
     read_claim: impl FnOnce(&Path) -> std::io::Result<std::fs::Metadata>,
     mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
+    let before = std::fs::symlink_metadata(temp)?;
     let mut rename = |from: &Path, to: &Path| match rename(from, to) {
-        Err(_) if rename_landed(from, to) => Ok(()),
+        Err(_) if rename_landed(&before, from, to) => Ok(()),
         result => result,
     };
-    let rivals = if std::fs::symlink_metadata(temp)?.is_dir() {
+    let rivals = if before.is_dir() {
         std::fs::create_dir(dest)?;
         let claim = match read_claim(dest) {
             Ok(claim) => claim,
@@ -129,11 +135,18 @@ fn checked_rename(
     })
 }
 
-/// Temp names are unique to this process, so a missing `temp` was moved by
-/// our own rename.
-fn rename_landed(temp: &Path, dest: &Path) -> bool {
-    std::fs::symlink_metadata(temp).is_err_and(|err| err.kind() == ErrorKind::NotFound)
-        && std::fs::symlink_metadata(dest).is_ok()
+fn rename_landed(before: &std::fs::Metadata, temp: &Path, dest: &Path) -> bool {
+    if !std::fs::symlink_metadata(temp).is_err_and(|err| err.kind() == ErrorKind::NotFound) {
+        return false;
+    }
+    let Ok(now) = std::fs::symlink_metadata(dest) else {
+        return false;
+    };
+    if before.is_dir() {
+        now.is_dir() && std::fs::read_dir(dest).is_ok_and(|mut entries| entries.next().is_some())
+    } else {
+        now.is_file() && now.len() == before.len()
+    }
 }
 
 /// `rename` reports a rival at `dest` with these errors instead of `EEXIST`.
