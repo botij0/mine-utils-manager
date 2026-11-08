@@ -53,15 +53,23 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
     }
 }
 
-/// A directory claims `dest` with `create_dir`, which fails for any existing
+/// A folder claims `dest` with `create_dir`, which fails for any existing
 /// entry, then renames onto its own empty claim. A rival that removes the
-/// claim and puts its own empty directory there is still replaced by that
-/// rename, and no portable fix exists on this fallback. A crash before the
-/// rename leaves the empty claim at `dest`. If the rename onto the claim fails
-/// without naming a rival, as a plain SFTP rename does for any existing
-/// target, a claim that is still ours is removed and the directory is moved
-/// like a file. A file checks `dest` with `symlink_metadata` and then
-/// renames, so a rival that lands between the two is replaced.
+/// claim and puts its own empty folder there is replaced by that rename. A
+/// crash before the rename leaves the empty claim at `dest`.
+///
+/// If the rename onto the claim fails, the claim is removed with
+/// `remove_dir`, so a folder with entries is never removed. The removal
+/// also needs the device and inode at `dest` to match the claim (Unix only).
+/// sshfs numbers inodes by path, so an empty folder that a rival puts at
+/// `dest` on the server passes the check and is removed. When the claim was
+/// removed and the error is a plain rename's refusal, the folder is moved
+/// like a file, and that retry can replace only an empty folder. Any other
+/// error is returned, with `ENOTDIR` and `ENOTEMPTY` read as `AlreadyExists`.
+///
+/// A file checks `dest` with `symlink_metadata` and then renames, so it
+/// refuses only a rival that the check sees. A rival that lands between the
+/// two is replaced.
 fn checked_rename(
     temp: &Path,
     dest: &Path,
