@@ -73,8 +73,7 @@ fn checked_rename(
         let Err(err) = rename(temp, dest) else {
             return Ok(());
         };
-        let claim_removed = remove_claim(dest, &claim);
-        if DIR_RIVALS.contains(&err.kind()) || !claim_removed {
+        if !remove_claim(dest, &claim) || !plain_rename_refusal(&err) {
             return Err(taken_as_already_exists(err, DIR_RIVALS));
         }
         DIR_RIVALS
@@ -102,6 +101,17 @@ fn taken_as_already_exists(err: std::io::Error, rivals: &[ErrorKind]) -> std::io
     } else {
         err
     }
+}
+
+/// An SFTP server without `posix-rename@openssh.com` gets a plain rename,
+/// which refuses any existing target. sshfs reports that as `EPERM`, and
+/// some servers as `EEXIST`.
+fn plain_rename_refusal(err: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    if err.raw_os_error() == Some(libc::EPERM) {
+        return true;
+    }
+    err.kind() == ErrorKind::AlreadyExists
 }
 
 fn remove_claim(dest: &Path, claim: &std::fs::Metadata) -> bool {
