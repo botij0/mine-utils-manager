@@ -60,21 +60,29 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
 
 /// A folder claims `dest` with `create_dir`, which fails for any existing
 /// entry, then renames onto its own empty claim. A rival that removes the
-/// claim and puts its own empty folder there is replaced by that rename. A
-/// crash before the rename leaves the empty claim at `dest`.
+/// claim and puts its own empty folder there is replaced by that rename.
 ///
-/// If the rename onto the claim fails, the claim is removed with
-/// `remove_dir`, so a folder with entries is never removed. The removal
-/// also needs the device and inode at `dest` to match the claim (Unix only).
-/// sshfs numbers inodes by path, so an empty folder that a rival puts at
-/// `dest` on the server passes the check and is removed. When the claim was
-/// removed and the error is a plain rename's refusal, the folder is moved
-/// like a file, and that retry can replace only an empty folder. Any other
-/// error is returned, with `ENOTDIR` and `ENOTEMPTY` read as `AlreadyExists`.
+/// If reading the claim back fails, the claim is removed with `remove_dir`,
+/// which refuses a folder with entries. If the rename onto the claim fails,
+/// the claim is removed only while it is empty and still has the claim's
+/// device and inode (Unix only). sshfs numbers inodes by path, so an empty
+/// folder that a rival puts at `dest` on the server passes the check and is
+/// removed. When the claim was removed and the error is a plain rename's
+/// refusal, the folder is moved like a file, and that retry can replace
+/// only an empty folder. Any other error is returned, with `ENOTDIR` and
+/// `ENOTEMPTY` read as `AlreadyExists`.
 ///
-/// A file checks `dest` with `symlink_metadata` and then renames, so it
-/// refuses only a rival that the check sees. A rival that lands between the
-/// two is replaced.
+/// The empty claim stays at `dest` after a crash before the rename, or when
+/// its `remove_dir` fails, as a network error on sshfs can make it. A crash
+/// between a failed rename and the claim's removal also leaves the hidden
+/// `.Name.<pid>-<stamp>-<n>.tmp` copy beside it.
+///
+/// A file checks `dest` with `symlink_metadata` and then renames. A rival
+/// that lands between the two meets the rename itself. A folder rival makes
+/// it fail with `EISDIR`. A file or symlink rival is replaced by a POSIX
+/// rename. A plain SFTP rename refuses any rival with `EPERM` and keeps it.
+/// When the rename fails and an entry now sits at `dest`, the error is
+/// `AlreadyExists`.
 fn checked_rename(
     temp: &Path,
     dest: &Path,
