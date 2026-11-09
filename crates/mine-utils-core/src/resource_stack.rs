@@ -700,12 +700,6 @@ impl stack_core::StackFile for ResourceFile<'_> {
         Ok(std::fs::read(&self.paths.options_path).ok().as_deref() == Some(previous))
     }
 
-    fn unchanged_before_write(&self, _previous: &[u8]) -> Result<bool, AppError> {
-        // The options write keeps its single pre-backup re-read; a second read
-        // here would narrow a race window the existing behavior leaves open.
-        Ok(true)
-    }
-
     fn reject(&self, err: stack_core::EntryError) -> AppError {
         AppError::Stack(err.into())
     }
