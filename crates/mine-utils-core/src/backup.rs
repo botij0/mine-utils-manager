@@ -870,7 +870,8 @@ mod tests {
         for name in [
             "../sneaky-options.txt",
             "sub/dir-options.txt",
-            "..-options.txt",
+            "..",
+            ".",
             "plain.txt",
             "",
         ] {
