@@ -260,6 +260,10 @@ fn post_commit_guard_error_reports_the_installed_and_restored_packs() {
     )
     .unwrap_err();
     assert_eq!(err.code(), "game_running");
+    let wire = serde_json::to_value(&err).unwrap();
+    assert_eq!(wire["code"], "game_running");
+    assert_eq!(wire["message"], err.to_string());
+    assert_eq!(wire.as_object().unwrap().len(), 2);
     assert_eq!(fixture.listing(), ["Faithful", "Faithful-1.21"]);
     assert_eq!(
         std::fs::read_to_string(&fixture.paths.options_path).unwrap(),
@@ -357,4 +361,56 @@ fn hidden_import_sources_are_refused_inside_and_outside_the_pack_folder() {
             println!("refused {}: {err}", source.display());
         }
     }
+}
+
+#[test]
+fn same_name_post_commit_guard_error_names_the_holding_path() {
+    let mut fixture = Fixture::new();
+    let source = fixture.source.with_file_name("Faithful");
+    std::fs::rename(&fixture.source, &source).unwrap();
+    fixture.source = source;
+    let err = resource_stack::import_pack_safely_with(
+        &fixture.paths,
+        &fixture.source,
+        ImportChoice::Replace,
+        &fixture.icons,
+        &HashCache::new(),
+        &Trash::default(),
+        &FailingGuard {
+            calls: Cell::new(0),
+            fail_at: 4,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "game_running");
+    let holding = std::fs::read_dir(fixture.paths.game_dir.join("resourcepacks"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".mine-utils-replace-")
+        })
+        .unwrap();
+    assert_eq!(
+        std::fs::read(holding.join("pack.mcmeta")).unwrap(),
+        br#"{"pack":{"pack_format":34,"description":"Faithful"}}"#
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains(&format!("Original pack retained at {}", holding.display())),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "New pack installed at {}",
+            fixture
+                .paths
+                .game_dir
+                .join("resourcepacks/Faithful")
+                .display()
+        )),
+        "{message}"
+    );
 }

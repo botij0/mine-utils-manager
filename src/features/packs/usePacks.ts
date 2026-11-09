@@ -116,6 +116,9 @@ export function usePacks(client: PackClient): PacksState {
           await refreshStack();
         }
         return outcome;
+      } catch (err) {
+        await Promise.all([reload(), refreshStack()]);
+        throw err;
       } finally {
         if (mounted.current) setBusy(false);
       }

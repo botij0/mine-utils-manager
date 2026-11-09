@@ -15,7 +15,6 @@ interface ImportSheetProps {
   extraPaths: string[];
   path: string;
   onPathChange: (path: string) => void;
-  /** Whether imports are currently allowed. */
   canImport: boolean;
   onClose: () => void;
   onImportPath: (path: string) => Promise<void>;

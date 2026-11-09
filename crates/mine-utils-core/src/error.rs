@@ -7,6 +7,10 @@ use serde::{Serialize, Serializer};
 /// unchanged, so the frontend sees one wire shape.
 #[derive(Debug)]
 pub enum AppError {
+    Context {
+        error: Box<AppError>,
+        message: String,
+    },
     Io(std::io::Error),
     InvalidGameDir {
         path: PathBuf,
@@ -44,8 +48,16 @@ pub enum AppError {
 }
 
 impl AppError {
+    pub(crate) fn with_context(self, message: String) -> Self {
+        Self::Context {
+            error: Box::new(self),
+            message,
+        }
+    }
+
     pub fn code(&self) -> &'static str {
         match self {
+            AppError::Context { error, .. } => error.code(),
             AppError::Io(_) => "io",
             AppError::InvalidGameDir { .. } => "invalid_game_dir",
             AppError::UnknownGameDir { .. } => "unknown_game_dir",
@@ -71,6 +83,7 @@ impl AppError {
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            AppError::Context { error, message } => write!(f, "{error}. {message}"),
             AppError::Io(err) => write!(f, "io error: {err}"),
             AppError::InvalidGameDir { path, reason } => {
                 write!(f, "invalid game dir {}: {reason}", path.display())
@@ -108,6 +121,7 @@ impl fmt::Display for AppError {
 impl std::error::Error for AppError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            AppError::Context { error, .. } => Some(error.as_ref()),
             AppError::Io(err) => Some(err),
             AppError::Pack(err) => Some(err),
             AppError::Options(err) => Some(err),

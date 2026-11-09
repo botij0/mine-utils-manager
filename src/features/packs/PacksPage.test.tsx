@@ -55,7 +55,7 @@ describe('PacksPage', () => {
     await user.click(screen.getByRole('button', { name: 'Import' }));
     expect(await screen.findByText('New pack installed; original pack retained.')).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: /^Autumn,/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Disable Autumn.zip' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Enabled: Autumn' })).toBeChecked();
   });
 
   it.each(['default', 'replace'] as const)('refreshes the game guard after %s import is refused', async (choice) => {

@@ -597,6 +597,15 @@ fn import_pack_with_services(
     let source = std::fs::canonicalize(source).map_err(|_| PackError::NotFound {
         path: source.to_path_buf(),
     })?;
+    if is_temp_name(&source) {
+        return Err(PackError::BrokenArchive {
+            name: display_name(&source),
+            reason:
+                "this name is reserved for temporary imports; rename the pack before importing it"
+                    .to_string(),
+        }
+        .into());
+    }
     let is_dir = source.is_dir();
     if !is_dir
         && !source
@@ -668,8 +677,6 @@ fn import_pack_with_services(
         return Ok(ImportOutcome::Collision { name });
     }
 
-    // Copy and validate first. Until the temp copy is good, nothing old has
-    // been touched, so every error below is a rollback.
     let tmp = unique_temp_path(&root, &file_name);
     let copy_result = if is_dir {
         copy_dir(&source, &tmp)
@@ -691,7 +698,7 @@ fn import_pack_with_services(
     }
 
     let removal = existing.or_else(|| destination_taken.then(|| destination.clone()));
-    let held = if let Some(target) = &removal {
+    let mut held = if let Some(target) = &removal {
         let holding = unique_temp_path(
             &root,
             &format!(
@@ -714,43 +721,61 @@ fn import_pack_with_services(
         None
     };
 
+    let mut installed = false;
     let result = (|| {
         services.hooks.before_write()?;
         commit(&tmp, &destination)?;
+        installed = true;
         let mut bytes_read = 0;
         let pack = inspect_entry(&destination, location, icons, &mut bytes_read)?;
-        if let Some((old, holding)) = &held {
+        if let Some((old, holding)) = &mut held {
             services.hooks.replaced(old, &destination)?;
             services.hooks.before_write()?;
+            if *old != &destination && atomic_no_replace(holding, old).is_ok() {
+                holding.clone_from(old);
+            }
             services.trash.move_to_trash(holding)?;
         }
         Ok::<_, AppError>(pack)
     })();
     let pack = match result {
         Ok(pack) => pack,
-        Err(mut err) => {
+        Err(err) => {
             let _ = remove_any(&tmp);
+            let mut context = Vec::new();
+            if installed {
+                context.push(format!("New pack installed at {}", destination.display()));
+            }
+            let mut recovery_failed = false;
             if let Some((old, holding)) = &held {
-                if let Err(restore) = atomic_no_replace(holding, old) {
-                    let message = format!(
-                        "Import failed: {err}. Original pack retained at {}. Could not restore {}: {restore}",
-                        holding.display(), old.display()
-                    );
-                    return Err(std::io::Error::other(message).into());
-                }
-                if let AppError::Pack(PackError::Trash { path, reason }) = &mut err {
-                    *path = old.to_path_buf();
-                    *reason = format!(
-                        "{reason}. Original restored at {}; new pack installed at {}",
-                        old.display(),
-                        destination.display()
-                    );
+                let restore = if holding == *old {
+                    Ok(())
+                } else {
+                    atomic_no_replace(holding, old)
+                };
+                match restore {
+                    Ok(()) => context.push(format!("Original pack retained at {}", old.display())),
+                    Err(restore) => {
+                        recovery_failed = true;
+                        context.push(format!(
+                            "Original pack retained at {}. Could not restore {}: {restore}",
+                            holding.display(),
+                            old.display()
+                        ));
+                    }
                 }
             }
-            if matches!(&err, AppError::Io(io) if io.kind() == std::io::ErrorKind::AlreadyExists) {
+            if !installed
+                && !recovery_failed
+                && matches!(&err, AppError::Io(io) if io.kind() == std::io::ErrorKind::AlreadyExists)
+            {
                 return Ok(ImportOutcome::Collision { name });
             }
-            return Err(err);
+            return Err(if context.is_empty() {
+                err
+            } else {
+                err.with_context(context.join(". "))
+            });
         }
     };
     sync_dir(&root);

@@ -183,11 +183,13 @@ export default function PacksPage({
         }
       } catch (err) {
         // Import failures stay inside the sheet, over its own backdrop.
-        setSheetError(toAppError(err).message);
+        const appError = toAppError(err);
+        setSheetError(appError.message);
+        if (appError.code === 'game_running') void refreshGameRunning();
         setSheetOpen(true);
       }
     },
-    [importPack, writesBlocked],
+    [importPack, writesBlocked, refreshGameRunning],
   );
 
   const handleChoose = async (choice: ImportChoice) => {
@@ -204,7 +206,9 @@ export default function PacksPage({
         setPrompt(outcome);
       }
     } catch (err) {
-      setSheetError(toAppError(err).message);
+      const appError = toAppError(err);
+      setSheetError(appError.message);
+      if (appError.code === 'game_running') void refreshGameRunning();
     }
   };
 

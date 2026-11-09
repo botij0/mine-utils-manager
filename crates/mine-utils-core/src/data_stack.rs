@@ -522,6 +522,11 @@ struct DatapackImport<'a> {
 }
 
 impl pack_scan::ImportHooks for DatapackImport<'_> {
+    fn replaced(&self, _old: &Path, new: &Path) -> Result<(), AppError> {
+        set_enabled_with_guard(self.paths, &pack_filename(new)?, true, self.guard)?;
+        Ok(())
+    }
+
     fn before_write(&self) -> Result<(), AppError> {
         if self.choice == ImportChoice::Replace {
             writable(&self.paths.game_dir, &self.paths.world_dir, self.guard)
