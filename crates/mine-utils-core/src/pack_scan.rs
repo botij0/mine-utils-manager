@@ -1635,6 +1635,37 @@ mod tests {
     }
 
     #[test]
+    fn replace_commit_failure_restores_the_original_without_trash() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let source = root.path().join("incoming/Pack.zip");
+        simple_zip(&source, 34, None);
+        let original = resourcepacks.join("Pack.zip");
+        std::fs::copy(&source, &original).unwrap();
+        let before = std::fs::read(&original).unwrap();
+
+        let err = import_pack_with_commit(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Replace,
+            &hashes,
+            &trash,
+            |_, _| Err(std::io::Error::other("injected commit failure")),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), "io");
+        assert_eq!(std::fs::read(&original).ok(), Some(before));
+        assert_eq!(trash.calls(), Vec::<PathBuf>::new());
+        assert_eq!(
+            Vec::from_iter(pack_names(&resourcepacks).unwrap()),
+            ["Pack.zip"]
+        );
+    }
+
+    #[test]
     fn duplicate_offers_skip_and_replace() {
         let (root, _cache_root, icons, hashes, trash) = setup();
         let resourcepacks = root.path().join("resourcepacks");

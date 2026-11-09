@@ -18,6 +18,21 @@ function renderPage(client: FakeClient) {
 }
 
 describe('PacksPage', () => {
+  it.each(['running', 'unknown'] as const)('disables import while the guard is %s', async (guard) => {
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
+    const running: GameRunning = {
+      kind: 'process', detail: 'java', lock_path: null, pid: 42, command: 'java',
+    };
+    const { rerender } = render(<PacksPage client={client} gameRunning={null} />);
+    await screen.findByText('Vanilla');
+    expect(screen.getByRole('button', { name: 'Import pack' })).toBeEnabled();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Import pack' }));
+    await userEvent.setup().type(screen.getByLabelText('Pack path'), '/tmp/Fresh.zip');
+    rerender(<PacksPage client={client} gameRunning={guard === 'running' ? running : null} gameGuardUnknown={guard === 'unknown'} />);
+    expect(screen.getByRole('button', { name: 'Import pack' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Import', exact: true })).toBeDisabled();
+  });
+
   it('lists packs with descriptions, chips, icons, and an isolated error card', async () => {
     const icon = { sha256: 'icon', url: 'data:image/png;base64,abc' };
     const client = makeFakeClient({ packs: [{ ...VANILLA_PACK, icon }, AUTUMN_PACK, BROKEN_PACK] });

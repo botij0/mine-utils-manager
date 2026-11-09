@@ -69,6 +69,15 @@ function pageClient(overrides: Partial<WorldsClient> = {}): WorldsClient {
 }
 
 describe('WorldsPage', () => {
+  it('disables imports while the game guard is unknown', async () => {
+    const client = pageClient();
+    const { rerender } = render(<WorldsPage client={client} gameRunning={null} />);
+    expect(await screen.findByRole('button', { name: 'Import zip' })).toBeEnabled();
+    rerender(<WorldsPage client={client} gameRunning={null} gameGuardUnknown />);
+    expect(screen.getByRole('button', { name: 'Import zip' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
+  });
+
   it('lists worlds with icons and versions', async () => {
     render(<WorldsPage client={pageClient()} />);
     expect(await screen.findAllByText('Survival 1.17')).toHaveLength(2);
