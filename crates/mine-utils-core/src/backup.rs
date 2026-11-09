@@ -2,8 +2,9 @@
 //!
 //! Backups live at `<data_dir>/backups/<game-dir-hash>/<timestamp>-options.txt`.
 //! The timestamp is UTC with nanosecond precision, so names sort
-//! lexicographically and stay unique across rapid writes. Only the newest
-//! `Config.backups.keep` files survive each write.
+//! lexicographically and stay unique across rapid writes. Each write keeps the
+//! newest `Config.backups.keep` files, plus the backup it just wrote and, for a
+//! restore, the restore source, so a restore at `keep = 1` can leave two.
 
 use std::path::{Path, PathBuf};
 
