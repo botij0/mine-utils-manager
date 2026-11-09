@@ -885,6 +885,34 @@ mod tests {
     }
 
     #[test]
+    fn restore_rejects_parent_and_nested_names_that_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("backups");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let options = dir.path().join("options.txt");
+        std::fs::write(&options, b"resourcePacks:[\"current\"]\n").unwrap();
+        std::fs::write(
+            dir.path().join("x-options.txt"),
+            b"resourcePacks:[\"parent\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("sub").join("x-options.txt"),
+            b"resourcePacks:[\"nested\"]\n",
+        )
+        .unwrap();
+
+        for name in ["../x-options.txt", "sub/x-options.txt"] {
+            let err = restore(&root, &options, name, &config(10)).unwrap_err();
+            assert_eq!(err.code(), "backup", "{name} must be rejected");
+        }
+        assert_eq!(
+            std::fs::read(&options).unwrap(),
+            b"resourcePacks:[\"current\"]\n"
+        );
+    }
+
+    #[test]
     fn root_for_is_stable_per_game_dir() {
         let data = tempfile::tempdir().unwrap();
         let game = tempfile::tempdir().unwrap();
