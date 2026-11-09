@@ -349,6 +349,7 @@ pub fn finish_modrinth_install(
     let kind = prepared.kind;
     match kind {
         SearchKind::ResourcePack => {
+            game_lock::ensure_writable(&stack_paths.game_dir)?;
             let (dest, sha256, fresh) = match commit_source(prepared)? {
                 Committed::Ready(dest, sha256, fresh) => (dest, sha256, fresh),
                 Committed::Collision { name } => {
@@ -381,10 +382,8 @@ pub fn finish_modrinth_install(
             };
             let provenance_warning =
                 record_provenance(data_dir, &sha256, &ids, outcome_is_imported(&outcome));
-            // Enabling can still lose a race with a game start after the
-            // pre-check. The verified file is already committed, so record
-            // provenance (best effort) before reporting the failure: never
-            // leave a copied pack with a failed command and no provenance.
+            // A game can still start after the finish guard. Preserve the
+            // committed file and its provenance if enabling then fails.
             if let Err(err) = enable_resource(stack_paths, &outcome) {
                 let _ = best_effort_provenance(data_dir, &sha256, &ids);
                 return Err(err);

@@ -255,7 +255,8 @@ flowchart TD
     Precheck --> Download["Stream from cdn.modrinth.com into target-directory temp file"]
     Download --> Limits["Enforce 500 MB cap and SHA-512"]
     Limits --> Zip["Require assets root or data root"]
-    Zip --> Commit["Atomic no-replace commit under API filename"]
+    Zip --> Recheck["Resource packs: recheck game guard"]
+    Recheck --> Commit["Atomic no-replace commit under API filename"]
     Commit --> Import["Use normal import and enable path"]
     Import --> Provenance["Record SHA-256 project provenance"]
     Provenance --> Outcome["Return imported, locked, duplicate, or collision outcome"]
@@ -264,7 +265,7 @@ flowchart TD
 The install has two phases:
 
 1. **Prepare** validates the target, checks guards, fetches metadata, and downloads or reuses verified bytes. It holds no stack write lock during network work.
-2. **Finish** rechecks the source and target, commits the file, routes it through normal import behavior, and records provenance.
+2. **Finish** rechecks the source and target, rechecks the game guard for resource packs (a game started during the download refuses before anything is committed), commits the file, routes it through normal import behavior, and records provenance.
 
 Transport and validation rules include:
 

@@ -799,6 +799,75 @@ fn running_game_refuses_before_any_download() {
 }
 
 #[test]
+fn game_started_after_prepare_refuses_resource_commit() {
+    if !mine_utils_core::game_lock::lock_detection_supported() {
+        return;
+    }
+    let fx = fixture();
+    let bytes = resource_zip();
+    let (client, _) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    RESOURCE_URL,
+                    RESOURCE_FILE,
+                    &sha512_hex(&bytes),
+                    &[WORLD_VERSION],
+                ),
+            )
+            .with(RESOURCE_URL, bytes.clone()),
+    );
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .unwrap();
+    let lock_path = fx.game_dir.join("saves/alpha/session.lock");
+    std::fs::write(&lock_path, b"\0").unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "lock_holder_helper", "--nocapture"])
+        .env("MINE_UTILS_LOCK_HOLDER", &lock_path)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while mine_utils_core::game_lock::check(&fx.game_dir)
+        .running
+        .is_none()
+    {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let err = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        None,
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .unwrap_err();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(matches!(err, AppError::GameRunning { .. }), "{err}");
+    assert!(!fx
+        .game_dir
+        .join("resourcepacks")
+        .join(RESOURCE_FILE)
+        .exists());
+    assert!(leftovers(&fx.game_dir).is_empty());
+    assert!(provenance_lookup(&fx.data_dir, &sha256_hex(&bytes))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
 fn datapack_typo_world_fails_before_any_request() {
     let fx = fixture();
     let (client, api) = client(MockApi::new());
