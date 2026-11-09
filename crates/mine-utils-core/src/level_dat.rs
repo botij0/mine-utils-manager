@@ -96,7 +96,6 @@ pub fn parse(bytes: &[u8]) -> Result<LevelDatView, LevelDatError> {
 pub(crate) fn world_seed(bytes: &[u8]) -> Option<i64> {
     let raw = gunzip(bytes).ok()?;
     let value = parse_nbt(&raw).ok()?;
-    view_of(&value).ok()?;
     let data = data_of(&value).ok()?;
     let modern = match data.get("WorldGenSettings") {
         Some(Value::Compound(settings)) => settings.get("seed"),

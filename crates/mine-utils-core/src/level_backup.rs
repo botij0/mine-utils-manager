@@ -8,7 +8,9 @@
 //! safe and unique within one game dir.
 //!
 //! A backup is only restorable when it decompresses as gzip and holds NBT with
-//! `Data.DataPacks`.
+//! `Data.DataPacks`. If both world seeds are readable and differ, restore
+//! refuses without changing anything. A missing or corrupt current file, or an
+//! unreadable seed, still permits restore.
 
 use std::path::{Path, PathBuf};
 
@@ -173,7 +175,9 @@ pub fn list_all(root: &Path) -> Result<Vec<LevelBackupInfo>, AppError> {
 /// Restore one backup over `level.dat`. The name must resolve inside the
 /// game dir's own backup folder and belong to this world. The backup bytes
 /// must parse as a `level.dat` with `Data.DataPacks` before anything is
-/// replaced. The current bytes are backed up first, then a guard runs
+/// replaced. Different readable world seeds refuse the restore without changing
+/// anything. A missing or corrupt current file, or an unreadable seed, still
+/// permits restore. The current bytes are backed up first, then a guard runs
 /// immediately before the atomic write.
 pub fn restore_guarded<F>(
     root: &Path,
