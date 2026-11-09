@@ -241,3 +241,120 @@ fn held_game_lock_refuses_replace_without_changing_the_folder() {
         fixture.listing()
     );
 }
+
+#[test]
+fn post_commit_guard_error_reports_the_installed_and_restored_packs() {
+    let fixture = Fixture::new();
+    let trash = Trash::default();
+    let err = resource_stack::import_pack_safely_with(
+        &fixture.paths,
+        &fixture.source,
+        ImportChoice::Replace,
+        &fixture.icons,
+        &HashCache::new(),
+        &trash,
+        &FailingGuard {
+            calls: Cell::new(0),
+            fail_at: 6,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "game_running");
+    assert_eq!(fixture.listing(), ["Faithful", "Faithful-1.21"]);
+    assert_eq!(
+        std::fs::read_to_string(&fixture.paths.options_path).unwrap(),
+        AFTER
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains(&format!(
+            "New pack installed at {}",
+            fixture
+                .paths
+                .game_dir
+                .join("resourcepacks/Faithful-1.21")
+                .display()
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "Original pack retained at {}",
+            fixture
+                .paths
+                .game_dir
+                .join("resourcepacks/Faithful")
+                .display()
+        )),
+        "{message}"
+    );
+    println!(
+        "{message}; listing {:?}; options.txt {AFTER}",
+        fixture.listing()
+    );
+}
+
+#[test]
+fn different_name_replace_trashes_the_original_name() {
+    let fixture = Fixture::new();
+    let trash = Trash::default();
+    let outcome = resource_stack::import_pack_safely_with(
+        &fixture.paths,
+        &fixture.source,
+        ImportChoice::Replace,
+        &fixture.icons,
+        &HashCache::new(),
+        &trash,
+        &FailingGuard {
+            calls: Cell::new(0),
+            fail_at: usize::MAX,
+        },
+    )
+    .unwrap();
+    assert!(matches!(outcome, ImportOutcome::Imported { .. }));
+    assert_eq!(
+        *trash.0.borrow(),
+        [fixture.paths.game_dir.join("resourcepacks/Faithful")]
+    );
+    assert_eq!(fixture.listing(), ["Faithful-1.21"]);
+}
+
+#[test]
+fn hidden_import_sources_are_refused_inside_and_outside_the_pack_folder() {
+    for inside in [true, false] {
+        for name in [
+            ".mine-utils-replace-Faithful.1-2-3.tmp",
+            ".Faithful.1-2-3.tmp",
+        ] {
+            let fixture = Fixture::new();
+            let root = if inside {
+                fixture.paths.game_dir.join("resourcepacks")
+            } else {
+                fixture._root.path().join("incoming")
+            };
+            let source = root.join(name);
+            std::fs::rename(&fixture.source, &source).unwrap();
+            let trash = Trash::default();
+            let err = resource_stack::import_pack_safely_with(
+                &fixture.paths,
+                &source,
+                ImportChoice::Default,
+                &fixture.icons,
+                &HashCache::new(),
+                &trash,
+                &FailingGuard {
+                    calls: Cell::new(0),
+                    fail_at: usize::MAX,
+                },
+            )
+            .unwrap_err();
+            assert_eq!(err.code(), "pack_broken_archive");
+            assert!(
+                err.to_string().contains("reserved for temporary imports"),
+                "{err}"
+            );
+            assert!(source.join("pack.mcmeta").is_file());
+            println!("refused {}: {err}", source.display());
+        }
+    }
+}

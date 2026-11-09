@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ipc, isTauriRuntime, toAppError } from './ipc';
-import { resetMockWorlds, setMockGameState, setMockLockedWorld } from './ipc.mock';
+import { resetMockPacks, resetMockWorlds, setMockGameState, setMockLockedWorld } from './ipc.mock';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -153,5 +153,27 @@ describe('mock world import guards', () => {
     expect(listing.packs.packs.map((pack) => pack.path)).toContain(
       `/home/demo/.minecraft/saves/Survival 1_17/datapacks/${existing}`,
     );
+  });
+});
+
+describe('mock resource import guards', () => {
+  beforeEach(() => {
+    resetMockPacks();
+    setMockGameState('none');
+  });
+
+  it('refuses local resource imports while Minecraft runs', async () => {
+    setMockGameState('running');
+    await expect(ipc.importResourcePack('/tmp/fresh-pack.zip')).rejects.toMatchObject({ code: 'game_running' });
+    setMockGameState('none');
+    expect(await ipc.importResourcePack('/tmp/fresh-pack.zip')).toMatchObject({ status: 'imported', pack: { name: 'fresh-pack' } });
+  });
+
+  it('refuses Modrinth resource installs while Minecraft runs', async () => {
+    const args = { projectId: 'demo-pack-01', versionId: 'demo-pack-01-1.0', filename: 'demo-pack-01-1.0.zip', kind: 'resourcepack' } as const;
+    setMockGameState('running');
+    await expect(ipc.installModrinthPack(args)).rejects.toMatchObject({ code: 'game_running' });
+    setMockGameState('none');
+    expect(await ipc.installModrinthPack(args)).toMatchObject({ kind: 'resourcepack', outcome: { status: 'imported', pack: { name: 'demo-pack-01-1.0' } } });
   });
 });

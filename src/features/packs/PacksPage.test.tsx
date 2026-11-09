@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
@@ -31,6 +32,62 @@ describe('PacksPage', () => {
     rerender(<PacksPage client={client} gameRunning={guard === 'running' ? running : null} gameGuardUnknown={guard === 'unknown'} />);
     expect(screen.getByRole('button', { name: 'Import pack' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled();
+  });
+
+  it('refreshes packs and the stack after an import commits and then rejects', async () => {
+    const user = userEvent.setup();
+    const base = makeFakeClient({ packs: [VANILLA_PACK] });
+    let committed = false;
+    const after = makeFakeClient({ packs: [VANILLA_PACK, AUTUMN_PACK], resource: ['vanilla', 'file/Autumn.zip'] });
+    const client: PackClient = {
+      ...base,
+      async listResourcePacks() { return (committed ? after : base).listResourcePacks(); },
+      async getResourceStack() { return (committed ? after : base).getResourceStack(); },
+      async importResourcePack() {
+        committed = true;
+        throw new IpcError('io', 'New pack installed; original pack retained.');
+      },
+    };
+    render(<PacksPage client={client} />);
+    await screen.findByText('Vanilla');
+    await user.click(screen.getByRole('button', { name: 'Import pack' }));
+    await user.type(screen.getByLabelText('Pack path'), '/tmp/Autumn.zip');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    expect(await screen.findByText('New pack installed; original pack retained.')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Autumn,/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Disable Autumn.zip' })).toBeInTheDocument();
+  });
+
+  it.each(['default', 'replace'] as const)('refreshes the game guard after %s import is refused', async (choice) => {
+    const user = userEvent.setup();
+    const base = makeFakeClient({ packs: [VANILLA_PACK] });
+    const running: GameRunning = { kind: 'process', detail: 'java', lock_path: null, pid: 42, command: 'java' };
+    let refused = false;
+    const client: PackClient = {
+      ...base,
+      async getResourceStack() { return { ...base.stack, running: refused ? running : null }; },
+      async importResourcePack() {
+        if (choice === 'replace' && !refused) {
+          refused = true;
+          return { status: 'collision', name: 'Fresh' };
+        }
+        refused = true;
+        throw new IpcError('game_running', 'Minecraft started during import.');
+      },
+    };
+    function Page() {
+      const [gameRunning, setRunning] = useState<GameRunning | null>(null);
+      return <PacksPage client={client} gameRunning={gameRunning} refreshGameRunning={() => setRunning(running)} />;
+    }
+    render(<Page />);
+    await screen.findByText('Vanilla');
+    await user.click(screen.getByRole('button', { name: 'Import pack' }));
+    await user.type(screen.getByLabelText('Pack path'), '/tmp/Fresh.zip');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    if (choice === 'replace') await user.click(await screen.findByRole('button', { name: 'Replace' }));
+    expect(await screen.findByText('Minecraft started during import.')).toBeInTheDocument();
+    expect(await screen.findByText('Minecraft is running.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Import pack' })).toBeDisabled();
   });
 
   it('lists packs with descriptions, chips, icons, and an isolated error card', async () => {

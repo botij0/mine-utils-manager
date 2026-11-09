@@ -1060,3 +1060,75 @@ fn symlinked_datapacks_dir_fails_closed() {
         "nothing was copied outside the world"
     );
 }
+
+#[test]
+fn replace_backup_failure_keeps_the_original_at_its_name() {
+    let world = temp_world(&["vanilla", "file/old"], &[]);
+    let old = datapack_source(&world.paths.datapacks_dir, "old");
+    let source = datapack_source(world._dir.path(), "new");
+    std::fs::create_dir_all(world.paths.backups_root.parent().unwrap()).unwrap();
+    std::fs::write(&world.paths.backups_root, b"backup directory blocked").unwrap();
+    let before = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let trash = FnTrash(|path: &Path| {
+        std::fs::remove_dir_all(path).unwrap();
+        Ok(())
+    });
+    let err = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &trash,
+        &PassGuard,
+    )
+    .unwrap_err();
+    assert_eq!(
+        std::fs::read(old.join("pack.mcmeta")).unwrap(),
+        br#"{"pack": {"pack_format": 48, "description": "temp"}}"#
+    );
+    assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), before);
+    assert!(world.paths.datapacks_dir.join("new/pack.mcmeta").is_file());
+    assert!(
+        err.to_string()
+            .contains(&format!("Original pack retained at {}", old.display())),
+        "{err}"
+    );
+    println!(
+        "level.dat unchanged; original at {}; new pack installed; {err}",
+        old.display()
+    );
+}
+
+#[test]
+fn replace_updates_level_dat_before_trashing_the_original() {
+    let world = temp_world(&["vanilla"], &[]);
+    datapack_source(&world.paths.datapacks_dir, "old");
+    let source = datapack_source(world._dir.path(), "new");
+    let observed = RefCell::new(None);
+    let trash = FnTrash(|path: &Path| {
+        *observed.borrow_mut() = Some(view(&world.paths));
+        std::fs::remove_dir_all(path).unwrap();
+        Ok(())
+    });
+    let outcome = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &trash,
+        &PassGuard,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome,
+        data_stack::DatapackImportOutcome::Imported {
+            filename: "new".into()
+        }
+    );
+    assert_eq!(
+        observed.into_inner(),
+        Some(lists(&["vanilla", "file/new"], &[]))
+    );
+}
