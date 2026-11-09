@@ -539,6 +539,53 @@ fn validated_backup(root: &Path, file_name: &str) -> Result<PathBuf, AppError> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn create_preserves_new_backup_with_future_dated_files() {
+        let root = tempfile::tempdir().unwrap();
+        for name in [
+            "99980101T000000.000000000-options.txt",
+            "99990101T000000.000000000-options.txt",
+        ] {
+            std::fs::write(root.path().join(name), b"future").unwrap();
+        }
+        let created = create(root.path(), b"new", &config(2))
+            .unwrap()
+            .created
+            .unwrap();
+        assert_eq!(
+            std::fs::read(root.path().join(created.file_name)).unwrap(),
+            b"new"
+        );
+        assert_eq!(list(root.path()).unwrap().len(), 2);
+        assert!(root
+            .path()
+            .join("99990101T000000.000000000-options.txt")
+            .exists());
+    }
+
+    #[test]
+    fn failed_restore_preserves_source_at_capacity() {
+        let root = tempfile::tempdir().unwrap();
+        let options = root.path().join("options.txt");
+        let name = "20000101T000000.000000000-options.txt";
+        std::fs::write(root.path().join(name), b"resourcePacks:[\"old\"]\n").unwrap();
+        std::fs::write(&options, b"resourcePacks:[\"current\"]\n").unwrap();
+        let err = restore_guarded(root.path(), &options, name, &config(1), || {
+            Err(backup_error("game started"))
+        })
+        .unwrap_err();
+        assert_eq!(err.code(), "backup");
+        assert_eq!(
+            std::fs::read(root.path().join(name)).unwrap(),
+            b"resourcePacks:[\"old\"]\n"
+        );
+        assert_eq!(
+            std::fs::read(options).unwrap(),
+            b"resourcePacks:[\"current\"]\n"
+        );
+        assert_eq!(list(root.path()).unwrap().len(), 2);
+    }
+
     fn config(keep: u32) -> BackupsConfig {
         BackupsConfig {
             enabled: true,
