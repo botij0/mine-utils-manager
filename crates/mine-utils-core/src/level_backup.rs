@@ -198,7 +198,22 @@ where
         config,
         &scheme,
         |name| world_of(name) == Some(world),
-        validate_backup_bytes,
+        |name, bytes| {
+            validate_backup_bytes(name, bytes)?;
+            match std::fs::read(level_dat_path) {
+                Ok(current) => {
+                    if matches!(
+                        (level_dat::world_seed(&current), level_dat::world_seed(bytes)),
+                        (Some(a), Some(b)) if a != b
+                    ) {
+                        return Err(AppError::WorldMismatch);
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(AppError::Io(err)),
+            }
+            Ok(())
+        },
         |bytes| {
             level_dat::write_level_dat(
                 level_dat_path.parent().unwrap_or_else(|| Path::new(".")),
@@ -328,6 +343,43 @@ mod tests {
         std::fs::remove_file(&level).unwrap();
         restore().unwrap();
         assert_eq!(std::fs::read(&level).unwrap(), backup);
+    }
+
+    #[test]
+    fn restore_uses_modern_seed_and_allows_unreadable_seeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("backups");
+        let level = dir.path().join("level.dat");
+        let legacy = seeded(42);
+        let raw = level_dat::gunzip(&legacy).unwrap();
+        let mut value: fastnbt::Value = fastnbt::from_bytes(&raw).unwrap();
+        if let fastnbt::Value::Compound(root) = &mut value {
+            if let Some(fastnbt::Value::Compound(data)) = root.get_mut("Data") {
+                data.insert(
+                    "WorldGenSettings".into(),
+                    fastnbt::Value::Compound(
+                        [("seed".into(), fastnbt::Value::Long(99))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                );
+            }
+        }
+        let modern = level_dat::gzip(&fastnbt::to_bytes(&value).unwrap());
+        let name = create(&root, "world", &modern, &config(10))
+            .unwrap()
+            .created
+            .unwrap()
+            .file_name;
+        let restore = || restore_guarded(&root, "world", &level, &name, &config(10), || Ok(()));
+        std::fs::write(&level, &legacy).unwrap();
+        assert_eq!(restore().unwrap_err().code(), "world_mismatch");
+        std::fs::write(&level, fixture_level_dat()).unwrap();
+        restore().unwrap();
+        assert_eq!(std::fs::read(&level).unwrap(), modern);
+        std::fs::write(&level, b"corrupt").unwrap();
+        restore().unwrap();
+        assert_eq!(std::fs::read(&level).unwrap(), modern);
     }
 
     fn config(keep: u32) -> BackupsConfig {
