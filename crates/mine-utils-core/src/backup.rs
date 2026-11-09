@@ -133,7 +133,6 @@ pub(crate) mod core {
         if file_name.is_empty()
             || file_name == "."
             || file_name == ".."
-            || file_name.contains("..")
             || file_name.contains('/')
             || file_name.contains('\\')
             || file_name.contains('\0')
