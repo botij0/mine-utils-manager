@@ -174,6 +174,7 @@ The `mine-utils-core` crate does not depend on Tauri. This keeps filesystem and 
 | `game_lock.rs` | Probe session locks and processes before writes |
 | `modrinth.rs` | Search, project, version, URL, redirect, and retry policy |
 | `download.rs` | Stream capped downloads, verify hashes and zip roots, and commit without replacement |
+| `fs_commit.rs` | No-replace commit shared by downloads and pack imports |
 | `install.rs` | Coordinate verified Modrinth downloads with import, enable, and provenance steps |
 | `provenance.rs` | Record the Modrinth project and version associated with installed content |
 | `error.rs` | Shared serializable application errors |

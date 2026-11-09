@@ -481,6 +481,9 @@ fn commit_source(prepared: PreparedInstall) -> Result<Committed, AppError> {
                     // Lost a race: reuse identical bytes, else collide. The
                     // temp was cleaned up by `Drop` on the failed commit.
                     let dest = target_dir.join(&filename);
+                    if std::fs::symlink_metadata(&dest).is_ok_and(|entry| !entry.is_file()) {
+                        return Ok(Committed::Collision { name: filename });
+                    }
                     let hashes = hash_file(&dest)?;
                     if hashes.sha256 == sha256 {
                         Ok(Committed::Ready(dest, sha256, false))

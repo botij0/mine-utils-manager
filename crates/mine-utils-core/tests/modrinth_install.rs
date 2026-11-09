@@ -1254,3 +1254,75 @@ fn identical_bytes_under_a_different_filename_installs_a_second_copy() {
         "the pre-existing file is untouched"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_folder_or_dangling_symlink_at_the_name_reports_collision() {
+    type MakeRival = fn(&Path);
+    let rivals: [(&str, MakeRival); 2] = [
+        ("dir", |path| std::fs::create_dir(path).unwrap()),
+        ("dangling symlink", |path| {
+            std::os::unix::fs::symlink("missing.zip", path).unwrap()
+        }),
+    ];
+    let seen: Vec<String> = rivals
+        .into_iter()
+        .map(|(label, make_rival)| {
+            let fx = fixture();
+            let bytes = resource_zip();
+            let dest = fx.game_dir.join("resourcepacks").join(RESOURCE_FILE);
+            make_rival(&dest);
+            let (client, _api) = client(
+                MockApi::new()
+                    .with(
+                        &versions_url(),
+                        versions_json(
+                            RESOURCE_URL,
+                            RESOURCE_FILE,
+                            &sha512_hex(&bytes),
+                            &["1.21.10"],
+                        ),
+                    )
+                    .with(RESOURCE_URL, bytes),
+            );
+
+            let prepared = prepare_modrinth_install(
+                &client,
+                &fx.game_dir,
+                None,
+                PROJECT,
+                VERSION,
+                RESOURCE_FILE,
+                "resourcepack",
+            )
+            .expect("prepare");
+            let outcome = match finish_modrinth_install(
+                prepared,
+                &fx.stack_paths,
+                None,
+                &fx.data_dir,
+                &fx.icons,
+                &fx.hashes,
+            ) {
+                Ok(CoreInstallOutcome::ResourcePack { outcome, .. }) => format!("{outcome:?}"),
+                Ok(other) => format!("{other:?}"),
+                Err(err) => format!("error: {err}"),
+            };
+            let kept = std::fs::symlink_metadata(&dest).unwrap().file_type();
+            format!(
+                "{label}: {outcome}; kept dir {} symlink {}; temps {}",
+                kept.is_dir(),
+                kept.is_symlink(),
+                leftovers(&fx.game_dir).len()
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        seen,
+        [
+            "dir: Collision { name: \"fresh-1.9.zip\" }; kept dir true symlink false; temps 0",
+            "dangling symlink: Collision { name: \"fresh-1.9.zip\" }; kept dir false symlink true; temps 0",
+        ]
+    );
+}

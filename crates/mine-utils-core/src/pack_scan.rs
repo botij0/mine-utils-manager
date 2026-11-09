@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 use crate::format_table::FormatTable;
+use crate::fs_commit::atomic_no_replace;
 use crate::icon_cache::{icon_within_pixel_cap, IconCache};
 use crate::pack::{
     FormatVersion, ImportChoice, ImportOutcome, Pack, PackError, PackIssue, PackKind, PackLocation,
@@ -504,6 +505,26 @@ pub fn import_pack_with(
     hashes: &HashCache,
     trash: &dyn TrashService,
 ) -> Result<ImportOutcome, AppError> {
+    import_pack_with_commit(
+        source,
+        resourcepacks,
+        icons,
+        choice,
+        hashes,
+        trash,
+        atomic_no_replace,
+    )
+}
+
+fn import_pack_with_commit(
+    source: &Path,
+    resourcepacks: &Path,
+    icons: &IconCache,
+    choice: ImportChoice,
+    hashes: &HashCache,
+    trash: &dyn TrashService,
+    commit: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> Result<ImportOutcome, AppError> {
     // A symlinked source is rejected instead of followed, so no later step can
     // remove a pack that only a link points at.
     let source_meta = std::fs::symlink_metadata(source).map_err(|_| PackError::NotFound {
@@ -629,8 +650,11 @@ pub fn import_pack_with(
         }
     }
 
-    if let Err(err) = std::fs::rename(&tmp, &destination) {
+    if let Err(err) = commit(&tmp, &destination) {
         let _ = remove_any(&tmp);
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            return Ok(ImportOutcome::Collision { name });
+        }
         return Err(err.into());
     }
     sync_dir(&root);
@@ -928,6 +952,7 @@ pub fn pack_names(resourcepacks: &Path) -> Result<BTreeSet<String>, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs_commit::no_replace_fallback;
     use crate::pack::{FormatVersion, PackKind};
     use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt as _;
@@ -1425,6 +1450,188 @@ mod tests {
         assert!(matches!(outcome, ImportOutcome::Imported { .. }));
         assert!(resourcepacks.join("DirPack/pack.mcmeta").is_file());
         assert!(trash.calls().is_empty());
+    }
+
+    #[test]
+    fn a_rival_created_after_the_collision_check_keeps_its_bytes() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("game/resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let zip_source = root.path().join("incoming/ZipPack.zip");
+        simple_zip(&zip_source, 34, None);
+        let dir_source = root.path().join("incoming/DirPack");
+        std::fs::create_dir_all(dir_source.join("assets")).unwrap();
+        std::fs::write(dir_source.join("pack.mcmeta"), mcmeta(7, None, "Dir")).unwrap();
+
+        for (source, file_name, name) in [
+            (&zip_source, "ZipPack.zip", "ZipPack"),
+            (&dir_source, "DirPack", "DirPack"),
+        ] {
+            let rival = resourcepacks.join(file_name);
+            let outcome = import_pack_with_commit(
+                source,
+                &resourcepacks,
+                &icons,
+                ImportChoice::Default,
+                &hashes,
+                &trash,
+                |tmp, dest| {
+                    std::fs::write(&rival, b"rival").unwrap();
+                    atomic_no_replace(tmp, dest)
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                outcome,
+                ImportOutcome::Collision {
+                    name: name.to_string()
+                }
+            );
+            assert_eq!(std::fs::read(&rival).unwrap(), b"rival");
+        }
+        let mut left: Vec<String> = std::fs::read_dir(&resourcepacks)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["DirPack", "ZipPack.zip"]);
+        assert!(trash.calls().is_empty());
+    }
+
+    fn entry_summary(path: &Path) -> String {
+        let entry = std::fs::symlink_metadata(path).unwrap();
+        if entry.is_symlink() {
+            format!("symlink to {}", std::fs::read_link(path).unwrap().display())
+        } else if entry.is_dir() {
+            format!(
+                "dir with {} entries",
+                std::fs::read_dir(path).unwrap().count()
+            )
+        } else {
+            format!("file {}", std::fs::read_to_string(path).unwrap())
+        }
+    }
+
+    #[test]
+    fn a_folder_import_through_the_link_fallback_lands_or_reports_the_rival() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let source = root.path().join("incoming/DirPack");
+        std::fs::create_dir_all(source.join("assets")).unwrap();
+        std::fs::write(source.join("pack.mcmeta"), mcmeta(7, None, "Dir")).unwrap();
+        let destination = resourcepacks.join("DirPack");
+        type MakeRival = fn(&Path);
+        let rivals: [(&str, MakeRival); 4] = [
+            ("no rival", |_| {}),
+            ("dangling symlink", |path| {
+                std::os::unix::fs::symlink("missing", path).unwrap()
+            }),
+            ("empty dir", |path| std::fs::create_dir(path).unwrap()),
+            ("regular file", |path| {
+                std::fs::write(path, b"rival").unwrap()
+            }),
+        ];
+
+        let mut seen = Vec::new();
+        for (label, make_rival) in rivals {
+            let outcome = import_pack_with_commit(
+                &source,
+                &resourcepacks,
+                &icons,
+                ImportChoice::Default,
+                &hashes,
+                &trash,
+                |tmp, dest| {
+                    make_rival(dest);
+                    no_replace_fallback(tmp, dest)
+                },
+            );
+            let outcome = match outcome {
+                Ok(ImportOutcome::Imported { .. }) => "imported".to_string(),
+                Ok(ImportOutcome::Collision { name }) => format!("collision {name}"),
+                other => format!("{other:?}"),
+            };
+            seen.push(format!(
+                "{label}: {outcome}; destination {}; resourcepacks [{}]",
+                entry_summary(&destination),
+                Vec::from_iter(pack_names(&resourcepacks).unwrap()).join(", ")
+            ));
+            if std::fs::symlink_metadata(&destination).unwrap().is_dir() {
+                std::fs::remove_dir_all(&destination).unwrap();
+            } else {
+                std::fs::remove_file(&destination).unwrap();
+            }
+        }
+
+        assert_eq!(
+            seen,
+            [
+                "no rival: imported; destination dir with 2 entries; resourcepacks [DirPack]",
+                "dangling symlink: collision DirPack; destination symlink to missing; resourcepacks [DirPack]",
+                "empty dir: collision DirPack; destination dir with 0 entries; resourcepacks [DirPack]",
+                "regular file: collision DirPack; destination file rival; resourcepacks [DirPack]",
+            ]
+        );
+        assert!(trash.calls().is_empty());
+    }
+
+    #[test]
+    fn replace_reports_a_collision_when_a_rival_lands_after_the_trash() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let old = root.path().join("one/Pack.zip");
+        simple_zip(&old, 34, None);
+        import_pack_with(
+            &old,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+        let new = root.path().join("two/Pack.zip");
+        write_zip(
+            &new,
+            &[
+                ("pack.mcmeta", mcmeta(55, None, "Different").as_slice()),
+                ("assets/minecraft/x", b"x"),
+            ],
+        );
+        let rival = resourcepacks.join("Pack.zip");
+
+        let outcome = import_pack_with_commit(
+            &new,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Replace,
+            &hashes,
+            &trash,
+            |tmp, dest| {
+                std::fs::write(&rival, b"rival").unwrap();
+                atomic_no_replace(tmp, dest)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            outcome,
+            ImportOutcome::Collision {
+                name: "Pack".to_string()
+            }
+        );
+        assert_eq!(std::fs::read(&rival).unwrap(), b"rival");
+        assert_eq!(
+            trash.calls(),
+            [std::fs::canonicalize(&rival).unwrap()],
+            "the old pack is already in the trash when the rival lands"
+        );
+        assert_eq!(
+            Vec::from_iter(pack_names(&resourcepacks).unwrap()),
+            ["Pack.zip"]
+        );
     }
 
     #[test]
