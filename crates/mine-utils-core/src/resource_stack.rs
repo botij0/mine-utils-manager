@@ -657,7 +657,8 @@ impl stack_core::StackFile for ResourceFile<'_> {
     type Rendered = String;
 
     fn prepare(&self) -> Result<(), AppError> {
-        self.guard.ensure_writable(&self.paths.game_dir)
+        self.guard.ensure_writable(&self.paths.game_dir)?;
+        options_txt::reject_symlink(&self.paths.options_path)
     }
 
     fn guard(&self) -> Result<(), AppError> {

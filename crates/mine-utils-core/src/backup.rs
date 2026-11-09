@@ -516,6 +516,7 @@ pub fn restore_guarded<F>(
 where
     F: FnOnce() -> Result<(), AppError>,
 {
+    crate::options_txt::reject_symlink(options_path)?;
     let source = validated_backup(root, file_name)?;
     let restored = core::restore(
         core::RestoreFiles {
