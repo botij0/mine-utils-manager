@@ -75,13 +75,26 @@ pub(crate) mod core {
         scheme: &S,
         owned: impl Fn(&str) -> bool,
     ) -> Result<Option<Stored>, AppError> {
+        create_protected(root, previous, config, scheme, owned, &[])
+    }
+
+    fn create_protected<S: Naming>(
+        root: &Path,
+        previous: &[u8],
+        config: &BackupsConfig,
+        scheme: &S,
+        owned: impl Fn(&str) -> bool,
+        protected: &[&str],
+    ) -> Result<Option<Stored>, AppError> {
         if !config.enabled {
             return Ok(None);
         }
         std::fs::create_dir_all(root)
             .map_err(|err| scheme.error(format!("{}: {err}", root.display())))?;
         let stored = write_unique(root, previous, scheme)?;
-        rotate(root, config.keep.max(1), scheme, &owned)?;
+        let mut protected = protected.to_vec();
+        protected.push(&stored.file_name);
+        rotate(root, config.keep.max(1), scheme, &owned, &protected)?;
         Ok(Some(stored))
     }
 
@@ -169,7 +182,14 @@ pub(crate) mod core {
         validate(files.file_name, &bytes)?;
 
         let backup = match std::fs::read(files.target) {
-            Ok(current) => create(files.root, &current, config, scheme, owned)?,
+            Ok(current) => create_protected(
+                files.root,
+                &current,
+                config,
+                scheme,
+                owned,
+                &[files.file_name],
+            )?,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
             Err(err) => return Err(AppError::Io(err)),
         };
@@ -206,17 +226,22 @@ pub(crate) mod core {
             .collect())
     }
 
-    /// Keep only the newest `keep` owned backups. Names sort chronologically.
+    /// Remove the oldest unprotected backups until at most `keep` remain, if possible.
     fn rotate<S: Scheme>(
         root: &Path,
         keep: u32,
         scheme: &S,
         owned: &impl Fn(&str) -> bool,
+        protected: &[&str],
     ) -> Result<(), AppError> {
         let mut names = names(root, scheme, owned)?;
         names.sort();
         let excess = names.len().saturating_sub(keep as usize);
-        for name in names.into_iter().take(excess) {
+        for name in names
+            .into_iter()
+            .filter(|name| !protected.contains(&name.as_str()))
+            .take(excess)
+        {
             std::fs::remove_file(root.join(name)).map_err(|err| scheme.error(err.to_string()))?;
         }
         sync_dir(root);
