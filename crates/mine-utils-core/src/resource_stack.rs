@@ -894,6 +894,36 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_options_refuse_toggle_and_restore() {
+        let (dir, paths) = fixture_stack();
+        let target = dir.path().join("shared-options.txt");
+        let original = b"resourcePacks:[\"vanilla\"]\n";
+        std::fs::write(&target, original).unwrap();
+        std::os::unix::fs::symlink(&target, &paths.options_path).unwrap();
+        let backup = backup::create(&paths.backups_root, b"resourcePacks:[]\n", &paths.backups)
+            .unwrap()
+            .created
+            .unwrap()
+            .file_name;
+
+        assert_eq!(load(&paths).unwrap().entries[0].value(), "vanilla");
+        let err = set_enabled(&paths, "a.zip", true).unwrap_err();
+        assert_eq!(err.code(), "world");
+        assert!(err.to_string().contains("symlink"));
+        assert_eq!(std::fs::read_link(&paths.options_path).unwrap(), target);
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+        assert_eq!(backup::list(&paths.backups_root).unwrap().len(), 1);
+
+        let err = restore_backup(&paths, &backup).unwrap_err();
+        assert_eq!(err.code(), "world");
+        assert!(err.to_string().contains("symlink"));
+        assert_eq!(std::fs::read_link(&paths.options_path).unwrap(), target);
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+        assert_eq!(backup::list(&paths.backups_root).unwrap().len(), 1);
+    }
+
     #[test]
     fn toggle_rebases_an_edit_during_guard() {
         struct EditingGuard(std::cell::Cell<usize>, std::path::PathBuf);
