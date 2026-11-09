@@ -901,6 +901,37 @@ mod tests {
     }
 
     #[test]
+    fn toggle_rebases_an_edit_during_guard() {
+        struct EditingGuard(std::cell::Cell<usize>, std::path::PathBuf);
+        impl WriteGuard for EditingGuard {
+            fn ensure_writable(&self, _: &Path) -> Result<(), AppError> {
+                let calls = self.0.get() + 1;
+                self.0.set(calls);
+                if calls == 2 {
+                    use std::io::Write;
+                    writeln!(
+                        std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&self.1)
+                            .unwrap(),
+                        "lang:de_de"
+                    )
+                    .unwrap();
+                }
+                Ok(())
+            }
+        }
+        let (_dir, paths) = fixture_stack();
+        write_fixture(&paths, "resourcePacks:[\"vanilla\"]\n");
+        let guard = EditingGuard(std::cell::Cell::new(0), paths.options_path.clone());
+        set_enabled_with_guard(&paths, "a.zip", true, &guard).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&paths.options_path).unwrap(),
+            "resourcePacks:[\"vanilla\",\"file/a.zip\"]\nlang:de_de\n"
+        );
+    }
+
+    #[test]
     fn set_enabled_writes_and_backs_up() {
         let (_dir, paths) = fixture_stack();
         write_fixture(&paths, "version:4556\nresourcePacks:[\"vanilla\"]\n");

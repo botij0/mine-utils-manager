@@ -774,6 +774,31 @@ mod tests {
     }
 
     #[test]
+    fn restore_rejects_an_edit_during_guard() {
+        let root = tempfile::tempdir().unwrap();
+        let options = root.path().join("options.txt");
+        std::fs::write(&options, b"resourcePacks:[\"current\"]\n").unwrap();
+        let first = create(root.path(), b"resourcePacks:[\"old\"]\n", &config(10)).unwrap();
+        let err = restore_guarded(
+            root.path(),
+            &options,
+            &first.created.unwrap().file_name,
+            &config(10),
+            || {
+                std::fs::write(&options, b"resourcePacks:[\"current\"]\nlang:de_de\n").unwrap();
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "stale_stack");
+        assert_eq!(
+            std::fs::read(&options).unwrap(),
+            b"resourcePacks:[\"current\"]\nlang:de_de\n"
+        );
+        assert_eq!(list(root.path()).unwrap().len(), 2);
+    }
+
+    #[test]
     fn restore_guard_runs_after_the_backup_and_before_the_write() {
         let root = tempfile::tempdir().unwrap();
         let options = root.path().join("options.txt");
