@@ -322,6 +322,34 @@ mod tests {
     }
 
     #[test]
+    fn mismatch_does_not_back_up_rotate_or_call_before_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("backups");
+        let level = dir.path().join("level.dat");
+        let current = seeded(99);
+        let name = create(&root, "world", &seeded(42), &config(1))
+            .unwrap()
+            .created
+            .unwrap()
+            .file_name;
+        std::fs::write(&level, &current).unwrap();
+        let called = std::cell::Cell::new(false);
+        let err = restore_guarded(&root, "world", &level, &name, &config(1), || {
+            called.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(err.code(), "world_mismatch");
+        let names: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names, vec![name]);
+        assert_eq!(std::fs::read(&level).unwrap(), current);
+        assert!(!called.get());
+    }
+
+    #[test]
     fn restore_checks_world_seed_and_allows_recovery() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("backups");
