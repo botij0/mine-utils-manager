@@ -516,6 +516,43 @@ pub fn import_pack_with(
     )
 }
 
+pub(crate) trait ImportHooks {
+    fn before_write(&self) -> Result<(), AppError>;
+    fn replaced(&self, _old: &Path, _new: &Path) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
+impl ImportHooks for () {
+    fn before_write(&self) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
+pub(crate) struct ImportServices<'a> {
+    pub trash: &'a dyn TrashService,
+    pub hooks: &'a dyn ImportHooks,
+}
+
+pub(crate) fn import_pack_guarded(
+    source: &Path,
+    resourcepacks: &Path,
+    icons: &IconCache,
+    choice: ImportChoice,
+    hashes: &HashCache,
+    services: &ImportServices<'_>,
+) -> Result<ImportOutcome, AppError> {
+    import_pack_with_services(
+        source,
+        resourcepacks,
+        icons,
+        choice,
+        hashes,
+        services,
+        atomic_no_replace,
+    )
+}
+
 fn import_pack_with_commit(
     source: &Path,
     resourcepacks: &Path,
@@ -525,6 +562,27 @@ fn import_pack_with_commit(
     trash: &dyn TrashService,
     commit: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<ImportOutcome, AppError> {
+    import_pack_with_services(
+        source,
+        resourcepacks,
+        icons,
+        choice,
+        hashes,
+        &ImportServices { trash, hooks: &() },
+        commit,
+    )
+}
+
+fn import_pack_with_services(
+    source: &Path,
+    resourcepacks: &Path,
+    icons: &IconCache,
+    choice: ImportChoice,
+    hashes: &HashCache,
+    services: &ImportServices<'_>,
+    commit: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> Result<ImportOutcome, AppError> {
+    services.hooks.before_write()?;
     // A symlinked source is rejected instead of followed, so no later step can
     // remove a pack that only a link points at.
     let source_meta = std::fs::symlink_metadata(source).map_err(|_| PackError::NotFound {
@@ -627,40 +685,75 @@ fn import_pack_with_commit(
         return Err(err.into());
     }
 
-    // One Replace removes at most one pack. When the exact duplicate lives
-    // under a different name than a colliding destination, only the duplicate
-    // goes to the trash and the destination is reported as a collision without
-    // being deleted.
-    if let Some(existing_path) = &existing {
-        if existing_path != &destination && destination_taken {
-            let result = trash.move_to_trash(existing_path).map_err(AppError::from);
-            let _ = remove_any(&tmp);
-            result?;
-            return Ok(ImportOutcome::Collision { name });
-        }
-    }
-
-    let removal = existing
-        .clone()
-        .or_else(|| destination_taken.then(|| destination.clone()));
-    if let Some(target) = &removal {
-        if let Err(err) = trash.move_to_trash(target) {
-            let _ = remove_any(&tmp);
-            return Err(err.into());
-        }
-    }
-
-    if let Err(err) = commit(&tmp, &destination) {
+    if existing.as_ref().is_some_and(|path| path != &destination) && destination_taken {
         let _ = remove_any(&tmp);
-        if err.kind() == std::io::ErrorKind::AlreadyExists {
-            return Ok(ImportOutcome::Collision { name });
-        }
-        return Err(err.into());
+        return Ok(ImportOutcome::Collision { name });
     }
-    sync_dir(&root);
 
-    let mut bytes_read = 0;
-    let pack = inspect_entry(&destination, location, icons, &mut bytes_read)?;
+    let removal = existing.or_else(|| destination_taken.then(|| destination.clone()));
+    let held = if let Some(target) = &removal {
+        let holding = unique_temp_path(
+            &root,
+            &format!(
+                "mine-utils-replace-{}",
+                target.file_name().unwrap().to_string_lossy()
+            ),
+        );
+        let result = (|| {
+            validate_delete_target(target, &root)?;
+            services.hooks.before_write()?;
+            atomic_no_replace(target, &holding)?;
+            Ok::<_, AppError>(())
+        })();
+        if let Err(err) = result {
+            let _ = remove_any(&tmp);
+            return Err(err);
+        }
+        Some((target, holding))
+    } else {
+        None
+    };
+
+    let result = (|| {
+        services.hooks.before_write()?;
+        commit(&tmp, &destination)?;
+        let mut bytes_read = 0;
+        let pack = inspect_entry(&destination, location, icons, &mut bytes_read)?;
+        if let Some((old, holding)) = &held {
+            services.hooks.replaced(old, &destination)?;
+            services.hooks.before_write()?;
+            services.trash.move_to_trash(holding)?;
+        }
+        Ok::<_, AppError>(pack)
+    })();
+    let pack = match result {
+        Ok(pack) => pack,
+        Err(mut err) => {
+            let _ = remove_any(&tmp);
+            if let Some((old, holding)) = &held {
+                if let Err(restore) = atomic_no_replace(holding, old) {
+                    let message = format!(
+                        "Import failed: {err}. Original pack retained at {}. Could not restore {}: {restore}",
+                        holding.display(), old.display()
+                    );
+                    return Err(std::io::Error::other(message).into());
+                }
+                if let AppError::Pack(PackError::Trash { path, reason }) = &mut err {
+                    *path = old.to_path_buf();
+                    *reason = format!(
+                        "{reason}. Original restored at {}; new pack installed at {}",
+                        old.display(),
+                        destination.display()
+                    );
+                }
+            }
+            if matches!(&err, AppError::Io(io) if io.kind() == std::io::ErrorKind::AlreadyExists) {
+                return Ok(ImportOutcome::Collision { name });
+            }
+            return Err(err);
+        }
+    };
+    sync_dir(&root);
     Ok(ImportOutcome::Imported {
         pack: Box::new(pack),
     })
@@ -1577,7 +1670,7 @@ mod tests {
     }
 
     #[test]
-    fn replace_reports_a_collision_when_a_rival_lands_after_the_trash() {
+    fn replace_names_the_saved_original_when_a_rival_takes_its_name() {
         let (root, _cache_root, icons, hashes, trash) = setup();
         let resourcepacks = root.path().join("resourcepacks");
         std::fs::create_dir_all(&resourcepacks).unwrap();
@@ -1602,7 +1695,7 @@ mod tests {
         );
         let rival = resourcepacks.join("Pack.zip");
 
-        let outcome = import_pack_with_commit(
+        let err = import_pack_with_commit(
             &new,
             &resourcepacks,
             &icons,
@@ -1614,23 +1707,33 @@ mod tests {
                 atomic_no_replace(tmp, dest)
             },
         )
-        .unwrap();
-
+        .unwrap_err();
+        let holding = std::fs::read_dir(&resourcepacks)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| is_temp_name(path))
+            .unwrap();
         assert_eq!(
-            outcome,
-            ImportOutcome::Collision {
-                name: "Pack".to_string()
-            }
+            std::fs::read(&holding).unwrap(),
+            std::fs::read(&old).unwrap()
         );
         assert_eq!(std::fs::read(&rival).unwrap(), b"rival");
+        assert_eq!(trash.calls(), Vec::<PathBuf>::new());
+        assert_eq!(err.code(), "io");
+        assert!(err.to_string().contains(&holding.display().to_string()));
+        assert_eq!(scan_packs(&resourcepacks, &icons).unwrap().count, 1);
         assert_eq!(
-            trash.calls(),
-            [std::fs::canonicalize(&rival).unwrap()],
-            "the old pack is already in the trash when the rival lands"
+            find_duplicate(
+                &resourcepacks,
+                &hashes.hash(&old, PackLocation::Zip).unwrap(),
+                &hashes
+            )
+            .unwrap(),
+            None
         );
-        assert_eq!(
-            Vec::from_iter(pack_names(&resourcepacks).unwrap()),
-            ["Pack.zip"]
+        println!(
+            "rival preserved; original bytes retained at {}; error {err}",
+            holding.display()
         );
     }
 
@@ -1652,7 +1755,10 @@ mod tests {
             ImportChoice::Replace,
             &hashes,
             &trash,
-            |_, _| Err(std::io::Error::other("injected commit failure")),
+            |_, dest| {
+                assert!(!dest.exists(), "original is held before committing");
+                Err(std::io::Error::other("injected commit failure"))
+            },
         )
         .unwrap_err();
 
@@ -1663,6 +1769,96 @@ mod tests {
             Vec::from_iter(pack_names(&resourcepacks).unwrap()),
             ["Pack.zip"]
         );
+        println!(
+            "injected commit failure; original bytes restored at {}; trash calls 0",
+            original.display()
+        );
+    }
+
+    #[test]
+    fn folder_replace_commit_failure_restores_the_original() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        let old = resourcepacks.join("Faithful");
+        let source = root.path().join("incoming/Faithful-1.21");
+        for path in [&old, &source] {
+            std::fs::create_dir_all(path.join("assets")).unwrap();
+            std::fs::write(path.join("pack.mcmeta"), mcmeta(34, None, "Faithful")).unwrap();
+        }
+        let err = import_pack_with_commit(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Replace,
+            &hashes,
+            &trash,
+            |_, _| {
+                assert!(!old.exists());
+                Err(std::io::Error::other("injected folder commit failure"))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "io");
+        assert_eq!(
+            std::fs::read(old.join("pack.mcmeta")).unwrap(),
+            mcmeta(34, None, "Faithful")
+        );
+        assert_eq!(
+            Vec::from_iter(pack_names(&resourcepacks).unwrap()),
+            ["Faithful"]
+        );
+        assert_eq!(trash.calls(), Vec::<PathBuf>::new());
+        println!("folder commit failed after holding rename; original restored at {}; listing [Faithful]; trash calls 0", old.display());
+    }
+
+    #[test]
+    fn failed_trash_reports_where_the_original_remains_after_install() {
+        struct FailingTrash;
+        impl TrashService for FailingTrash {
+            fn move_to_trash(&self, path: &Path) -> Result<(), PackError> {
+                Err(PackError::Trash {
+                    path: path.to_path_buf(),
+                    reason: "injected trash failure".to_string(),
+                })
+            }
+        }
+        for filename in ["Faithful", "Faithful-1.21"] {
+            let (root, _cache_root, icons, hashes, _) = setup();
+            let resourcepacks = root.path().join("resourcepacks");
+            let old = resourcepacks.join("Faithful");
+            let source = root.path().join("incoming").join(filename);
+            for path in [&old, &source] {
+                std::fs::create_dir_all(path.join("assets")).unwrap();
+                std::fs::write(path.join("pack.mcmeta"), mcmeta(34, None, "Faithful")).unwrap();
+            }
+            let err = import_pack_with(
+                &source,
+                &resourcepacks,
+                &icons,
+                ImportChoice::Replace,
+                &hashes,
+                &FailingTrash,
+            )
+            .unwrap_err();
+            let original = if filename == "Faithful" {
+                std::fs::read_dir(&resourcepacks)
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .find(|p| is_temp_name(p))
+                    .unwrap()
+            } else {
+                old
+            };
+            assert!(err.to_string().contains(&original.display().to_string()));
+            assert_eq!(
+                std::fs::read(original.join("pack.mcmeta")).unwrap(),
+                mcmeta(34, None, "Faithful")
+            );
+            assert_eq!(
+                std::fs::read(resourcepacks.join(filename).join("pack.mcmeta")).unwrap(),
+                mcmeta(34, None, "Faithful")
+            );
+        }
     }
 
     #[test]
@@ -1784,7 +1980,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_plus_collision_removes_at_most_one_pack() {
+    fn duplicate_plus_collision_preserves_both_installed_packs() {
         let (root, _cache_root, icons, hashes, trash) = setup();
         let resourcepacks = root.path().join("resourcepacks");
         std::fs::create_dir_all(&resourcepacks).unwrap();
@@ -1835,36 +2031,14 @@ mod tests {
             "{first:?}"
         );
         assert_eq!(
-            pack_names(&resourcepacks).unwrap().len(),
-            1,
-            "one Replace removes at most one pack"
+            Vec::from_iter(pack_names(&resourcepacks).unwrap()),
+            ["Alpha.zip", "Pack.zip"]
         );
-        assert_eq!(trash.calls().len(), 1);
-        assert_eq!(
-            trash.calls()[0],
-            resourcepacks.join("Alpha.zip"),
-            "only the exact duplicate goes; the colliding destination stays"
-        );
-        assert!(resourcepacks.join("Pack.zip").is_file());
-        assert!(source.is_file(), "the source is never deleted");
-
-        let second = import_pack_with(
-            &source,
-            &resourcepacks,
-            &icons,
-            ImportChoice::Replace,
-            &hashes,
-            &trash,
-        )
-        .unwrap();
-        assert!(
-            matches!(second, ImportOutcome::Imported { .. }),
-            "{second:?}"
-        );
-        assert_eq!(trash.calls().len(), 2);
+        assert_eq!(trash.calls(), Vec::<PathBuf>::new());
         let listing = scan_packs(&resourcepacks, &icons).unwrap();
-        assert_eq!(listing.count, 1);
         assert_eq!(listing.packs[0].description, "Demo pack");
+        assert_eq!(listing.packs[1].description, "Colliding");
+        assert!(source.is_file());
     }
 
     #[test]

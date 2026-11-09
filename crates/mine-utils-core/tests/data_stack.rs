@@ -839,6 +839,51 @@ fn install_pack(world: &World, name: &str) -> PathBuf {
 }
 
 #[test]
+fn replace_commits_the_new_datapack_before_trashing_the_holding_folder() {
+    let world = temp_world(&["vanilla"], &[]);
+    let source = install_pack(&world, "cool-pack");
+    std::fs::write(source.join("data/new.json"), b"new content").unwrap();
+    let observed = RefCell::new(None);
+    let trash = FnTrash(|holding: &Path| {
+        *observed.borrow_mut() = Some((
+            std::fs::read(world.paths.datapacks_dir.join("cool-pack/data/new.json")).unwrap(),
+            holding
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".mine-utils-replace-cool-pack."),
+            holding.join("data/new.json").exists(),
+        ));
+        std::fs::remove_dir_all(holding).unwrap();
+        Ok(())
+    });
+    let outcome = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &trash,
+        &PassGuard,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome,
+        data_stack::DatapackImportOutcome::Imported {
+            filename: "cool-pack".to_string()
+        }
+    );
+    assert_eq!(
+        observed.into_inner(),
+        Some((b"new content".to_vec(), true, false))
+    );
+    assert_eq!(
+        view(&world.paths),
+        lists(&["vanilla", "file/cool-pack"], &[])
+    );
+}
+
+#[test]
 fn locked_world_replace_is_refused_before_any_trash() {
     let world = temp_world(&["vanilla"], &[]);
     let source = install_pack(&world, "cool-pack");

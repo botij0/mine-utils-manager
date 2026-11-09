@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mine_utils_core::{
-    import_pack, resource_stack, scan_packs, AppError, HashCache, IconCache, ImportChoice,
-    ImportOutcome, PackListing, SystemTrash,
+    resource_stack, scan_packs, AppError, HashCache, IconCache, ImportChoice, ImportOutcome,
+    PackListing, SystemTrash,
 };
 use tauri::State;
 
@@ -59,19 +59,22 @@ pub async fn list_resource_packs(
 pub async fn import_resource_pack(
     state: State<'_, AppState>,
     packs: State<'_, PackState>,
+    stack: State<'_, super::resource_stack::StackState>,
     path: String,
     choice: Option<ImportChoice>,
 ) -> Result<ImportOutcome, AppError> {
     state.note_ipc();
-    let root = resourcepacks(&state)?;
+    let paths = state.stack_paths()?;
+    let guard = stack.lock_for(&paths.game_dir);
     let icons = packs.icons();
     let hashes = packs.hashes();
     tauri::async_runtime::spawn_blocking(move || {
-        import_pack(
+        let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
+        resource_stack::import_pack_safely(
+            &paths,
             Path::new(&path),
-            &root,
-            &icons,
             choice.unwrap_or_default(),
+            &icons,
             &hashes,
         )
     })

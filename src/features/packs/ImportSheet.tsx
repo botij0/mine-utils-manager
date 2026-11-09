@@ -15,7 +15,7 @@ interface ImportSheetProps {
   extraPaths: string[];
   path: string;
   onPathChange: (path: string) => void;
-  /** False when no game dir is active, so nothing can be imported. */
+  /** Whether imports are currently allowed. */
   canImport: boolean;
   onClose: () => void;
   onImportPath: (path: string) => Promise<void>;
@@ -65,12 +65,12 @@ export default function ImportSheet({
           <strong>{prompt.name}</strong>{' '}
           {duplicate
             ? `has the same SHA-256 as ${prompt.existing}.`
-            : 'is already in the resourcepacks folder with different content.'}
+            : 'has a filename that is already in use in the resourcepacks folder.'}
         </p>
         <p className="sheet-note">
-          Skip leaves the installed pack alone. Replace moves one old pack to the trash and
-          copies this one in. When a duplicate and a name clash both exist, each Replace
-          removes one pack.
+          Skip leaves the installed pack alone. Replace keeps the old pack until the new copy
+          is installed, then moves the old pack to the trash. A filename collision leaves the
+          installed packs in place. If recovery needs your help, the error names the saved pack.
         </p>
         {errorBlock}
         <div className="sheet-actions">

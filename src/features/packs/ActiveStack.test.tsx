@@ -29,6 +29,24 @@ function card(name: string): HTMLElement {
 }
 
 describe('ActiveStack', () => {
+  it('refreshes enabled references after a replacement import', async () => {
+    const client = stackClient();
+    let replaced = false;
+    client.getResourceStack = async () => resourceStack([replaced ? 'file/Beta.zip' : 'file/Alpha.zip']);
+    client.importResourcePack = async () => {
+      replaced = true;
+      return { status: 'imported', pack: PACKS[1] };
+    };
+    render(<PacksPage client={client} />);
+    const user = userEvent.setup();
+    expect(await screen.findByRole('listitem', { name: 'Alpha' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Import pack' }));
+    await user.type(screen.getByLabelText('Pack path'), '/tmp/Beta.zip');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    expect(await screen.findByRole('listitem', { name: 'Beta' })).toBeInTheDocument();
+    expect(screen.queryByRole('listitem', { name: 'Alpha' })).not.toBeInTheDocument();
+  });
+
   it('shows the stack top-first with locked foreign entries', async () => {
     render(<PacksPage client={stackClient()} />);
 

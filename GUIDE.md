@@ -90,9 +90,13 @@ A folder must contain `pack.mcmeta`. Mine Utils copies folder packs into `resour
 Mine Utils compares content hashes as well as filenames.
 
 - **Duplicate** means the same content is already installed. Choose **Skip** to keep the installed pack, or **Replace** to replace the matching old entry.
-- **Collision** means the filename exists with different content. Choose **Cancel**, or **Replace** to move the old pack to the system trash and import the new one.
+- **Collision** means the filename exists with different content. Choose **Cancel**, or **Replace** to install the new pack before moving the old pack to the system trash.
 
-If both a duplicate and a collision exist, each **Replace** resolves one old pack. Repeat the import decision if Mine Utils presents another prompt.
+If both a duplicate and a separate filename collision exist, Mine Utils leaves both installed packs in place. Rename the source pack before importing it.
+
+During Replace, Mine Utils holds the old pack under a hidden sibling name until the new copy commits. A failed commit restores the old name when it is free. If another file takes that name, the error shows the holding path where you can recover the original. If trash cleanup fails after installation, the error reports the failure and any holding path that remains.
+
+Replacing a resource pack with a differently named duplicate keeps its position in both `options.txt` pack lists.
 
 ### Find and inspect packs
 

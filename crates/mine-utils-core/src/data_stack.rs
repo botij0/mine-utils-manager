@@ -476,8 +476,22 @@ pub fn import_datapack_with(
         guard.ensure_writable(&paths.game_dir)?;
     }
     std::fs::create_dir_all(&paths.datapacks_dir)?;
-    let outcome =
-        pack_scan::import_pack_with(source, &paths.datapacks_dir, icons, choice, hashes, trash)?;
+    let hooks = DatapackImport {
+        paths,
+        choice,
+        guard,
+    };
+    let outcome = pack_scan::import_pack_guarded(
+        source,
+        &paths.datapacks_dir,
+        icons,
+        choice,
+        hashes,
+        &pack_scan::ImportServices {
+            trash,
+            hooks: &hooks,
+        },
+    )?;
     let filename = match &outcome {
         crate::pack::ImportOutcome::Imported { pack } => pack_filename(&pack.path)?,
         crate::pack::ImportOutcome::Duplicate { .. }
@@ -499,6 +513,22 @@ pub fn import_datapack_with(
     }
     set_enabled_with_guard(paths, &filename, true, guard)?;
     Ok(DatapackImportOutcome::Imported { filename })
+}
+
+struct DatapackImport<'a> {
+    paths: &'a DataPaths,
+    choice: ImportChoice,
+    guard: &'a dyn WriteGuard,
+}
+
+impl pack_scan::ImportHooks for DatapackImport<'_> {
+    fn before_write(&self) -> Result<(), AppError> {
+        if self.choice == ImportChoice::Replace {
+            writable(&self.paths.game_dir, &self.paths.world_dir, self.guard)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 fn map_pack_outcome(outcome: &crate::pack::ImportOutcome) -> DatapackImportOutcome {

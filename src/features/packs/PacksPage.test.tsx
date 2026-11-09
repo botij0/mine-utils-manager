@@ -30,7 +30,7 @@ describe('PacksPage', () => {
     await userEvent.setup().type(screen.getByLabelText('Pack path'), '/tmp/Fresh.zip');
     rerender(<PacksPage client={client} gameRunning={guard === 'running' ? running : null} gameGuardUnknown={guard === 'unknown'} />);
     expect(screen.getByRole('button', { name: 'Import pack' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Import', exact: true })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled();
   });
 
   it('lists packs with descriptions, chips, icons, and an isolated error card', async () => {

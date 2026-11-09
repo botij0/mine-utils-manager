@@ -167,6 +167,7 @@ export default function PacksPage({
 
   const handleImportPath = useCallback(
     async (source: string) => {
+      if (writesBlocked) return;
       setSheetError(null);
       setLastPath(source);
       try {
@@ -186,11 +187,11 @@ export default function PacksPage({
         setSheetOpen(true);
       }
     },
-    [importPack],
+    [importPack, writesBlocked],
   );
 
   const handleChoose = async (choice: ImportChoice) => {
-    if (!lastPath) return;
+    if (!lastPath || writesBlocked) return;
     setSheetError(null);
     try {
       const outcome = await importPack(lastPath, choice);
@@ -301,7 +302,7 @@ export default function PacksPage({
           <button
             type="button"
             className="button button-primary"
-            disabled={noGameDir}
+            disabled={noGameDir || writesBlocked}
             title={noGameDir ? 'Pick a game dir in Settings first' : undefined}
             onClick={() => {
               setPrompt(null);
@@ -459,7 +460,7 @@ export default function PacksPage({
         extraPaths={extraPaths}
         path={path}
         onPathChange={setPath}
-        canImport={!noGameDir}
+        canImport={!noGameDir && !writesBlocked}
         onClose={closeSheet}
         onImportPath={handleImportPath}
         onChoose={handleChoose}
