@@ -295,6 +295,41 @@ mod tests {
         level_dat::gzip(&fastnbt::to_bytes(&value).unwrap())
     }
 
+    fn seeded(seed: i64) -> Vec<u8> {
+        let raw = level_dat::gunzip(&fixture_level_dat()).unwrap();
+        let mut value: fastnbt::Value = fastnbt::from_bytes(&raw).unwrap();
+        if let fastnbt::Value::Compound(root) = &mut value {
+            if let Some(fastnbt::Value::Compound(data)) = root.get_mut("Data") {
+                data.insert("RandomSeed".into(), fastnbt::Value::Long(seed));
+            }
+        }
+        level_dat::gzip(&fastnbt::to_bytes(&value).unwrap())
+    }
+
+    #[test]
+    fn restore_checks_world_seed_and_allows_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("backups");
+        let level = dir.path().join("level.dat");
+        let backup = seeded(42);
+        let current = seeded(99);
+        let name = create(&root, "world", &backup, &config(10))
+            .unwrap()
+            .created
+            .unwrap()
+            .file_name;
+        std::fs::write(&level, &current).unwrap();
+        let restore = || restore_guarded(&root, "world", &level, &name, &config(10), || Ok(()));
+        assert_eq!(restore().unwrap_err().code(), "world_mismatch");
+        assert_eq!(std::fs::read(&level).unwrap(), current);
+        std::fs::write(&level, &backup).unwrap();
+        restore().unwrap();
+        assert_eq!(std::fs::read(&level).unwrap(), backup);
+        std::fs::remove_file(&level).unwrap();
+        restore().unwrap();
+        assert_eq!(std::fs::read(&level).unwrap(), backup);
+    }
+
     fn config(keep: u32) -> BackupsConfig {
         BackupsConfig {
             enabled: true,
