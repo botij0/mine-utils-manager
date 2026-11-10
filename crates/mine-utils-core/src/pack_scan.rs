@@ -2088,6 +2088,26 @@ mod tests {
     }
 
     #[test]
+    fn in_place_import_does_not_hash_the_pack_or_siblings() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let packs = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&packs).unwrap();
+        simple_zip(&packs.join("Sibling.zip"), 34, None);
+        simple_zip(&packs.join("Pack.zip"), 34, None);
+        let outcome = import_pack_with(
+            &packs.join("Pack.zip"),
+            &packs,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+        assert!(matches!(outcome, ImportOutcome::Imported { .. }));
+        assert_eq!(hashes.entries.lock().unwrap().len(), 0);
+    }
+
+    #[test]
     fn reimporting_a_pack_inside_resourcepacks_keeps_it() {
         let (root, _cache_root, icons, hashes, trash) = setup();
         let resourcepacks = root.path().join("resourcepacks");
