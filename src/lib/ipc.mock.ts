@@ -384,7 +384,6 @@ export const mockClient: IpcClient = {
   },
   async deleteResourcePack(path: string) {
     await delay();
-    refuseAmbiguousPackName(path);
     if (!mockPacks.some((pack) => pack.path === path)) {
       throw new IpcError('pack_not_found', `pack ${path} does not exist`);
     }
@@ -400,7 +399,6 @@ export const mockClient: IpcClient = {
   },
   async setResourcePackEnabled(filename: string, enabled: boolean) {
     await delay();
-    refuseAmbiguousPackName(filename);
     assertWritable();
     const value = `file/${filename}`;
     if (enabled) {
@@ -476,13 +474,11 @@ export const mockClient: IpcClient = {
   },
   async deleteDatapack(world: string, path: string): Promise<DatapackDeleteOutcome> {
     await delay();
-    refuseAmbiguousPackName(path);
     mockDeleteDatapack(world, path);
     return { removed_references: true, stack: mockDataStack(world) };
   },
   async removeDatapackReference(world: string, filename: string) {
     await delay();
-    refuseAmbiguousPackName(filename);
     mockAssertDatapackWritable(world);
     const state = stackStateOf(world);
     const value = `file/${filename}`;
@@ -493,7 +489,6 @@ export const mockClient: IpcClient = {
   },
   async setDatapackEnabled(world: string, filename: string, enabled: boolean) {
     await delay();
-    refuseAmbiguousPackName(filename);
     mockAssertDatapackWritable(world);
     mockSetDatapackEnabled(world, filename, enabled);
     return mockDataStack(world);
@@ -1135,10 +1130,4 @@ function mockReorder(order: string[]) {
     throw new IpcError('resource_stack', 'the requested order is not a reorder of the current stack');
   }
   mockStack = { ...mockStack, resource: [...order] };
-}
-
-function refuseAmbiguousPackName(path: string): void {
-  if (path.split('/').at(-1)?.includes('�')) {
-    throw new IpcError('pack_non_utf8_name', 'This filename cannot be managed safely');
-  }
 }

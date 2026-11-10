@@ -862,14 +862,24 @@ pub fn delete_pack_with(
 /// `options.txt`. The entry itself is never canonicalized, so the check cannot
 /// redirect a delete elsewhere.
 pub fn validate_delete_target(path: &Path, resourcepacks: &Path) -> Result<(), AppError> {
-    if path
-        .file_name()
-        .is_some_and(|name| name.to_string_lossy().contains('�'))
-    {
-        return Err(PackError::NonUtf8Name {
-            name: display_name(path),
+    if let Some(name) = path.file_name() {
+        let mut ambiguous = name.to_str().is_none();
+        if name.to_string_lossy().contains('�') {
+            for entry in std::fs::read_dir(resourcepacks)? {
+                let sibling = entry?.file_name();
+                if sibling.to_str().is_none() && sibling.to_string_lossy() == name.to_string_lossy()
+                {
+                    ambiguous = true;
+                    break;
+                }
+            }
         }
-        .into());
+        if ambiguous {
+            return Err(PackError::NonUtf8Name {
+                name: display_name(path),
+            }
+            .into());
+        }
     }
     let root = std::fs::canonicalize(resourcepacks)?;
     let metadata = std::fs::symlink_metadata(path).map_err(|_| PackError::NotFound {
