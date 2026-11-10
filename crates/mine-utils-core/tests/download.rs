@@ -473,3 +473,56 @@ fn slow_streaming_reader_still_streams() {
     assert!(matches!(err, DownloadError::TooLarge { .. }), "{err}");
     assert!(leftovers(&target).is_empty());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn download_sweeps_only_stale_regular_download_temps() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let stale = ".old.zip.mine-utils-download-4294967295-1-0.tmp";
+    let current = format!(
+        ".active.zip.mine-utils-download-{}-1-0.tmp",
+        std::process::id()
+    );
+    let link = ".link.zip.mine-utils-download-4294967295-1-0.tmp";
+    for name in [
+        stale,
+        &current,
+        ".unrelated",
+        ".bad.mine-utils-download-4294967295-x-0.tmp",
+    ] {
+        std::fs::write(dir.path().join(name), b"keep").unwrap();
+    }
+    symlink(dir.path().join(".unrelated"), dir.path().join(link)).unwrap();
+    let listing = || {
+        let mut names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    };
+    println!("before: {:?}", listing());
+    let bytes = zip_bytes(&[("assets/pack.png", b"png")]);
+    let (client, _) = client_for(bytes.clone());
+    let verified = download_verified(
+        &client,
+        CDN_URL,
+        dir.path(),
+        "fresh.zip",
+        &sha512_hex(&bytes),
+        ZipRoot::Assets,
+    )
+    .unwrap();
+    drop(verified);
+    println!("after: {:?}", listing());
+    let mut expected = vec![
+        current,
+        link.to_string(),
+        ".unrelated".to_string(),
+        ".bad.mine-utils-download-4294967295-x-0.tmp".to_string(),
+    ];
+    expected.sort();
+    assert_eq!(listing(), expected);
+}
