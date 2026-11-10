@@ -1010,8 +1010,10 @@ fn find_duplicate(
         } else {
             continue;
         };
-        if hashes.hash(&path, location)? == sha256 {
-            return Ok(Some(path));
+        match hashes.hash(&path, location) {
+            Ok(hash) if hash == sha256 => return Ok(Some(path)),
+            Ok(_) | Err(AppError::Pack(PackError::Symlink { .. })) => continue,
+            Err(err) => return Err(err),
         }
     }
     Ok(None)
