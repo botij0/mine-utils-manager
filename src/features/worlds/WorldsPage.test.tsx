@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorldsClient } from '../../lib/ipc';
-import { IpcError } from '../../lib/types';
+import { IpcError, type GameRunning } from '../../lib/types';
 import { worldsClient } from '../../test/fake-ipc';
 import { datapack, stack, stackEntry, world } from '../../test/fake-packs';
 import WorldsPage from './WorldsPage';
@@ -69,6 +69,18 @@ function pageClient(overrides: Partial<WorldsClient> = {}): WorldsClient {
 }
 
 describe('WorldsPage', () => {
+  it.each(['running', 'unknown'] as const)('disables imports while the game guard is %s', async (state) => {
+    const client = pageClient();
+    const { rerender } = render(<WorldsPage client={client} gameRunning={null} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled());
+    const running: GameRunning = {
+      kind: 'process', detail: 'java', lock_path: null, pid: 42, command: 'java',
+    };
+    rerender(<WorldsPage client={client} gameRunning={state === 'running' ? running : null} gameGuardUnknown={state === 'unknown'} />);
+    expect(screen.getByRole('button', { name: 'Import zip' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
+  });
+
   it('lists worlds with icons and versions', async () => {
     render(<WorldsPage client={pageClient()} />);
     expect(await screen.findAllByText('Survival 1.17')).toHaveLength(2);

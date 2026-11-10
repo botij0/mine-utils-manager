@@ -329,6 +329,7 @@ export const mockClient: IpcClient = {
   },
   async importResourcePack(path: string, choice: ImportChoice = 'default'): Promise<ImportOutcome> {
     await delay();
+    assertWritable();
     const base = path.split('/').filter(Boolean).at(-1) ?? path;
     const lower = base.toLowerCase();
     if (lower.includes('broken') || lower.includes('corrupt')) {
@@ -614,6 +615,7 @@ export const mockClient: IpcClient = {
       const outcome = mockImportDatapack(args.world, args.filename, 'default');
       return { kind: 'datapack', outcome } as ModrinthInstallOutcome;
     }
+    assertWritable();
     const pack: Pack = {
       ...makePack(
         args.filename.replace(/\.zip$/i, ''),

@@ -154,6 +154,7 @@ pub(crate) mod stack_core {
         Toggle { filename: String, enabled: bool },
         Reorder { order: Vec<String> },
         Remove { filename: String },
+        Rename { old: String, new: String },
     }
 
     impl Change {
@@ -168,6 +169,18 @@ pub(crate) mod stack_core {
                     enabled: false,
                 } => Ok((rules.disable)(lists, filename)),
                 Change::Remove { filename } => (rules.remove)(lists, filename),
+                Change::Rename { old, new } => {
+                    let old = file_value(old)?;
+                    let new = file_value(new)?;
+                    let mut changed = false;
+                    for value in lists.primary.iter_mut().chain(lists.secondary.iter_mut()) {
+                        if *value == old && *value != new {
+                            value.clone_from(&new);
+                            changed = true;
+                        }
+                    }
+                    Ok(changed)
+                }
                 Change::Reorder { order } => {
                     reorder(&lists.primary, order)?;
                     if lists.primary == *order {
@@ -550,6 +563,71 @@ pub fn restore_backup(paths: &StackPaths, file_name: &str) -> Result<ResourceSta
         || game_lock::ensure_writable(&paths.game_dir),
     )?;
     load(paths)
+}
+
+/// Import under the caller's per-game-directory mutex and preserve replaced references.
+pub fn import_pack_safely(
+    paths: &StackPaths,
+    source: &Path,
+    choice: crate::ImportChoice,
+    icons: &crate::IconCache,
+    hashes: &crate::HashCache,
+) -> Result<crate::ImportOutcome, AppError> {
+    import_pack_safely_with(
+        paths,
+        source,
+        choice,
+        icons,
+        hashes,
+        &crate::SystemTrash,
+        &SystemGuard,
+    )
+}
+
+#[doc(hidden)]
+pub fn import_pack_safely_with(
+    paths: &StackPaths,
+    source: &Path,
+    choice: crate::ImportChoice,
+    icons: &crate::IconCache,
+    hashes: &crate::HashCache,
+    trash: &dyn TrashService,
+    guard: &dyn WriteGuard,
+) -> Result<crate::ImportOutcome, AppError> {
+    let hooks = ResourceImport { paths, guard };
+    crate::pack_scan::import_pack_guarded(
+        source,
+        &paths.game_dir.join("resourcepacks"),
+        icons,
+        choice,
+        hashes,
+        &crate::pack_scan::ImportServices {
+            trash,
+            hooks: &hooks,
+        },
+    )
+}
+
+struct ResourceImport<'a> {
+    paths: &'a StackPaths,
+    guard: &'a dyn WriteGuard,
+}
+
+impl crate::pack_scan::ImportHooks for ResourceImport<'_> {
+    fn before_write(&self) -> Result<(), AppError> {
+        self.guard.ensure_writable(&self.paths.game_dir)
+    }
+
+    fn replaced(&self, old: &Path, new: &Path) -> Result<(), AppError> {
+        if old.file_name() != new.file_name() && self.paths.options_path.exists() {
+            let change = stack_core::Change::Rename {
+                old: filename_for(old)?,
+                new: filename_for(new)?,
+            };
+            commit(self.paths, None, &change, self.guard)?;
+        }
+        Ok(())
+    }
 }
 
 /// What a guarded delete did before moving the pack to the trash.

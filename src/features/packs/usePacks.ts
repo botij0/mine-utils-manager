@@ -111,13 +111,19 @@ export function usePacks(client: PackClient): PacksState {
       setBusy(true);
       try {
         const outcome = await client.importResourcePack(path, choice);
-        if (outcome.status === 'imported') await reload();
+        if (outcome.status === 'imported') {
+          await reload();
+          await refreshStack();
+        }
         return outcome;
+      } catch (err) {
+        await Promise.all([reload(), refreshStack()]);
+        throw err;
       } finally {
         if (mounted.current) setBusy(false);
       }
     },
-    [client, reload],
+    [client, reload, refreshStack],
   );
 
   const deletePack = useCallback(

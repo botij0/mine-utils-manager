@@ -319,7 +319,7 @@ export default function WorldsPage({
                   <button
                     type="button"
                     className="button button-primary"
-                    disabled={!selected || readOnly || busy}
+                    disabled={!selected || readOnly || busy || running !== null || gameGuardUnknown || listingStale}
                     title={readOnly ? 'This world is read-only' : undefined}
                     onClick={() => void handleImportPick(false)}
                   >
@@ -328,7 +328,7 @@ export default function WorldsPage({
                   <button
                     type="button"
                     className="button"
-                    disabled={!selected || readOnly || busy}
+                    disabled={!selected || readOnly || busy || running !== null || gameGuardUnknown || listingStale}
                     title={readOnly ? 'This world is read-only' : undefined}
                     onClick={() => void handleImportPick(true)}
                   >
@@ -350,6 +350,7 @@ export default function WorldsPage({
                     <button
                       type="button"
                       className="button"
+                      disabled={writesBlocked || busy}
                       onClick={() => importPath && selected && void runImport(selected.dir_name, importPath, 'replace')}
                     >
                       Replace
