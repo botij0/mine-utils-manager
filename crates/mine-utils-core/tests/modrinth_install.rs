@@ -941,6 +941,57 @@ fn datapack_corrupt_level_dat_fails_before_any_request() {
         .exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn symlinked_datapacks_refuses_before_any_request() {
+    let fx = fixture();
+    let world = fx.game_dir.join("saves").join("alpha");
+    let link_target = fx._dir.path().join("outside-packs");
+    std::fs::create_dir_all(&link_target).unwrap();
+    std::fs::remove_dir_all(world.join("datapacks")).unwrap();
+    std::os::unix::fs::symlink(&link_target, world.join("datapacks")).unwrap();
+
+    let bytes = datapack_zip();
+    let (client, api) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    DATAPACK_URL,
+                    DATAPACK_FILE,
+                    &sha512_hex(&bytes),
+                    &[WORLD_VERSION],
+                ),
+            )
+            .with(DATAPACK_URL, bytes),
+    );
+    let result = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        Some("alpha"),
+        PROJECT,
+        VERSION,
+        DATAPACK_FILE,
+        "datapack",
+    );
+    let requests = api.calls();
+    let err = result.expect_err(&format!(
+        "a symlinked datapacks folder must refuse; requests made: {requests:?}"
+    ));
+    assert!(matches!(err, AppError::World { .. }), "{err}");
+    assert!(
+        err.to_string()
+            .contains("datapacks is a symlink and is never followed"),
+        "{err}"
+    );
+    assert!(requests.is_empty(), "no API or CDN request: {requests:?}");
+    assert_eq!(
+        std::fs::read_dir(&link_target).unwrap().count(),
+        0,
+        "the link target stays empty"
+    );
+}
+
 #[test]
 fn fresh_game_dir_without_options_txt_refuses_before_download() {
     let fx = fixture();
