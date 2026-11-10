@@ -280,7 +280,7 @@ fn sweep_download_temp(path: &Path) -> std::io::Result<()> {
     if !metadata.is_file() {
         return Ok(());
     }
-    lock_download_temp(&file)?;
+    lock_download_temp(&file, libc::LOCK_EX | libc::LOCK_NB)?;
     // Shared filesystems may enforce locks only on this machine.
     let old = metadata
         .modified()?
@@ -297,11 +297,11 @@ fn sweep_download_temp(path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn lock_download_temp(file: &std::fs::File) -> std::io::Result<()> {
+fn lock_download_temp(file: &std::fs::File, operation: libc::c_int) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
 
     // SAFETY: file keeps the descriptor valid throughout flock.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+    if unsafe { libc::flock(file.as_raw_fd(), operation) } == 0 {
         Ok(())
     } else {
         Err(std::io::Error::last_os_error())
@@ -367,7 +367,7 @@ pub fn download_verified_capped<T: Transport>(
         temp_file,
     };
     #[cfg(unix)]
-    lock_download_temp(&verified.temp_file).map_err(|err| DownloadError::Io {
+    lock_download_temp(&verified.temp_file, libc::LOCK_EX).map_err(|err| DownloadError::Io {
         reason: format!("cannot lock {}: {err}", verified.temp_path.display()),
     })?;
     let (sha256, bytes) = download_into(
