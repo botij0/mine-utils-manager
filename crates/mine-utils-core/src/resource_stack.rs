@@ -505,6 +505,9 @@ pub fn set_enabled_with_guard(
     enabled: bool,
     guard: &dyn WriteGuard,
 ) -> Result<ResourceStack, AppError> {
+    validate_filename(filename).map_err(AppError::from)?;
+    let root = paths.game_dir.join("resourcepacks");
+    crate::pack_scan::reject_ambiguous_name(&root.join(filename), &root)?;
     let change = stack_core::Change::Toggle {
         filename: filename.to_string(),
         enabled,

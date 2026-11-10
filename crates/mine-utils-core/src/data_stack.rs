@@ -306,6 +306,7 @@ pub fn set_enabled_with_guard(
     guard: &dyn WriteGuard,
 ) -> Result<DataStack, AppError> {
     validate_filename(filename).map_err(AppError::from)?;
+    pack_scan::reject_ambiguous_name(&paths.datapacks_dir.join(filename), &paths.datapacks_dir)?;
     let change = stack_core::Change::Toggle {
         filename: filename.to_string(),
         enabled,
@@ -330,6 +331,8 @@ pub fn reorder_stack(
 
 /// Remove every reference to a deleted pack from both lists.
 pub fn remove_references(paths: &DataPaths, filename: &str) -> Result<bool, AppError> {
+    validate_filename(filename).map_err(AppError::from)?;
+    pack_scan::reject_ambiguous_name(&paths.datapacks_dir.join(filename), &paths.datapacks_dir)?;
     if !paths.level_dat_path.exists() {
         return Ok(false);
     }

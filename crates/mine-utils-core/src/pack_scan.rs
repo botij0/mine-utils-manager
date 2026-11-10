@@ -856,16 +856,16 @@ pub fn delete_pack_with(
     Ok(())
 }
 
-/// Validate that `path` is an existing direct child (file or folder, never a
-/// symlink) of the resolved `resourcepacks`. A path outside the root, nested
-/// under it, missing, or a symlink is refused before any caller touches
-/// `options.txt`. The entry itself is never canonicalized, so the check cannot
-/// redirect a delete elsewhere.
-pub fn validate_delete_target(path: &Path, resourcepacks: &Path) -> Result<(), AppError> {
+pub(crate) fn reject_ambiguous_name(path: &Path, root: &Path) -> Result<(), AppError> {
     if let Some(name) = path.file_name() {
         let mut ambiguous = name.to_str().is_none();
         if name.to_string_lossy().contains('�') {
-            for entry in std::fs::read_dir(resourcepacks)? {
+            let entries = match std::fs::read_dir(root) {
+                Ok(entries) => Some(entries),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+                Err(err) => return Err(err.into()),
+            };
+            for entry in entries.into_iter().flatten() {
                 let sibling = entry?.file_name();
                 if sibling.to_str().is_none() && sibling.to_string_lossy() == name.to_string_lossy()
                 {
@@ -881,6 +881,16 @@ pub fn validate_delete_target(path: &Path, resourcepacks: &Path) -> Result<(), A
             .into());
         }
     }
+    Ok(())
+}
+
+/// Validate that `path` is an existing direct child (file or folder, never a
+/// symlink) of the resolved `resourcepacks`. A path outside the root, nested
+/// under it, missing, or a symlink is refused before any caller touches
+/// `options.txt`. The entry itself is never canonicalized, so the check cannot
+/// redirect a delete elsewhere.
+pub fn validate_delete_target(path: &Path, resourcepacks: &Path) -> Result<(), AppError> {
+    reject_ambiguous_name(path, resourcepacks)?;
     let root = std::fs::canonicalize(resourcepacks)?;
     let metadata = std::fs::symlink_metadata(path).map_err(|_| PackError::NotFound {
         path: path.to_path_buf(),
