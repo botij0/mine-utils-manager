@@ -239,7 +239,9 @@ export default function BackupsPanel({
 
       {levelError ? (
         <p className="error" role="alert">
-          {levelError.message}
+          {levelError.code === 'world_mismatch'
+            ? 'This backup belongs to a different world. Its seed does not match the current world.'
+            : levelError.message}
         </p>
       ) : null}
 

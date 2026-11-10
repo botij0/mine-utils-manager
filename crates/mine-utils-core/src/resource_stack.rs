@@ -154,6 +154,7 @@ pub(crate) mod stack_core {
         Toggle { filename: String, enabled: bool },
         Reorder { order: Vec<String> },
         Remove { filename: String },
+        Rename { old: String, new: String },
     }
 
     impl Change {
@@ -168,6 +169,18 @@ pub(crate) mod stack_core {
                     enabled: false,
                 } => Ok((rules.disable)(lists, filename)),
                 Change::Remove { filename } => (rules.remove)(lists, filename),
+                Change::Rename { old, new } => {
+                    let old = file_value(old)?;
+                    let new = file_value(new)?;
+                    let mut changed = false;
+                    for value in lists.primary.iter_mut().chain(lists.secondary.iter_mut()) {
+                        if *value == old && *value != new {
+                            value.clone_from(&new);
+                            changed = true;
+                        }
+                    }
+                    Ok(changed)
+                }
                 Change::Reorder { order } => {
                     reorder(&lists.primary, order)?;
                     if lists.primary == *order {
@@ -552,6 +565,71 @@ pub fn restore_backup(paths: &StackPaths, file_name: &str) -> Result<ResourceSta
     load(paths)
 }
 
+/// Import under the caller's per-game-directory mutex and preserve replaced references.
+pub fn import_pack_safely(
+    paths: &StackPaths,
+    source: &Path,
+    choice: crate::ImportChoice,
+    icons: &crate::IconCache,
+    hashes: &crate::HashCache,
+) -> Result<crate::ImportOutcome, AppError> {
+    import_pack_safely_with(
+        paths,
+        source,
+        choice,
+        icons,
+        hashes,
+        &crate::SystemTrash,
+        &SystemGuard,
+    )
+}
+
+#[doc(hidden)]
+pub fn import_pack_safely_with(
+    paths: &StackPaths,
+    source: &Path,
+    choice: crate::ImportChoice,
+    icons: &crate::IconCache,
+    hashes: &crate::HashCache,
+    trash: &dyn TrashService,
+    guard: &dyn WriteGuard,
+) -> Result<crate::ImportOutcome, AppError> {
+    let hooks = ResourceImport { paths, guard };
+    crate::pack_scan::import_pack_guarded(
+        source,
+        &paths.game_dir.join("resourcepacks"),
+        icons,
+        choice,
+        hashes,
+        &crate::pack_scan::ImportServices {
+            trash,
+            hooks: &hooks,
+        },
+    )
+}
+
+struct ResourceImport<'a> {
+    paths: &'a StackPaths,
+    guard: &'a dyn WriteGuard,
+}
+
+impl crate::pack_scan::ImportHooks for ResourceImport<'_> {
+    fn before_write(&self) -> Result<(), AppError> {
+        self.guard.ensure_writable(&self.paths.game_dir)
+    }
+
+    fn replaced(&self, old: &Path, new: &Path) -> Result<(), AppError> {
+        if old.file_name() != new.file_name() && self.paths.options_path.exists() {
+            let change = stack_core::Change::Rename {
+                old: filename_for(old)?,
+                new: filename_for(new)?,
+            };
+            commit(self.paths, None, &change, self.guard)?;
+        }
+        Ok(())
+    }
+}
+
 /// What a guarded delete did before moving the pack to the trash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteOutcome {
@@ -657,7 +735,8 @@ impl stack_core::StackFile for ResourceFile<'_> {
     type Rendered = String;
 
     fn prepare(&self) -> Result<(), AppError> {
-        self.guard.ensure_writable(&self.paths.game_dir)
+        self.guard.ensure_writable(&self.paths.game_dir)?;
+        options_txt::reject_symlink(&self.paths.options_path)
     }
 
     fn guard(&self) -> Result<(), AppError> {
@@ -698,12 +777,6 @@ impl stack_core::StackFile for ResourceFile<'_> {
 
     fn unchanged(&self, previous: &[u8]) -> Result<bool, AppError> {
         Ok(std::fs::read(&self.paths.options_path).ok().as_deref() == Some(previous))
-    }
-
-    fn unchanged_before_write(&self, _previous: &[u8]) -> Result<bool, AppError> {
-        // The options write keeps its single pre-backup re-read; a second read
-        // here would narrow a race window the existing behavior leaves open.
-        Ok(true)
     }
 
     fn reject(&self, err: stack_core::EntryError) -> AppError {
@@ -898,6 +971,67 @@ mod tests {
             resource: arrays(resource),
             incompatible: arrays(incompatible),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_options_refuse_toggle_and_restore() {
+        let (dir, paths) = fixture_stack();
+        let target = dir.path().join("shared-options.txt");
+        let original = b"resourcePacks:[\"vanilla\"]\n";
+        std::fs::write(&target, original).unwrap();
+        std::os::unix::fs::symlink(&target, &paths.options_path).unwrap();
+        let backup = backup::create(&paths.backups_root, b"resourcePacks:[]\n", &paths.backups)
+            .unwrap()
+            .created
+            .unwrap()
+            .file_name;
+
+        assert_eq!(load(&paths).unwrap().entries[0].value(), "vanilla");
+        let err = set_enabled(&paths, "a.zip", true).unwrap_err();
+        assert_eq!(err.code(), "world");
+        assert!(err.to_string().contains("symlink"));
+        assert_eq!(std::fs::read_link(&paths.options_path).unwrap(), target);
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+        assert_eq!(backup::list(&paths.backups_root).unwrap().len(), 1);
+
+        let err = restore_backup(&paths, &backup).unwrap_err();
+        assert_eq!(err.code(), "world");
+        assert!(err.to_string().contains("symlink"));
+        assert_eq!(std::fs::read_link(&paths.options_path).unwrap(), target);
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+        assert_eq!(backup::list(&paths.backups_root).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn toggle_rebases_an_edit_during_guard() {
+        struct EditingGuard(std::cell::Cell<usize>, std::path::PathBuf);
+        impl WriteGuard for EditingGuard {
+            fn ensure_writable(&self, _: &Path) -> Result<(), AppError> {
+                let calls = self.0.get() + 1;
+                self.0.set(calls);
+                if calls == 2 {
+                    use std::io::Write;
+                    writeln!(
+                        std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&self.1)
+                            .unwrap(),
+                        "lang:de_de"
+                    )
+                    .unwrap();
+                }
+                Ok(())
+            }
+        }
+        let (_dir, paths) = fixture_stack();
+        write_fixture(&paths, "resourcePacks:[\"vanilla\"]\n");
+        let guard = EditingGuard(std::cell::Cell::new(0), paths.options_path.clone());
+        set_enabled_with_guard(&paths, "a.zip", true, &guard).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&paths.options_path).unwrap(),
+            "resourcePacks:[\"vanilla\",\"file/a.zip\"]\nlang:de_de\n"
+        );
     }
 
     #[test]

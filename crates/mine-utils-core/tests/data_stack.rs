@@ -634,6 +634,51 @@ fn delete_of_an_unlisted_pack_backs_up_the_pre_delete_file() {
 }
 
 #[test]
+fn restore_refuses_legacy_current_with_different_seed() {
+    use fastnbt::Value;
+    let world = temp_world(&["vanilla"], &[]);
+    let raw = level_dat::gunzip(&level_bytes(&["vanilla"], &[])).unwrap();
+    let mut backup: Value = fastnbt::from_bytes(&raw).unwrap();
+    let Value::Compound(root) = &mut backup else {
+        unreachable!()
+    };
+    let Some(Value::Compound(data)) = root.get_mut("Data") else {
+        unreachable!()
+    };
+    data.insert(
+        "WorldGenSettings".into(),
+        Value::Compound([("seed".into(), Value::Long(42))].into_iter().collect()),
+    );
+    let backup = level_dat::gzip(&fastnbt::to_bytes(&backup).unwrap());
+    let created = mine_utils_core::level_backup::create(
+        &world.paths.backups_root,
+        "alpha",
+        &backup,
+        &world.paths.backups,
+    )
+    .unwrap()
+    .created
+    .unwrap();
+    let current = Value::Compound(
+        [(
+            "Data".into(),
+            Value::Compound(
+                [("RandomSeed".into(), Value::Long(99))]
+                    .into_iter()
+                    .collect(),
+            ),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    let current = level_dat::gzip(&fastnbt::to_bytes(&current).unwrap());
+    std::fs::write(&world.paths.level_dat_path, &current).unwrap();
+    let err = data_stack::restore_backup(&world.paths, &created.file_name).unwrap_err();
+    assert_eq!(err.code(), "world_mismatch");
+    assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), current);
+}
+
+#[test]
 fn restore_replaces_and_backs_up_current() {
     let world = temp_world(&["vanilla"], &[]);
     let first = std::fs::read(&world.paths.level_dat_path).unwrap();
@@ -791,6 +836,51 @@ fn install_pack(world: &World, name: &str) -> PathBuf {
         "setup import works, got {outcome:?}"
     );
     source
+}
+
+#[test]
+fn replace_commits_the_new_datapack_before_trashing_the_holding_folder() {
+    let world = temp_world(&["vanilla"], &[]);
+    let source = install_pack(&world, "cool-pack");
+    std::fs::write(source.join("data/new.json"), b"new content").unwrap();
+    let observed = RefCell::new(None);
+    let trash = FnTrash(|holding: &Path| {
+        *observed.borrow_mut() = Some((
+            std::fs::read(world.paths.datapacks_dir.join("cool-pack/data/new.json")).unwrap(),
+            holding
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".mine-utils-replace-cool-pack."),
+            holding.join("data/new.json").exists(),
+        ));
+        std::fs::remove_dir_all(holding).unwrap();
+        Ok(())
+    });
+    let outcome = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &trash,
+        &PassGuard,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome,
+        data_stack::DatapackImportOutcome::Imported {
+            filename: "cool-pack".to_string()
+        }
+    );
+    assert_eq!(
+        observed.into_inner(),
+        Some((b"new content".to_vec(), true, false))
+    );
+    assert_eq!(
+        view(&world.paths),
+        lists(&["vanilla", "file/cool-pack"], &[])
+    );
 }
 
 #[test]
@@ -968,5 +1058,77 @@ fn symlinked_datapacks_dir_fails_closed() {
     assert!(
         std::fs::read_dir(&outside).unwrap().count() == 1,
         "nothing was copied outside the world"
+    );
+}
+
+#[test]
+fn replace_backup_failure_keeps_the_original_at_its_name() {
+    let world = temp_world(&["vanilla", "file/old"], &[]);
+    let old = datapack_source(&world.paths.datapacks_dir, "old");
+    let source = datapack_source(world._dir.path(), "new");
+    std::fs::create_dir_all(world.paths.backups_root.parent().unwrap()).unwrap();
+    std::fs::write(&world.paths.backups_root, b"backup directory blocked").unwrap();
+    let before = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let trash = FnTrash(|path: &Path| {
+        std::fs::remove_dir_all(path).unwrap();
+        Ok(())
+    });
+    let err = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &trash,
+        &PassGuard,
+    )
+    .unwrap_err();
+    assert_eq!(
+        std::fs::read(old.join("pack.mcmeta")).unwrap(),
+        br#"{"pack": {"pack_format": 48, "description": "temp"}}"#
+    );
+    assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), before);
+    assert!(world.paths.datapacks_dir.join("new/pack.mcmeta").is_file());
+    assert!(
+        err.to_string()
+            .contains(&format!("Original pack retained at {}", old.display())),
+        "{err}"
+    );
+    println!(
+        "level.dat unchanged; original at {}; new pack installed; {err}",
+        old.display()
+    );
+}
+
+#[test]
+fn replace_updates_level_dat_before_trashing_the_original() {
+    let world = temp_world(&["vanilla"], &[]);
+    datapack_source(&world.paths.datapacks_dir, "old");
+    let source = datapack_source(world._dir.path(), "new");
+    let observed = RefCell::new(None);
+    let trash = FnTrash(|path: &Path| {
+        *observed.borrow_mut() = Some(view(&world.paths));
+        std::fs::remove_dir_all(path).unwrap();
+        Ok(())
+    });
+    let outcome = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &trash,
+        &PassGuard,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome,
+        data_stack::DatapackImportOutcome::Imported {
+            filename: "new".into()
+        }
+    );
+    assert_eq!(
+        observed.into_inner(),
+        Some(lists(&["vanilla", "file/new"], &[]))
     );
 }

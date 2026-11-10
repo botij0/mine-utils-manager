@@ -237,12 +237,15 @@ sequenceDiagram
 Important properties:
 
 - Reads remain available while the game runs. Writes are refused.
+- Resource stack writes and options restores refuse a symlinked `options.txt`; stack reads remain available.
 - The game guard checks held `session.lock` files and processes associated with the game directory.
 - Stale lock files do not block writes. Unsupported lock probing is reported instead of being presented as successful detection.
 - Stack mutations serialize through a per-game-directory mutex.
+- Resource pack imports take the same mutex and check the game guard before each filesystem commit or trash operation. A replacement with a new filename rewrites both resource pack reference lists through the stack commit, preserving indices and backups.
+- Both pack importers rename the old pack to `.mine-utils-replace-<original-name>.<pid>-<stamp>-<counter>.tmp` beside it, commit the new copy without replacement, update the stack, then trash the original. When its original name is free, the holding entry is renamed back without replacement before trashing. The scanner and duplicate search skip these hidden `.tmp` entries, and import rejects them as sources. A crash can leave one behind for manual recovery. A failure restores the original name without replacement and reports whether the new pack was installed; if that name is occupied, the error names the holding path. A duplicate plus a separate filename collision leaves both installed packs untouched.
 - `options.txt`, `level.dat`, and `config.json` use temporary files, flush, and rename for replacement.
 - Backups are enabled by default with a retention count of 10. Rotation is scoped to the options backups or the individual world's level backups.
-- Restores back up the current file before replacing it and can recreate a missing target.
+- Restores back up the current file before replacing it and can recreate a missing target. A world backup with a different readable seed from the current world is refused without changing anything. A missing or corrupt current file, or an unreadable seed, still permits restore.
 - A locked datapack world is the narrow import exception. The file can be copied, but enablement is deferred until the lock releases.
 
 ## Modrinth install pipeline
