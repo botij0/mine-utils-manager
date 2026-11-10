@@ -169,6 +169,7 @@ pub struct VerifiedDownload {
     /// Bytes written.
     pub bytes: u64,
     committed: bool,
+    temp_file: std::fs::File,
 }
 
 impl Drop for VerifiedDownload {
@@ -218,13 +219,8 @@ fn temp_path_for(target_dir: &Path, filename: &str) -> PathBuf {
     ))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn sweep_download_temps(target_dir: &Path) {
-    use std::os::unix::fs::MetadataExt;
-
-    let Ok(current_exe) = std::fs::metadata("/proc/self/exe") else {
-        return;
-    };
     let Ok(entries) = std::fs::read_dir(target_dir) else {
         return;
     };
@@ -264,20 +260,55 @@ fn sweep_download_temps(target_dir: &Path) {
         if !kind.is_file() {
             continue;
         }
-        let proc_dir = PathBuf::from(format!("/proc/{pid}"));
-        let stale = match std::fs::metadata(proc_dir.join("exe")) {
-            Ok(exe) => exe.dev() != current_exe.dev() || exe.ino() != current_exe.ino(),
-            Err(_) => {
-                matches!(std::fs::metadata(&proc_dir), Err(err) if err.kind() == std::io::ErrorKind::NotFound)
-            }
-        };
-        if stale {
-            let _ = std::fs::remove_file(entry.path());
+        if let Err(err) = sweep_download_temp(&entry.path()) {
+            log::debug!("keeping download temp {}: {err}", entry.path().display());
         }
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(unix)]
+fn sweep_download_temp(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use std::time::Duration;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Ok(());
+    }
+    lock_download_temp(&file)?;
+    // Shared filesystems may enforce locks only on this machine.
+    let old = metadata
+        .modified()?
+        .elapsed()
+        .is_ok_and(|age| age > Duration::from_secs(3600));
+    if !old {
+        return Ok(());
+    }
+    let current = std::fs::symlink_metadata(path)?;
+    if current.is_file() && current.dev() == metadata.dev() && current.ino() == metadata.ino() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn lock_download_temp(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    // SAFETY: file keeps the descriptor valid throughout flock.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(unix))]
 fn sweep_download_temps(_target_dir: &Path) {}
 
 /// Stream a CDN file into a temp file in `target_dir`, checking the 500 MB
@@ -321,30 +352,48 @@ pub fn download_verified_capped<T: Transport>(
     })?;
     sweep_download_temps(target_dir);
     let temp = temp_path_for(target_dir, filename);
-    let result = download_into(client, url, &temp, expected_sha512, root, max_bytes);
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result.map(|(sha256, bytes)| VerifiedDownload {
+    let temp_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|err| DownloadError::Io {
+            reason: format!("cannot create {}: {err}", temp.display()),
+        })?;
+    let mut verified = VerifiedDownload {
         temp_path: temp,
-        sha256,
-        bytes,
+        sha256: String::new(),
+        bytes: 0,
         committed: false,
-    })
+        temp_file,
+    };
+    #[cfg(unix)]
+    lock_download_temp(&verified.temp_file).map_err(|err| DownloadError::Io {
+        reason: format!("cannot lock {}: {err}", verified.temp_path.display()),
+    })?;
+    let (sha256, bytes) = download_into(
+        client,
+        url,
+        &verified.temp_path,
+        &mut verified.temp_file,
+        expected_sha512,
+        root,
+        max_bytes,
+    )?;
+    verified.sha256 = sha256;
+    verified.bytes = bytes;
+    Ok(verified)
 }
 
 fn download_into<T: Transport>(
     client: &ModrinthClient<T>,
     url: &str,
     temp: &Path,
+    out: &mut std::fs::File,
     expected_sha512: &str,
     root: ZipRoot,
     max_bytes: u64,
 ) -> Result<(String, u64), DownloadError> {
     let fetched = client.file_stream(url)?;
-    let mut out = std::fs::File::create(temp).map_err(|err| DownloadError::Io {
-        reason: format!("cannot write {}: {err}", temp.display()),
-    })?;
     let mut sha512 = Sha512::new();
     let mut sha256 = Sha256::new();
     let mut bytes: u64 = 0;
@@ -381,7 +430,6 @@ fn download_into<T: Transport>(
     out.sync_all().map_err(|err| DownloadError::Io {
         reason: format!("cannot write {}: {err}", temp.display()),
     })?;
-    drop(out);
     let actual_sha512 = hex::encode(sha512.finalize());
     if !constant_time_eq_hex(&actual_sha512, expected_sha512) {
         return Err(DownloadError::HashMismatch {

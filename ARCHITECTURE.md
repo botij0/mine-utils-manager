@@ -281,7 +281,7 @@ Transport and validation rules include:
 - Resource packs require an `assets/` zip root. Datapacks require a `data/` root and a `.zip` filename.
 - Datapack versions are checked against the target world version when the metadata declares versions.
 - Invalid hashes, non-zip files, and wrong roots are not retried. HTTP 429 and 5xx responses can be retried up to three times while respecting `Retry-After`.
-- Uncommitted temporary files are deleted on failure.
+- Uncommitted temporary files are deleted on failure. On Unix, each download holds an advisory lock on its temp through commit or cleanup. Before a new download, matching regular temps from other PIDs are removed only if they are unlocked and their mtime is more than one hour old. Symlinks and files that cannot be checked are kept. Non-Unix platforms skip this sweep.
 - A provenance write warning is returned without rolling back an otherwise successful install.
 
 ## Persistence and file ownership
