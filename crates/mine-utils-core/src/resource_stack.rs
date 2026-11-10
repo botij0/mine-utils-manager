@@ -543,6 +543,9 @@ pub fn reorder_stack(
 /// delete path calls this before trashing the file, so the arrays can never
 /// point at a trashed pack. Returns whether anything was written.
 pub fn remove_references(paths: &StackPaths, filename: &str) -> Result<bool, AppError> {
+    validate_filename(filename).map_err(AppError::from)?;
+    let root = paths.game_dir.join("resourcepacks");
+    crate::pack_scan::reject_ambiguous_name(&root.join(filename), &root)?;
     if !paths.options_path.exists() {
         // Nothing can reference the pack when the file is missing.
         return Ok(false);
