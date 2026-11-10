@@ -71,7 +71,7 @@ export default function InstallSheet({
     !hasGameDir ||
     (kind === 'datapack' && (worlds.length === 0 || !world));
   return (
-    <DialogShell label={`Install ${projectTitle}`} onClose={onClose}>
+    <DialogShell label={`Install ${projectTitle}`} onClose={onClose} dismissOnEscape={!busy}>
       <h3>Install {projectTitle}</h3>
       <dl className="pack-facts">
         <div>
@@ -123,7 +123,7 @@ export default function InstallSheet({
         <StatusNote role="status">Warning: {result.provenance_warning}</StatusNote>
       ) : null}
       <div className="pack-confirm-actions">
-        <button type="button" className="button" onClick={onClose}>
+        <button type="button" className="button" onClick={onClose} disabled={busy}>
           {result ? 'Close' : 'Cancel'}
         </button>
         {result ? null : (

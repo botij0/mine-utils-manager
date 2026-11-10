@@ -88,7 +88,9 @@ export default function DiscoverPage({
 
   const onInstall = async () => {
     const outcome = await discover.install();
-    if (outcome) onInstalled();
+    if (outcome?.outcome.status === 'imported' || outcome?.outcome.status === 'locked') {
+      onInstalled();
+    }
   };
 
   return (
