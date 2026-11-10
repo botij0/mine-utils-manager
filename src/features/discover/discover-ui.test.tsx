@@ -215,7 +215,7 @@ describe('discover dialogs', () => {
   it('does not refresh after a duplicate outcome', async () => {
     const client = makeFakeClient([]);
     client.installModrinthPack = async () => ({
-      kind: 'resourcepack', outcome: { status: 'duplicate', name: 'a.zip', existing: 'b.zip' },
+      kind: 'resourcepack', outcome: { status: 'duplicate', name: 'a.zip', sha256: 'abc', existing: 'b.zip' },
     });
     const onInstalled = vi.fn();
     render(<DiscoverPage client={client} gameRunning={null} hasGameDir onInstalled={onInstalled} />);

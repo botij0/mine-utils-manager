@@ -144,7 +144,7 @@ describe('useModrinth', () => {
     });
     let outcome: ModrinthInstallOutcome | null = null;
     await act(async () => {
-      release({ kind: 'resourcepack', outcome: { status: 'duplicate', name: 'a.zip', existing: 'b.zip' } });
+      release({ kind: 'resourcepack', outcome: { status: 'duplicate', name: 'a.zip', sha256: 'abc', existing: 'b.zip' } });
       outcome = await pending;
     });
     expect(outcome).toBeNull();
