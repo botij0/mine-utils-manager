@@ -281,6 +281,47 @@ mod tests {
     }
 
     #[test]
+    fn oversized_and_symlinked_icons_are_ignored() {
+        let good = level_dat_bytes(Some("1.21.10"), true);
+        let (dir, icons) = game_with(&[("large", Some(good.clone())), ("linked", Some(good))]);
+        let saves = dir.path().join("game/saves");
+        std::fs::write(saves.join("large/icon.png"), vec![1; 3 * 1024 * 1024]).unwrap();
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("icon");
+            std::fs::write(&target, b"icon").unwrap();
+            std::os::unix::fs::symlink(target, saves.join("linked/icon.png")).unwrap();
+        }
+        let worlds = scan_worlds(&dir.path().join("game"), &icons);
+        assert_eq!(worlds.len(), 2);
+        for world in worlds {
+            assert_eq!(world.icon, None);
+            assert_eq!(world.issue, None);
+            assert_eq!(world.version.unwrap().name, "1.21.10");
+        }
+    }
+
+    #[test]
+    fn oversized_level_data_reports_issue_and_keeps_other_worlds() {
+        let bomb = level_dat::gzip(&vec![0; 64 * 1024 * 1024 + 1]);
+        let (dir, icons) = game_with(&[
+            ("bad", Some(bomb)),
+            ("good", Some(level_dat_bytes(Some("1.21.10"), true))),
+        ]);
+        let worlds = scan_worlds(&dir.path().join("game"), &icons);
+        assert_eq!(worlds.len(), 2);
+        assert_eq!(worlds[0].issue.as_ref().unwrap().code, "level_dat");
+        assert!(worlds[0]
+            .issue
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("too large"));
+        assert_eq!(worlds[1].version.as_ref().unwrap().name, "1.21.10");
+        assert_eq!(worlds[1].issue, None);
+    }
+
+    #[test]
     fn skips_directories_without_level_dat() {
         let (dir, icons) = game_with(&[
             ("real", Some(level_dat_bytes(Some("1.21.10"), true))),
