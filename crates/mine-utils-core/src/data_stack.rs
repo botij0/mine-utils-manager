@@ -246,10 +246,11 @@ fn writable(game_dir: &Path, world_dir: &Path, guard: &dyn WriteGuard) -> Result
 /// Fail closed when `<world>/level.dat` or `<world>/datapacks` is a symlink.
 /// A symlinked `level.dat` could point outside the world, and a symlinked
 /// `datapacks` directory would make list/import/delete follow the link out
-/// of the world. Missing targets are fine; only links are refused.
-fn reject_link_targets(paths: &DataPaths) -> Result<(), AppError> {
-    for target in [&paths.level_dat_path, &paths.datapacks_dir] {
-        if let Ok(meta) = std::fs::symlink_metadata(target) {
+/// of the world. Missing targets are fine; only links are refused. Install
+/// prepare calls it too, so the refusal lands before any download.
+pub(crate) fn reject_link_targets(world_dir: &Path) -> Result<(), AppError> {
+    for target in [world_dir.join("level.dat"), world_dir.join("datapacks")] {
+        if let Ok(meta) = std::fs::symlink_metadata(&target) {
             if meta.file_type().is_symlink() {
                 return Err(crate::error::AppError::World {
                     reason: format!("{} is a symlink and is never followed", target.display()),
@@ -262,7 +263,7 @@ fn reject_link_targets(paths: &DataPaths) -> Result<(), AppError> {
 
 /// Read the stack. Reads never block, even while the game runs.
 pub fn load(paths: &DataPaths) -> Result<DataStack, AppError> {
-    reject_link_targets(paths)?;
+    reject_link_targets(&paths.world_dir)?;
     let bytes = std::fs::read(&paths.level_dat_path)?;
     let view = level_dat::parse(&bytes)?;
     Ok(stack_of(&view, paths))
@@ -352,7 +353,7 @@ pub fn restore_backup_with_guard(
     guard: &dyn WriteGuard,
 ) -> Result<DataStack, AppError> {
     writable(&paths.game_dir, &paths.world_dir, guard)?;
-    reject_link_targets(paths)?;
+    reject_link_targets(&paths.world_dir)?;
     level_backup::restore_guarded(
         &paths.backups_root,
         &paths.world_name(),
@@ -392,7 +393,7 @@ pub fn delete_datapack_safely_with_guard(
     trash: &dyn TrashService,
     guard: &dyn WriteGuard,
 ) -> Result<DatapackDeleteOutcome, AppError> {
-    reject_link_targets(paths)?;
+    reject_link_targets(&paths.world_dir)?;
     pack_scan::validate_delete_target(path, &paths.datapacks_dir)?;
     writable(&paths.game_dir, &paths.world_dir, guard)?;
     let filename = path
@@ -456,7 +457,7 @@ pub fn import_datapack_with(
     trash: &dyn TrashService,
     guard: &dyn WriteGuard,
 ) -> Result<DatapackImportOutcome, AppError> {
-    reject_link_targets(paths)?;
+    reject_link_targets(&paths.world_dir)?;
     reject_symlink_source(source)?;
     let location = source_location(source)?;
     let name = display_name(source);
@@ -755,7 +756,7 @@ impl stack_core::StackFile for DataFile<'_> {
 
     fn prepare(&self) -> Result<(), AppError> {
         writable(&self.paths.game_dir, &self.paths.world_dir, self.guard)?;
-        reject_link_targets(self.paths)
+        reject_link_targets(&self.paths.world_dir)
     }
 
     fn guard(&self) -> Result<(), AppError> {
