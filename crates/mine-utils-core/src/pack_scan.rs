@@ -2168,6 +2168,38 @@ mod tests {
     }
 
     #[test]
+    fn import_succeeds_next_to_installed_pack_with_nested_symlink() {
+        let (root, _cache_root, icons, hashes, _trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        let assets = resourcepacks.join("Linked/assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(
+            resourcepacks.join("Linked/pack.mcmeta"),
+            mcmeta(34, None, "linked"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/etc/hostname", assets.join("link.txt")).unwrap();
+        let source = root.path().join("incoming/Pack.zip");
+        simple_zip(&source, 34, None);
+
+        let result = import_pack(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+        );
+        assert!(
+            matches!(result, Ok(ImportOutcome::Imported { .. })),
+            "{result:?}"
+        );
+        assert_eq!(
+            std::fs::read(resourcepacks.join("Pack.zip")).unwrap(),
+            std::fs::read(source).unwrap()
+        );
+    }
+
+    #[test]
     fn an_unreadable_installed_pack_fails_instead_of_hiding_a_duplicate() {
         let (root, _cache_root, icons, hashes, trash) = setup();
         let resourcepacks = root.path().join("resourcepacks");
