@@ -130,6 +130,27 @@ describe('useModrinth', () => {
     }
   });
 
+  it('drops an install outcome after selecting another project', async () => {
+    const client = makeFakeClient([]);
+    let release!: (outcome: ModrinthInstallOutcome) => void;
+    client.installModrinthPack = () => new Promise((resolve) => { release = resolve; });
+    const { result } = renderHook(() => useModrinth(client));
+    await act(async () => { await result.current.select(freshHit()); });
+    let pending!: Promise<ModrinthInstallOutcome | null>;
+    act(() => { pending = result.current.install(); });
+    await act(async () => {
+      result.current.closeDetail();
+      await result.current.select(hit('other'));
+    });
+    let outcome: ModrinthInstallOutcome | null = null;
+    await act(async () => {
+      release({ kind: 'resourcepack', outcome: { status: 'duplicate', name: 'a.zip', existing: 'b.zip' } });
+      outcome = await pending;
+    });
+    expect(outcome).toBeNull();
+    expect(result.current.installResult).toBeNull();
+  });
+
   it('reports a hash mismatch with the expected and actual hashes', async () => {
     const client = makeFakeClient([]);
     const { result } = renderHook(() => useModrinth(client));
