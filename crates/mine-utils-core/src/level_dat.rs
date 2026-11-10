@@ -93,6 +93,23 @@ pub fn parse(bytes: &[u8]) -> Result<LevelDatView, LevelDatError> {
     view_of(&value)
 }
 
+pub(crate) fn world_seed(bytes: &[u8]) -> Option<i64> {
+    let raw = gunzip(bytes).ok()?;
+    let value = parse_nbt(&raw).ok()?;
+    let data = data_of(&value).ok()?;
+    let modern = match data.get("WorldGenSettings") {
+        Some(Value::Compound(settings)) => settings.get("seed"),
+        _ => None,
+    };
+    match modern {
+        Some(Value::Long(seed)) => Some(*seed),
+        _ => match data.get("RandomSeed") {
+            Some(Value::Long(seed)) => Some(*seed),
+            _ => None,
+        },
+    }
+}
+
 fn data_of(value: &Value) -> Result<&std::collections::HashMap<String, Value>, LevelDatError> {
     match value {
         Value::Compound(root) => match root.get("Data") {

@@ -28,6 +28,7 @@ pub enum AppError {
     },
     LevelDat(crate::level_dat::LevelDatError),
     DataStack(crate::data_stack::DataStackError),
+    WorldMismatch,
     LevelBackup {
         reason: String,
     },
@@ -61,6 +62,7 @@ impl AppError {
             AppError::Provenance(err) => err.code(),
             AppError::Backup { .. } => "backup",
             AppError::LevelBackup { .. } => "level_backup",
+            AppError::WorldMismatch => "world_mismatch",
             AppError::GameRunning { .. } => "game_running",
         }
     }
@@ -92,6 +94,7 @@ impl fmt::Display for AppError {
             AppError::Download(err) => write!(f, "{err}"),
             AppError::Provenance(err) => write!(f, "{err}"),
             AppError::LevelBackup { reason } => write!(f, "level backup failed: {reason}"),
+            AppError::WorldMismatch => write!(f, "backup belongs to a different world"),
             AppError::Backup { reason } => write!(f, "backup failed: {reason}"),
             AppError::GameRunning { running } => write!(
                 f,

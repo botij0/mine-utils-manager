@@ -634,6 +634,51 @@ fn delete_of_an_unlisted_pack_backs_up_the_pre_delete_file() {
 }
 
 #[test]
+fn restore_refuses_legacy_current_with_different_seed() {
+    use fastnbt::Value;
+    let world = temp_world(&["vanilla"], &[]);
+    let raw = level_dat::gunzip(&level_bytes(&["vanilla"], &[])).unwrap();
+    let mut backup: Value = fastnbt::from_bytes(&raw).unwrap();
+    let Value::Compound(root) = &mut backup else {
+        unreachable!()
+    };
+    let Some(Value::Compound(data)) = root.get_mut("Data") else {
+        unreachable!()
+    };
+    data.insert(
+        "WorldGenSettings".into(),
+        Value::Compound([("seed".into(), Value::Long(42))].into_iter().collect()),
+    );
+    let backup = level_dat::gzip(&fastnbt::to_bytes(&backup).unwrap());
+    let created = mine_utils_core::level_backup::create(
+        &world.paths.backups_root,
+        "alpha",
+        &backup,
+        &world.paths.backups,
+    )
+    .unwrap()
+    .created
+    .unwrap();
+    let current = Value::Compound(
+        [(
+            "Data".into(),
+            Value::Compound(
+                [("RandomSeed".into(), Value::Long(99))]
+                    .into_iter()
+                    .collect(),
+            ),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    let current = level_dat::gzip(&fastnbt::to_bytes(&current).unwrap());
+    std::fs::write(&world.paths.level_dat_path, &current).unwrap();
+    let err = data_stack::restore_backup(&world.paths, &created.file_name).unwrap_err();
+    assert_eq!(err.code(), "world_mismatch");
+    assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), current);
+}
+
+#[test]
 fn restore_replaces_and_backs_up_current() {
     let world = temp_world(&["vanilla"], &[]);
     let first = std::fs::read(&world.paths.level_dat_path).unwrap();

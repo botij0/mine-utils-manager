@@ -245,7 +245,7 @@ Restoring replaces the current `options.txt`. Mine Utils first saves the current
 2. In **Settings**, scroll to **World level.dat**.
 3. Find the world group and choose **Restore** beside a backup.
 
-The current `level.dat` is backed up before the restore. This path can recreate a missing `level.dat`. Return to **Worlds** afterward to review the restored datapack stack.
+If the backup and current world have different readable seeds, Mine Utils refuses the restore and changes nothing. A missing or corrupt current file, or an unreadable seed, still permits restore. Mine Utils backs up the current `level.dat` before a restore and can recreate a missing file. Return to **Worlds** afterward to review the restored datapack stack.
 
 ## Safety and network behavior
 

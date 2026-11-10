@@ -243,7 +243,7 @@ Important properties:
 - Stack mutations serialize through a per-game-directory mutex.
 - `options.txt`, `level.dat`, and `config.json` use temporary files, flush, and rename for replacement.
 - Backups are enabled by default with a retention count of 10. Rotation is scoped to the options backups or the individual world's level backups.
-- Restores back up the current file before replacing it and can recreate a missing target.
+- Restores back up the current file before replacing it and can recreate a missing target. A world backup with a different readable seed from the current world is refused without changing anything. A missing or corrupt current file, or an unreadable seed, still permits restore.
 - A locked datapack world is the narrow import exception. The file can be copied, but enablement is deferred until the lock releases.
 
 ## Modrinth install pipeline

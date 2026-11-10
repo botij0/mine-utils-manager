@@ -184,6 +184,16 @@ describe('BackupsPanel', () => {
     );
   });
 
+  it('explains a world seed mismatch', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    client.restoreLevelBackup = async () => { throw new IpcError('world_mismatch', 'backend error'); };
+    render(<BackupsPanel client={client} gameRunning={null} />);
+    const region = await screen.findByRole('region', { name: 'Survival 1_17 backups' });
+    await user.click(within(region).getByRole('button', { name: 'Restore' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('This backup belongs to a different world');
+  });
+
   it('shows backups for corrupt and missing worlds without the world list', async () => {
     const client = makeClient();
     const original = client.listAllLevelBackups;
