@@ -237,6 +237,7 @@ sequenceDiagram
 Important properties:
 
 - Reads remain available while the game runs. Writes are refused.
+- Resource stack writes and options restores refuse a symlinked `options.txt`; stack reads remain available.
 - The game guard checks held `session.lock` files and processes associated with the game directory.
 - Stale lock files do not block writes. Unsupported lock probing is reported instead of being presented as successful detection.
 - Stack mutations serialize through a per-game-directory mutex.

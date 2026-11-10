@@ -335,3 +335,14 @@ pub(crate) fn write_options_unchecked(path: &Path, bytes: &[u8]) -> Result<(), A
     }
     Ok(())
 }
+
+pub(crate) fn reject_symlink(path: &std::path::Path) -> Result<(), crate::error::AppError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(crate::error::AppError::World {
+            reason: format!("{} is a symlink and cannot be written", path.display()),
+        }),
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
