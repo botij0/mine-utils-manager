@@ -434,17 +434,21 @@ impl TrashService for SystemTrash {
     }
 }
 
-/// Memoizes pack hashes by path, size, and mtime, so a second import into a
-/// full resourcepacks folder does not re-read every pack on disk.
+/// Memoizes pack hashes using file metadata.
 #[derive(Default)]
 pub struct HashCache {
     entries: Mutex<HashMap<PathBuf, HashEntry>>,
 }
 
 struct HashEntry {
-    len: u64,
-    modified: Option<SystemTime>,
+    fingerprint: Fingerprint,
     sha256: String,
+}
+
+#[derive(PartialEq, Eq)]
+enum Fingerprint {
+    Zip(u64, Option<SystemTime>),
+    Directory(Vec<(PathBuf, u64, Option<SystemTime>)>),
 }
 
 impl HashCache {
@@ -453,14 +457,30 @@ impl HashCache {
     }
 
     pub fn hash(&self, path: &Path, location: PackLocation) -> Result<String, AppError> {
-        let metadata = std::fs::metadata(path)?;
-        let len = metadata.len();
-        let modified = metadata.modified().ok();
+        let fingerprint = match location {
+            PackLocation::Zip => {
+                let metadata = std::fs::metadata(path)?;
+                Fingerprint::Zip(metadata.len(), metadata.modified().ok())
+            }
+            PackLocation::Directory => {
+                let mut files = Vec::new();
+                collect_files(path, path, &mut files)?;
+                files.sort();
+                let files = files
+                    .into_iter()
+                    .map(|relative| {
+                        let metadata = std::fs::metadata(path.join(&relative))?;
+                        Ok((relative, metadata.len(), metadata.modified().ok()))
+                    })
+                    .collect::<Result<Vec<_>, std::io::Error>>()?;
+                Fingerprint::Directory(files)
+            }
+        };
         let cached = {
             let entries = self.entries.lock().unwrap_or_else(|err| err.into_inner());
-            entries.get(path).and_then(|entry| {
-                (entry.len == len && entry.modified == modified).then(|| entry.sha256.clone())
-            })
+            entries
+                .get(path)
+                .and_then(|entry| (entry.fingerprint == fingerprint).then(|| entry.sha256.clone()))
         };
         if let Some(sha256) = cached {
             return Ok(sha256);
@@ -472,8 +492,7 @@ impl HashCache {
             .insert(
                 path.to_path_buf(),
                 HashEntry {
-                    len,
-                    modified,
+                    fingerprint,
                     sha256: sha256.clone(),
                 },
             );
