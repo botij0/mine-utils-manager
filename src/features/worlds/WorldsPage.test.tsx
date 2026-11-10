@@ -2,9 +2,9 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorldsClient } from '../../lib/ipc';
-import { IpcError, type GameRunning } from '../../lib/types';
+import { IpcError, type DataSnapshot, type GameRunning } from '../../lib/types';
 import { worldsClient } from '../../test/fake-ipc';
-import { datapack, stack, stackEntry, world } from '../../test/fake-packs';
+import { datapack, datapackListing, stack, stackEntry, world } from '../../test/fake-packs';
 import WorldsPage from './WorldsPage';
 
 const BROKEN_DATAPACK = datapack('broken.zip', null, null, {
@@ -452,6 +452,32 @@ describe('WorldsPage', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(listSpy.mock.calls.length).toBeGreaterThan(callsBefore));
     expect(await screen.findByRole('list', { name: 'Datapack stack' })).toBeInTheDocument();
+  });
+
+  it('offers a Retry when a move lands after the datapacks changed on disk', async () => {
+    const user = userEvent.setup();
+    let disk = ['a.zip', 'b.zip'];
+    const listSpy = vi.fn(async () => datapackListing(disk));
+    // Mirrors the core: a move the order no longer fits is stale only when the
+    // rendered snapshot is also out of date; otherwise it is a plain order error.
+    const reorder = vi.fn(async (_world: string, order: string[], expected: DataSnapshot) => {
+      if (order.length === disk.length) return stack({ enabled: [], disabled: [] });
+      if (JSON.stringify(expected.enabled) !== JSON.stringify(disk.map((name) => `file/${name}`))) {
+        throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+      }
+      throw new IpcError('level_dat', 'the requested order is not a reorder of the current stack');
+    });
+    render(<WorldsPage client={pageClient({ listDatapacks: listSpy, reorderDatapacks: reorder })} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    await within(grid).findByRole('button', { name: 'Move b.zip down' });
+    // The game adds c.zip while the page still shows a.zip and b.zip.
+    disk = ['a.zip', 'b.zip', 'c.zip'];
+    const callsBefore = listSpy.mock.calls.length;
+    await user.click(within(grid).getByRole('button', { name: 'Move b.zip down' }));
+    expect(await screen.findByText(/the stack changed on disk/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: 'c.zip, enabled' })).toBeInTheDocument();
+    expect(listSpy.mock.calls.length).toBeGreaterThan(callsBefore);
   });
 
   it('shows the new loading state with no stale cards after a world switch', async () => {
