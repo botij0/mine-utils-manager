@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ipc, isTauriRuntime, toAppError } from './ipc';
-import { resetMockPacks, resetMockWorlds, setMockGameState, setMockLockedWorld } from './ipc.mock';
+import { resetMockPacks, resetMockWorlds, setMockGameState, setMockLockedWorld, setMockWorldSeed, resetMockStack } from './ipc.mock';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -181,6 +181,7 @@ describe('mock resource import guards', () => {
 describe('mock backend alignment', () => {
   beforeEach(async () => {
     resetMockPacks();
+    resetMockStack();
     resetMockWorlds();
     setMockGameState('none');
     await ipc.setActiveGameDir('/home/demo/.minecraft');
@@ -204,4 +205,31 @@ describe('mock backend alignment', () => {
     expect(await ipc.installModrinthPack(args)).toMatchObject({ outcome: { status: 'imported' } });
     expect(await ipc.installModrinthPack(args)).toMatchObject({ outcome: { status: 'duplicate' } });
   });
+
+  it('rebases valid orders and rejects invalid stale orders', async () => {
+    const stack = await ipc.getResourceStack();
+    const current = stack.entries.map((entry) => entry.value);
+    const stale = { resource: ['old'], incompatible: [] };
+    expect((await ipc.reorderResourceStack(current, stale)).entries.map((entry) => entry.value)).toEqual(current);
+    await expect(ipc.reorderResourceStack([], stale)).rejects.toMatchObject({ code: 'stale_stack' });
+    const data = await ipc.listDatapacks('Survival 1_17');
+    const enabled = data.stack.enabled.map((entry) => entry.value);
+    expect((await ipc.reorderDatapacks('Survival 1_17', enabled, { enabled: ['old'], disabled: [] })).enabled.map((entry) => entry.value)).toEqual(enabled);
+    await expect(ipc.reorderDatapacks('Survival 1_17', [], { enabled: ['old'], disabled: [] })).rejects.toMatchObject({ code: 'stale_stack' });
+  });
+
+  it('guards deletes and rejects datapack installs without a world', async () => {
+    setMockGameState('running');
+    await expect(ipc.deleteResourcePack('/home/demo/.minecraft/resourcepacks/Re-covered.zip')).rejects.toMatchObject({ code: 'game_running' });
+    setMockGameState('none');
+    await expect(ipc.installModrinthPack({ projectId: 'demo', versionId: '1', filename: 'demo.zip', kind: 'datapack' })).rejects.toMatchObject({ code: 'modrinth_parse' });
+  });
+
+  it('refuses a level backup with a different readable world seed', async () => {
+    setMockWorldSeed('Survival 1_17', 99);
+    await expect(ipc.restoreLevelBackup('Survival 1_17', '20261025T101500.000000000-Survival 1_17-level.dat')).rejects.toMatchObject({ code: 'world_mismatch' });
+    setMockWorldSeed('Survival 1_17', null);
+    expect((await ipc.restoreLevelBackup('Survival 1_17', '20261025T101500.000000000-Survival 1_17-level.dat')).enabled[0].value).toBe('vanilla');
+  });
+
 });

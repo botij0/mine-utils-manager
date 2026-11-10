@@ -25,6 +25,7 @@ import type {
   PackKind,
   PackListing,
   ResourceStack,
+  StackSnapshot,
   Theme,
   World,
 } from './types';
@@ -325,6 +326,7 @@ export const mockClient: IpcClient = {
   },
   async listResourcePacks() {
     await delay();
+    assertActiveGameDir();
     return packListing();
   },
   async importResourcePack(path: string, choice: ImportChoice = 'default'): Promise<ImportOutcome> {
@@ -384,6 +386,7 @@ export const mockClient: IpcClient = {
   },
   async deleteResourcePack(path: string) {
     await delay();
+    assertWritable();
     if (!mockPacks.some((pack) => pack.path === path)) {
       throw new IpcError('pack_not_found', `pack ${path} does not exist`);
     }
@@ -395,6 +398,7 @@ export const mockClient: IpcClient = {
   },
   async getResourceStack() {
     await delay();
+    assertActiveGameDir();
     return mockResourceStack();
   },
   async setResourcePackEnabled(filename: string, enabled: boolean) {
@@ -413,10 +417,10 @@ export const mockClient: IpcClient = {
     }
     return mockResourceStack();
   },
-  async reorderResourceStack(order: string[]) {
+  async reorderResourceStack(order: string[], expected: StackSnapshot) {
     await delay();
     assertWritable();
-    mockReorder(order);
+    mockReorder(order, expected);
     return mockResourceStack();
   },
   async listOptionsBackups() {
@@ -458,6 +462,7 @@ export const mockClient: IpcClient = {
   },
   async listWorlds() {
     await delay();
+    assertActiveGameDir();
     return mockWorldList();
   },
   async listDatapacks(world: string) {
@@ -527,6 +532,10 @@ export const mockClient: IpcClient = {
     );
     if (!found) {
       throw new IpcError('level_backup', `level backup failed: no backup named ${backup}`);
+    }
+    const seed = mockWorldSeeds[world];
+    if (seed != null && found.seed != null && seed !== found.seed) {
+      throw new IpcError('world_mismatch', 'backup belongs to a different world');
     }
     mockWorldStacks[world] = {
       enabled: [...found.enabled],
@@ -610,12 +619,16 @@ export const mockClient: IpcClient = {
     }
     if (args.kind === 'datapack') {
       if (!args.world) {
-        throw new IpcError('modrinth_url', 'a datapack install needs a target world');
+        throw new IpcError('modrinth_parse', 'a datapack install needs a target world');
       }
       const outcome = mockImportDatapack(args.world, args.filename, 'default');
       return { kind: 'datapack', outcome } as ModrinthInstallOutcome;
     }
     assertWritable();
+    const existing = mockPacks.find((pack) => pack.path.endsWith(`/${args.filename}`));
+    if (existing) {
+      return { kind: 'resourcepack', outcome: { status: 'duplicate', name: args.filename, sha256: `mock-${args.filename}`, existing: existing.path } };
+    }
     const pack: Pack = {
       ...makePack(
         args.filename.replace(/\.zip$/i, ''),
@@ -631,7 +644,7 @@ export const mockClient: IpcClient = {
     mockPacks = [...mockPacks, pack];
     mockStack = {
       ...mockStack,
-      resource: [...mockStack.resource, `file/${args.filename}`],
+      resource: mockStack.resource.includes(`file/${args.filename}`) ? mockStack.resource : [...mockStack.resource, `file/${args.filename}`],
     };
     const outcome: ImportOutcome = { status: 'imported', pack };
     return { kind: 'resourcepack', outcome } as ModrinthInstallOutcome;
@@ -750,6 +763,7 @@ const INITIAL_WORLD_PACKS: Record<string, MockWorldPack[]> = {
 };
 
 interface MockLevelBackup extends LevelBackupInfo {
+  seed: number | null;
   enabled: string[];
   disabled: string[];
 }
@@ -758,6 +772,7 @@ const INITIAL_LEVEL_BACKUPS: MockLevelBackup[] = [
   {
     file_name: '20261025T101500.000000000-Survival 1_17-level.dat',
     world: 'Survival 1_17',
+    seed: 42,
     bytes: 10258,
     display: '2026-10-25 10:15:00 UTC',
     enabled: [...INITIAL_WORLD_STACKS['Survival 1_17'].enabled],
@@ -773,6 +788,11 @@ let mockWorldPacks: Record<string, MockWorldPack[]> = JSON.parse(
 );
 let mockLevelBackups: MockLevelBackup[] = [...INITIAL_LEVEL_BACKUPS];
 let mockLockedWorld: string | null = null;
+let mockWorldSeeds: Record<string, number | null> = { 'Survival 1_17': 42 };
+
+export function setMockWorldSeed(world: string, seed: number | null) {
+  mockWorldSeeds[world] = seed;
+}
 
 /** Name the world whose session.lock the mock reports as held. */
 export function setMockLockedWorld(world: string | null) {
@@ -785,6 +805,7 @@ export function resetMockWorlds() {
   mockWorldPacks = JSON.parse(JSON.stringify(INITIAL_WORLD_PACKS));
   mockLevelBackups = [...INITIAL_LEVEL_BACKUPS];
   mockLockedWorld = null;
+  mockWorldSeeds = { 'Survival 1_17': 42 };
 }
 
 function mockWorldList(): World[] {
@@ -958,20 +979,18 @@ function mockSetDatapackEnabled(world: string, filename: string, enabled: boolea
 
 function mockReorderDatapacks(world: string, order: string[], expected: DataSnapshot) {
   const state = stackStateOf(world);
+  const stale = !sameEntries(expected.enabled, state.enabled) || !sameEntries(expected.disabled, state.disabled);
   if (order.length !== state.enabled.length) {
-    throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+    throw new IpcError(stale ? 'stale_stack' : 'level_dat', 'the requested order is not a reorder of the current stack');
   }
   for (let index = 0; index < state.enabled.length; index += 1) {
     if (!isFileEntry(state.enabled[index]) && state.enabled[index] !== order[index]) {
-      throw new IpcError('level_dat', `the locked entry ${state.enabled[index]} cannot move`);
+      throw new IpcError(stale ? 'stale_stack' : 'level_dat', `the locked entry ${state.enabled[index]} cannot move`);
     }
   }
   const sorted = (values: string[]) => values.filter(isFileEntry).sort().join('\u0000');
   if (sorted(state.enabled) !== sorted(order)) {
-    throw new IpcError('level_dat', 'the requested order is not a reorder of the current stack');
-  }
-  if (expected.enabled.join('\u0000') !== state.enabled.join('\u0000')) {
-    throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+    throw new IpcError(stale ? 'stale_stack' : 'level_dat', 'the requested order is not a reorder of the current stack');
   }
   state.enabled = [...order];
   snapshotLevelBackup(world);
@@ -984,6 +1003,7 @@ function snapshotLevelBackup(world: string) {
     {
       file_name: `${Date.now()}-${world}-level.dat`,
       world,
+      seed: mockWorldSeeds[world] ?? null,
       bytes: state.enabled.join(',').length,
       display: 'restored copy',
       enabled: [...state.enabled],
@@ -1099,6 +1119,10 @@ function mockResourceStack(): ResourceStack {
   };
 }
 
+function assertActiveGameDir() {
+  if (!loadConfig().active_game_dir) throw new IpcError('no_active_game_dir', 'no active game dir; pick one in Settings first');
+}
+
 function assertWritable() {
   if (mockGameState === 'running') {
     throw new IpcError(
@@ -1108,26 +1132,31 @@ function assertWritable() {
   }
 }
 
+function sameEntries(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
 function isFileEntry(value: string): boolean {
   return value.startsWith('file/');
 }
 
 /** The mock enforces the same request rules as the core: foreign entries stay
  *  at their indices and the file multiset is preserved. */
-function mockReorder(order: string[]) {
+function mockReorder(order: string[], expected: StackSnapshot) {
+  const stale = !sameEntries(expected.resource, mockStack.resource) || !sameEntries(expected.incompatible, mockStack.incompatible);
   const current = mockStack.resource;
   if (order.length !== current.length) {
-    throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+    throw new IpcError(stale ? 'stale_stack' : 'resource_stack', 'the requested order is not a reorder of the current stack');
   }
   for (let index = 0; index < current.length; index += 1) {
     if (!isFileEntry(current[index]) && current[index] !== order[index]) {
-      throw new IpcError('resource_stack', `the locked entry ${current[index]} cannot move`);
+      throw new IpcError(stale ? 'stale_stack' : 'resource_stack', `the locked entry ${current[index]} cannot move`);
     }
   }
   const sorted = (values: string[]) =>
     values.filter(isFileEntry).sort().join('\u0000');
   if (sorted(current) !== sorted(order)) {
-    throw new IpcError('resource_stack', 'the requested order is not a reorder of the current stack');
+    throw new IpcError(stale ? 'stale_stack' : 'resource_stack', 'the requested order is not a reorder of the current stack');
   }
   mockStack = { ...mockStack, resource: [...order] };
 }
