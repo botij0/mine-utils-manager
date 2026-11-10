@@ -534,8 +534,8 @@ fn colliding_existing_file_reports_collision_and_keeps_dest() {
         .expect("lookup")
         .is_none());
     assert!(
-        api.cdn_calls().len() == 1,
-        "the real bytes were verified first"
+        api.cdn_calls().is_empty(),
+        "a collision does not download the file"
     );
     assert!(leftovers(&fx.game_dir).is_empty(), "no download temps left");
 }
