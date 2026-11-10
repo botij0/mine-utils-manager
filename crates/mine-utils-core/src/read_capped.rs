@@ -10,9 +10,7 @@ pub(crate) fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
         ));
     }
     let mut bytes = Vec::new();
-    open_regular(path)?
-        .take(cap + 1)
-        .read_to_end(&mut bytes)?;
+    open_regular(path)?.take(cap + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > cap {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -23,7 +21,25 @@ pub(crate) fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
 }
 
 fn open_regular(path: &Path) -> io::Result<std::fs::File> {
-    std::fs::File::open(path)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)?;
+        if !file.metadata()?.file_type().is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "not a regular file",
+            ));
+        }
+        Ok(file)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::File::open(path)
+    }
 }
 
 #[cfg(all(test, unix))]
