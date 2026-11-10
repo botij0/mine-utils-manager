@@ -414,3 +414,42 @@ fn same_name_post_commit_guard_error_names_the_holding_path() {
         "{message}"
     );
 }
+
+#[test]
+fn reimport_detects_same_length_nested_edit() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let fixture = Fixture::new();
+    let nested = fixture.source.join("assets/stone.png");
+    std::fs::write(&nested, b"old").unwrap();
+    let set_time = |seconds| {
+        std::fs::File::options()
+            .write(true)
+            .open(&nested)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(seconds))
+            .unwrap();
+    };
+    set_time(1_600_000_000);
+    let hashes = HashCache::new();
+    let import = || {
+        resource_stack::import_pack_safely(
+            &fixture.paths,
+            &fixture.source,
+            ImportChoice::Default,
+            &fixture.icons,
+            &hashes,
+        )
+        .unwrap()
+    };
+    assert!(matches!(import(), ImportOutcome::Imported { .. }));
+    assert!(matches!(import(), ImportOutcome::Duplicate { .. }));
+    std::fs::write(&nested, b"new").unwrap();
+    set_time(1_600_000_001);
+    assert_eq!(
+        import(),
+        ImportOutcome::Collision {
+            name: "Faithful-1.21".into()
+        }
+    );
+}
