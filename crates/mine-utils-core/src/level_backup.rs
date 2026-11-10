@@ -353,6 +353,34 @@ mod tests {
     }
 
     #[test]
+    fn restore_accepts_a_world_name_with_dots() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = dir.path().join("saves").join("Survival..");
+        std::fs::create_dir_all(&world).unwrap();
+        let level = world.join("level.dat");
+        let first = fixture_level_dat();
+        std::fs::write(&level, &first).unwrap();
+        let root = dir.path().join("backups");
+
+        let created = create(root.as_path(), "Survival..", &first, &config(10))
+            .unwrap()
+            .created
+            .unwrap();
+        std::fs::write(&level, b"edited after the backup").unwrap();
+
+        restore_guarded(
+            root.as_path(),
+            "Survival..",
+            &level,
+            &created.file_name,
+            &config(10),
+            || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&level).unwrap(), first);
+    }
+
+    #[test]
     fn malformed_backup_leaves_current_file() {
         let dir = tempfile::tempdir().unwrap();
         let world = dir.path().join("world");

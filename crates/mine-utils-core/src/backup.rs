@@ -133,7 +133,6 @@ pub(crate) mod core {
         if file_name.is_empty()
             || file_name == "."
             || file_name == ".."
-            || file_name.contains("..")
             || file_name.contains('/')
             || file_name.contains('\\')
             || file_name.contains('\0')
@@ -871,11 +870,40 @@ mod tests {
         for name in [
             "../sneaky-options.txt",
             "sub/dir-options.txt",
-            "..-options.txt",
+            "..",
+            ".",
             "plain.txt",
             "",
         ] {
             let err = restore(root.path(), &options, name, &config(10)).unwrap_err();
+            assert_eq!(err.code(), "backup", "{name} must be rejected");
+        }
+        assert_eq!(
+            std::fs::read(&options).unwrap(),
+            b"resourcePacks:[\"current\"]\n"
+        );
+    }
+
+    #[test]
+    fn restore_rejects_parent_and_nested_names_that_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("backups");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let options = dir.path().join("options.txt");
+        std::fs::write(&options, b"resourcePacks:[\"current\"]\n").unwrap();
+        std::fs::write(
+            dir.path().join("x-options.txt"),
+            b"resourcePacks:[\"parent\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("sub").join("x-options.txt"),
+            b"resourcePacks:[\"nested\"]\n",
+        )
+        .unwrap();
+
+        for name in ["../x-options.txt", "sub/x-options.txt"] {
+            let err = restore(&root, &options, name, &config(10)).unwrap_err();
             assert_eq!(err.code(), "backup", "{name} must be rejected");
         }
         assert_eq!(
