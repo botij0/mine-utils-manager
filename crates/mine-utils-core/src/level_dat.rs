@@ -58,11 +58,19 @@ fn corrupt(err: impl std::fmt::Display) -> LevelDatError {
     }
 }
 
+pub(crate) const MAX_LEVEL_DAT_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Decompress one `level.dat` file into its raw NBT bytes.
 pub fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, LevelDatError> {
-    let mut decoder = flate2::read::GzDecoder::new(bytes);
+    let decoder = flate2::read::GzDecoder::new(bytes);
     let mut raw = Vec::new();
-    decoder.read_to_end(&mut raw).map_err(corrupt)?;
+    decoder
+        .take(MAX_LEVEL_DAT_BYTES + 1)
+        .read_to_end(&mut raw)
+        .map_err(corrupt)?;
+    if raw.len() as u64 > MAX_LEVEL_DAT_BYTES {
+        return Err(corrupt("decompressed level.dat is too large"));
+    }
     Ok(raw)
 }
 

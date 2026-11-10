@@ -16,6 +16,8 @@ use crate::icon_cache::IconCache;
 use crate::level_dat;
 use crate::pack::FormatVersion;
 use crate::pack::PackIcon;
+use crate::pack_scan::MAX_ICON_BYTES;
+use crate::read_capped::read_capped;
 
 /// A world's game version: the `Data.Version.Name` string plus the data pack
 /// format the world's datapacks must declare, when the table covers it.
@@ -190,7 +192,7 @@ fn read_world(dir: &Path, icons: &IconCache, status: &game_lock::GameStatus) -> 
         detection_supported: status.supported,
         issue: None,
     };
-    match std::fs::read(dir.join("level.dat")) {
+    match read_capped(&dir.join("level.dat"), level_dat::MAX_LEVEL_DAT_BYTES) {
         Ok(bytes) => match level_dat::parse(&bytes) {
             Ok(view) => {
                 if let Some(name) = view.level_name {
@@ -215,7 +217,7 @@ fn read_world(dir: &Path, icons: &IconCache, status: &game_lock::GameStatus) -> 
             });
         }
     }
-    if let Ok(bytes) = std::fs::read(dir.join("icon.png")) {
+    if let Ok(bytes) = read_capped(&dir.join("icon.png"), MAX_ICON_BYTES) {
         world.icon = icons.store(&bytes).ok();
     }
     Some(world)
