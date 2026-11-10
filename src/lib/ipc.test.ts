@@ -177,3 +177,31 @@ describe('mock resource import guards', () => {
     expect(await ipc.installModrinthPack(args)).toMatchObject({ kind: 'resourcepack', outcome: { status: 'imported', pack: { name: 'demo-pack-01-1.0' } } });
   });
 });
+
+describe('mock backend alignment', () => {
+  beforeEach(async () => {
+    resetMockPacks();
+    resetMockWorlds();
+    setMockGameState('none');
+    await ipc.setActiveGameDir('/home/demo/.minecraft');
+  });
+
+  it('rejects a short resource order with resource_stack', async () => {
+    const stack = await ipc.getResourceStack();
+    const expected = { resource: stack.entries.map((entry) => entry.value), incompatible: stack.incompatible };
+    await expect(ipc.reorderResourceStack([], expected)).rejects.toMatchObject({ code: 'resource_stack' });
+  });
+
+  it('rejects reads without an active game directory', async () => {
+    window.localStorage.clear();
+    await expect(ipc.listResourcePacks()).rejects.toMatchObject({ code: 'no_active_game_dir' });
+    await expect(ipc.getResourceStack()).rejects.toMatchObject({ code: 'no_active_game_dir' });
+    await expect(ipc.listWorlds()).rejects.toMatchObject({ code: 'no_active_game_dir' });
+  });
+
+  it('returns duplicate on a second Modrinth install', async () => {
+    const args = { projectId: 'demo-pack-01', versionId: 'demo-pack-01-1.0', filename: 'demo-pack-01-1.0.zip', kind: 'resourcepack' } as const;
+    expect(await ipc.installModrinthPack(args)).toMatchObject({ outcome: { status: 'imported' } });
+    expect(await ipc.installModrinthPack(args)).toMatchObject({ outcome: { status: 'duplicate' } });
+  });
+});
