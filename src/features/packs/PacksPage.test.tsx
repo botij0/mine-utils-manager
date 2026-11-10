@@ -662,6 +662,14 @@ describe('PacksPage', () => {
     await settle();
 
     expect(stackNames()).toEqual(['Vanilla', 'vanilla']);
+    expect(screen.getByText('options.txt is unreadable')).toBeInTheDocument();
+
+    failing = false;
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await settle();
+
+    expect(screen.queryByText('options.txt is unreadable')).not.toBeInTheDocument();
+    expect(stackNames()).toEqual(['Vanilla', 'vanilla']);
   });
 
   it('shows the disk stack after a reorder is refused as stale', async () => {

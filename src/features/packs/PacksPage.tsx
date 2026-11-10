@@ -149,6 +149,15 @@ export default function PacksPage({
   const hasFilters = query.trim() !== '' || kind !== 'all' || format !== 'all';
   const noGameDir =
     error?.code === 'no_active_game_dir' || stackError?.code === 'no_active_game_dir';
+  const stackErrorNotice =
+    stackError && !noGameDir ? (
+      <div className="stack-error" role="alert">
+        <p className="error">{stackError.message}</p>
+        <button type="button" className="button" onClick={() => void refreshStack()}>
+          Retry
+        </button>
+      </div>
+    ) : null;
 
   const clearFilters = () => {
     setQuery('');
@@ -350,20 +359,23 @@ export default function PacksPage({
         }}
       >
         {stack ? (
-          <ActiveStack
-            stack={stack}
-            packs={packs}
-            busy={busy}
-            running={running}
-            guardUnknown={gameGuardUnknown}
-            guardChecking={gameGuardChecking}
-            onToggle={(filename, enabled) => void handleToggle(filename, enabled)}
-            onReorder={(order) => void handleReorder(order)}
-            onRecheck={() => {
-              void refreshStack();
-              void refreshGameRunning();
-            }}
-          />
+          <>
+            {stackErrorNotice}
+            <ActiveStack
+              stack={stack}
+              packs={packs}
+              busy={busy}
+              running={running}
+              guardUnknown={gameGuardUnknown}
+              guardChecking={gameGuardChecking}
+              onToggle={(filename, enabled) => void handleToggle(filename, enabled)}
+              onReorder={(order) => void handleReorder(order)}
+              onRecheck={() => {
+                void refreshStack();
+                void refreshGameRunning();
+              }}
+            />
+          </>
         ) : (
           <section className="active-stack" aria-label="Active stack">
             <div className="active-stack-head">
@@ -380,18 +392,7 @@ export default function PacksPage({
                 void refreshGameRunning();
               }}
             />
-            {stackError && !noGameDir ? (
-              <div className="stack-error" role="alert">
-                <p className="error">{stackError.message}</p>
-                <button
-                  type="button"
-                  className="button"
-                  onClick={() => void refreshStack()}
-                >
-                  Retry
-                </button>
-              </div>
-            ) : (
+            {stackErrorNotice ?? (
               <p className="active-stack-empty">
                 {noGameDir
                   ? 'Pick a game dir in Settings first.'

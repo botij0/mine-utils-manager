@@ -148,7 +148,10 @@ export function usePacks(client: PackClient): PacksState {
       setBusy(true);
       try {
         const next = await client.setResourcePackEnabled(filename, enabled);
-        if (mounted.current) setStack(next);
+        if (mounted.current) {
+          setStack(next);
+          setStackError(null);
+        }
       } finally {
         if (mounted.current) setBusy(false);
       }
@@ -164,7 +167,10 @@ export function usePacks(client: PackClient): PacksState {
         // set changed since that render, the backend refuses the write.
         const expected = snapshotOf(stack ?? (await client.getResourceStack()));
         const next = await client.reorderResourceStack(order, expected);
-        if (mounted.current) setStack(next);
+        if (mounted.current) {
+          setStack(next);
+          setStackError(null);
+        }
       } catch (err) {
         // A refused write leaves the rendered stack behind the disk. Re-read it
         // so the user sees the current order along with the error.
