@@ -700,12 +700,6 @@ impl stack_core::StackFile for ResourceFile<'_> {
         Ok(std::fs::read(&self.paths.options_path).ok().as_deref() == Some(previous))
     }
 
-    fn unchanged_before_write(&self, _previous: &[u8]) -> Result<bool, AppError> {
-        // The options write keeps its single pre-backup re-read; a second read
-        // here would narrow a race window the existing behavior leaves open.
-        Ok(true)
-    }
-
     fn reject(&self, err: stack_core::EntryError) -> AppError {
         AppError::Stack(err.into())
     }
@@ -898,6 +892,37 @@ mod tests {
             resource: arrays(resource),
             incompatible: arrays(incompatible),
         }
+    }
+
+    #[test]
+    fn toggle_rebases_an_edit_during_guard() {
+        struct EditingGuard(std::cell::Cell<usize>, std::path::PathBuf);
+        impl WriteGuard for EditingGuard {
+            fn ensure_writable(&self, _: &Path) -> Result<(), AppError> {
+                let calls = self.0.get() + 1;
+                self.0.set(calls);
+                if calls == 2 {
+                    use std::io::Write;
+                    writeln!(
+                        std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&self.1)
+                            .unwrap(),
+                        "lang:de_de"
+                    )
+                    .unwrap();
+                }
+                Ok(())
+            }
+        }
+        let (_dir, paths) = fixture_stack();
+        write_fixture(&paths, "resourcePacks:[\"vanilla\"]\n");
+        let guard = EditingGuard(std::cell::Cell::new(0), paths.options_path.clone());
+        set_enabled_with_guard(&paths, "a.zip", true, &guard).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&paths.options_path).unwrap(),
+            "resourcePacks:[\"vanilla\",\"file/a.zip\"]\nlang:de_de\n"
+        );
     }
 
     #[test]

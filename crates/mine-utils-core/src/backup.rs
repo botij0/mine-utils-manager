@@ -182,20 +182,30 @@ pub(crate) mod core {
         let bytes = std::fs::read(files.source).map_err(|err| scheme.error(format!("{err}")))?;
         validate(files.file_name, &bytes)?;
 
-        let backup = match std::fs::read(files.target) {
-            Ok(current) => create_protected(
+        let read_target = || match std::fs::read(files.target) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(AppError::Io(err)),
+        };
+        let current = read_target()?;
+        let backup = match &current {
+            Some(current) => create_protected(
                 files.root,
-                &current,
+                current,
                 config,
                 scheme,
                 owned,
                 &[files.file_name],
             )?,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-            Err(err) => return Err(AppError::Io(err)),
+            None => None,
         };
 
         before_write()?;
+        if read_target()? != current {
+            return Err(AppError::Stack(
+                crate::resource_stack::StackError::StaleStack,
+            ));
+        }
         write(&bytes)?;
         Ok(Restored {
             backup,
@@ -771,6 +781,31 @@ mod tests {
             std::fs::read(&options).unwrap(),
             b"resourcePacks:[\"current\"]\n"
         );
+    }
+
+    #[test]
+    fn restore_rejects_an_edit_during_guard() {
+        let root = tempfile::tempdir().unwrap();
+        let options = root.path().join("options.txt");
+        std::fs::write(&options, b"resourcePacks:[\"current\"]\n").unwrap();
+        let first = create(root.path(), b"resourcePacks:[\"old\"]\n", &config(10)).unwrap();
+        let err = restore_guarded(
+            root.path(),
+            &options,
+            &first.created.unwrap().file_name,
+            &config(10),
+            || {
+                std::fs::write(&options, b"resourcePacks:[\"current\"]\nlang:de_de\n").unwrap();
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "stale_stack");
+        assert_eq!(
+            std::fs::read(&options).unwrap(),
+            b"resourcePacks:[\"current\"]\nlang:de_de\n"
+        );
+        assert_eq!(list(root.path()).unwrap().len(), 2);
     }
 
     #[test]
