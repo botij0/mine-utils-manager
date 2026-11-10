@@ -453,3 +453,51 @@ fn reimport_detects_same_length_nested_edit() {
         }
     );
 }
+
+#[test]
+fn unchanged_metadata_reuses_folder_and_zip_hashes() {
+    use mine_utils_core::PackLocation;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    let nested = folder.join("a");
+    let zip = root.path().join("pack.zip");
+    let hashes = HashCache::new();
+    for (path, location, expected) in [
+        (
+            &nested,
+            PackLocation::Directory,
+            "98dfb812cd65569044520859a9f0e1665711970192e0e27e573c904ea24db16e",
+        ),
+        (
+            &zip,
+            PackLocation::Zip,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        ),
+    ] {
+        let hash_path = if location == PackLocation::Directory {
+            &folder
+        } else {
+            path
+        };
+        let write = |content| {
+            std::fs::write(path, content).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(UNIX_EPOCH + Duration::from_secs(1_600_000_000))
+                .unwrap();
+        };
+        write(b"abc");
+        assert_eq!(hashes.hash(hash_path, location).unwrap(), expected);
+        write(b"def");
+        assert_eq!(hashes.hash(hash_path, location).unwrap(), expected);
+        assert_ne!(
+            HashCache::new().hash(hash_path, location).unwrap(),
+            expected
+        );
+    }
+}
