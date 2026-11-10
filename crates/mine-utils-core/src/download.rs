@@ -218,6 +218,68 @@ fn temp_path_for(target_dir: &Path, filename: &str) -> PathBuf {
     ))
 }
 
+#[cfg(target_os = "linux")]
+fn sweep_download_temps(target_dir: &Path) {
+    use std::os::unix::fs::MetadataExt;
+
+    let Ok(current_exe) = std::fs::metadata("/proc/self/exe") else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(target_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some((prefix, suffix)) = name.rsplit_once(".mine-utils-download-") else {
+            continue;
+        };
+        if !prefix.starts_with('.') || prefix.len() < 2 {
+            continue;
+        }
+        let Some(suffix) = suffix.strip_suffix(".tmp") else {
+            continue;
+        };
+        let mut parts = suffix.split('-');
+        let (Some(pid), Some(stamp), Some(counter), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if ![pid, stamp, counter]
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        {
+            continue;
+        }
+        let Ok(pid) = pid.parse::<u32>() else {
+            continue;
+        };
+        if pid == std::process::id() {
+            continue;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if !kind.is_file() {
+            continue;
+        }
+        let proc_dir = PathBuf::from(format!("/proc/{pid}"));
+        let stale = match std::fs::metadata(proc_dir.join("exe")) {
+            Ok(exe) => exe.dev() != current_exe.dev() || exe.ino() != current_exe.ino(),
+            Err(_) => {
+                matches!(std::fs::metadata(&proc_dir), Err(err) if err.kind() == std::io::ErrorKind::NotFound)
+            }
+        };
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sweep_download_temps(_target_dir: &Path) {}
+
 /// Stream a CDN file into a temp file in `target_dir`, checking the 500 MB
 /// cap and the SHA-512 while streaming, then validating the zip root.
 /// The URL must be `https://cdn.modrinth.com/...` and every redirect hop
@@ -257,6 +319,7 @@ pub fn download_verified_capped<T: Transport>(
     std::fs::create_dir_all(target_dir).map_err(|err| DownloadError::Io {
         reason: format!("cannot use {}: {err}", target_dir.display()),
     })?;
+    sweep_download_temps(target_dir);
     let temp = temp_path_for(target_dir, filename);
     let result = download_into(client, url, &temp, expected_sha512, root, max_bytes);
     if result.is_err() {
