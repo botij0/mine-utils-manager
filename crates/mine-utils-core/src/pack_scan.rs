@@ -1200,6 +1200,31 @@ mod tests {
         (root, cache_root, icons, hashes, trash)
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_name_is_serializable_and_cannot_delete_collision() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = tempfile::tempdir().unwrap();
+        let (_cache_root, icons) = cache();
+        simple_zip(&root.path().join("Good.zip"), 55, None);
+        let bad = root.path().join(std::ffi::OsStr::from_bytes(b"Caf\xe9.zip"));
+        std::fs::write(&bad, b"bad").unwrap();
+        let listing = scan_packs(root.path(), &icons).unwrap();
+        let json = serde_json::to_value(&listing).unwrap();
+        let packs = json["packs"].as_array().unwrap();
+        assert_eq!(packs.len(), 2);
+        let good = packs.iter().find(|p| p["name"] == "Good").unwrap();
+        assert_eq!(good["error"], serde_json::Value::Null);
+        let card = packs.iter().find(|p| p["name"] == "Caf�").unwrap();
+        assert_eq!(card["error"]["code"], "pack_non_utf8_name");
+        let display_path = PathBuf::from(card["path"].as_str().unwrap());
+        std::fs::write(&display_path, b"collision").unwrap();
+        let trash = RecordingTrash::new(&root.path().join("trash"));
+        assert!(delete_pack_with(&display_path, root.path(), &trash).is_err());
+        assert_eq!(std::fs::read(&display_path).unwrap(), b"collision");
+        assert_eq!(std::fs::read(&bad).unwrap(), b"bad");
+    }
+
     #[test]
     fn reads_real_shape_metadata_and_icon() {
         let root = tempfile::tempdir().unwrap();
