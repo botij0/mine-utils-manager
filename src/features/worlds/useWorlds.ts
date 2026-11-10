@@ -250,19 +250,13 @@ export function useWorlds(client: WorldsClient): WorldsState {
 
   const reorderDatapacks = useCallback(
     async (order: string[]) => {
-      if (!selectedName) return;
+      if (!selectedName || !stack) return;
       const world = selectedName;
       const request = beginAction();
       try {
-        // Build `expected` from the fresh listing, not from a possibly stale
-        // `stack`: the previous code snapshotted first and refreshed after,
-        // so the guard compared against the wrong file set.
-        const fresh = await client.listDatapacks(world);
-        if (!isCurrentRequest(world, request)) return;
-        setPacks(fresh.packs.packs);
-        setStack(fresh.stack);
-        const expected = dataSnapshotOf(fresh.stack);
-        const next = await client.reorderDatapacks(world, order, expected);
+        // `order` came from this rendered stack, so the guard checks the file set
+        // the user saw; a datapack added since then yields stale_stack, not a raw order error.
+        const next = await client.reorderDatapacks(world, order, dataSnapshotOf(stack));
         if (!isCurrentRequest(world, request)) return;
         setStack(next);
       } catch (err) {
@@ -273,7 +267,7 @@ export function useWorlds(client: WorldsClient): WorldsState {
         if (isCurrentRequest(world, request)) setBusy(false);
       }
     },
-    [client, selectedName, beginAction, isCurrentRequest],
+    [client, selectedName, stack, beginAction, isCurrentRequest],
   );
 
   const importDatapack = useCallback(
