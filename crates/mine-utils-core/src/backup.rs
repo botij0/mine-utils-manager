@@ -2,8 +2,9 @@
 //!
 //! Backups live at `<data_dir>/backups/<game-dir-hash>/<timestamp>-options.txt`.
 //! The timestamp is UTC with nanosecond precision, so names sort
-//! lexicographically and stay unique across rapid writes. Only the newest
-//! `Config.backups.keep` files survive each write.
+//! lexicographically and stay unique across rapid writes. Each write keeps the
+//! newest `Config.backups.keep` files, plus the backup it just wrote and, for a
+//! restore, the restore source, so a restore at `keep = 1` can leave two.
 
 use std::path::{Path, PathBuf};
 
@@ -75,13 +76,26 @@ pub(crate) mod core {
         scheme: &S,
         owned: impl Fn(&str) -> bool,
     ) -> Result<Option<Stored>, AppError> {
+        create_protected(root, previous, config, scheme, owned, &[])
+    }
+
+    fn create_protected<S: Naming>(
+        root: &Path,
+        previous: &[u8],
+        config: &BackupsConfig,
+        scheme: &S,
+        owned: impl Fn(&str) -> bool,
+        protected: &[&str],
+    ) -> Result<Option<Stored>, AppError> {
         if !config.enabled {
             return Ok(None);
         }
         std::fs::create_dir_all(root)
             .map_err(|err| scheme.error(format!("{}: {err}", root.display())))?;
         let stored = write_unique(root, previous, scheme)?;
-        rotate(root, config.keep.max(1), scheme, &owned)?;
+        let mut protected = protected.to_vec();
+        protected.push(&stored.file_name);
+        rotate(root, config.keep.max(1), scheme, &owned, &protected)?;
         Ok(Some(stored))
     }
 
@@ -169,7 +183,14 @@ pub(crate) mod core {
         validate(files.file_name, &bytes)?;
 
         let backup = match std::fs::read(files.target) {
-            Ok(current) => create(files.root, &current, config, scheme, owned)?,
+            Ok(current) => create_protected(
+                files.root,
+                &current,
+                config,
+                scheme,
+                owned,
+                &[files.file_name],
+            )?,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
             Err(err) => return Err(AppError::Io(err)),
         };
@@ -206,17 +227,22 @@ pub(crate) mod core {
             .collect())
     }
 
-    /// Keep only the newest `keep` owned backups. Names sort chronologically.
+    /// Remove the oldest unprotected backups until at most `keep` remain, if possible.
     fn rotate<S: Scheme>(
         root: &Path,
         keep: u32,
         scheme: &S,
         owned: &impl Fn(&str) -> bool,
+        protected: &[&str],
     ) -> Result<(), AppError> {
         let mut names = names(root, scheme, owned)?;
         names.sort();
         let excess = names.len().saturating_sub(keep as usize);
-        for name in names.into_iter().take(excess) {
+        for name in names
+            .into_iter()
+            .filter(|name| !protected.contains(&name.as_str()))
+            .take(excess)
+        {
             std::fs::remove_file(root.join(name)).map_err(|err| scheme.error(err.to_string()))?;
         }
         sync_dir(root);
@@ -538,6 +564,53 @@ fn validated_backup(root: &Path, file_name: &str) -> Result<PathBuf, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create_preserves_new_backup_with_future_dated_files() {
+        let root = tempfile::tempdir().unwrap();
+        for name in [
+            "99980101T000000.000000000-options.txt",
+            "99990101T000000.000000000-options.txt",
+        ] {
+            std::fs::write(root.path().join(name), b"future").unwrap();
+        }
+        let created = create(root.path(), b"new", &config(2))
+            .unwrap()
+            .created
+            .unwrap();
+        assert_eq!(
+            std::fs::read(root.path().join(created.file_name)).unwrap(),
+            b"new"
+        );
+        assert_eq!(list(root.path()).unwrap().len(), 2);
+        assert!(root
+            .path()
+            .join("99990101T000000.000000000-options.txt")
+            .exists());
+    }
+
+    #[test]
+    fn failed_restore_preserves_source_at_capacity() {
+        let root = tempfile::tempdir().unwrap();
+        let options = root.path().join("options.txt");
+        let name = "20000101T000000.000000000-options.txt";
+        std::fs::write(root.path().join(name), b"resourcePacks:[\"old\"]\n").unwrap();
+        std::fs::write(&options, b"resourcePacks:[\"current\"]\n").unwrap();
+        let err = restore_guarded(root.path(), &options, name, &config(1), || {
+            Err(backup_error("game started"))
+        })
+        .unwrap_err();
+        assert_eq!(err.code(), "backup");
+        assert_eq!(
+            std::fs::read(root.path().join(name)).unwrap(),
+            b"resourcePacks:[\"old\"]\n"
+        );
+        assert_eq!(
+            std::fs::read(options).unwrap(),
+            b"resourcePacks:[\"current\"]\n"
+        );
+        assert_eq!(list(root.path()).unwrap().len(), 2);
+    }
 
     fn config(keep: u32) -> BackupsConfig {
         BackupsConfig {

@@ -2,8 +2,9 @@
 //!
 //! Backups live at `<data_dir>/backups/<game-dir-hash>/<timestamp>-<world>-level.dat`.
 //! The timestamp is UTC with nanosecond precision, so names sort
-//! lexicographically and stay unique across rapid writes. Only the newest
-//! `Config.backups.keep` files survive per world. The world directory name is
+//! lexicographically and stay unique across rapid writes. Each write keeps the
+//! newest `Config.backups.keep` files per world, plus the backup it just wrote
+//! and, for a restore, the restore source. The world directory name is
 //! safe and unique within one game dir.
 //!
 //! A backup is only restorable when it decompresses as gzip and holds NBT with
