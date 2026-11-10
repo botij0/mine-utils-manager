@@ -1248,6 +1248,9 @@ mod tests {
         assert!(delete_pack_with(&display_path, root.path(), &trash).is_err());
         assert_eq!(std::fs::read(&display_path).unwrap(), b"collision");
         assert_eq!(std::fs::read(&bad).unwrap(), b"bad");
+        std::fs::remove_file(&bad).unwrap();
+        delete_pack_with(&display_path, root.path(), &trash).unwrap();
+        assert!(!display_path.exists());
     }
 
     #[test]
