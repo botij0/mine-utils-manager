@@ -83,7 +83,8 @@ pub(crate) mod stack_core {
             || filename == ".."
             || filename.contains('/')
             || filename.contains('\\')
-            || filename.contains('\0');
+            || filename.contains('\0')
+            || filename.contains('�');
         if unsafe_name {
             return Err(EntryError::InvalidFilename {
                 filename: filename.to_string(),

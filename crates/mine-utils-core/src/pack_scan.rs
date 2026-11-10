@@ -76,6 +76,20 @@ pub fn scan_packs(resourcepacks: &Path, icons: &IconCache) -> Result<PackListing
         } else {
             PackLocation::Directory
         };
+        if path.file_name().is_some_and(|name| name.to_str().is_none()) {
+            let display_path = PathBuf::from(path.to_string_lossy().into_owned());
+            let mut pack = error_pack(
+                &display_path,
+                location,
+                PackError::NonUtf8Name {
+                    name: display_name(&display_path),
+                },
+                0,
+            );
+            pack.id = format!("non-utf8:{:?}", path.as_os_str());
+            packs.push(pack);
+            continue;
+        }
         if file_type.is_symlink() {
             // A symlinked pack is an error card. The link is never followed
             // into the root, so scanning cannot read or later delete a pack
@@ -848,6 +862,15 @@ pub fn delete_pack_with(
 /// `options.txt`. The entry itself is never canonicalized, so the check cannot
 /// redirect a delete elsewhere.
 pub fn validate_delete_target(path: &Path, resourcepacks: &Path) -> Result<(), AppError> {
+    if path
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().contains('�'))
+    {
+        return Err(PackError::NonUtf8Name {
+            name: display_name(path),
+        }
+        .into());
+    }
     let root = std::fs::canonicalize(resourcepacks)?;
     let metadata = std::fs::symlink_metadata(path).map_err(|_| PackError::NotFound {
         path: path.to_path_buf(),
@@ -1207,7 +1230,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (_cache_root, icons) = cache();
         simple_zip(&root.path().join("Good.zip"), 55, None);
-        let bad = root.path().join(std::ffi::OsStr::from_bytes(b"Caf\xe9.zip"));
+        let bad = root
+            .path()
+            .join(std::ffi::OsStr::from_bytes(b"Caf\xe9.zip"));
         std::fs::write(&bad, b"bad").unwrap();
         let listing = scan_packs(root.path(), &icons).unwrap();
         let json = serde_json::to_value(&listing).unwrap();

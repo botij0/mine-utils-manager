@@ -44,6 +44,7 @@ export default function DatapackDetail({
   }
   if (pack?.error) {
     const symlink = pack.error.code === 'pack_symlink';
+    const nonUtf8 = pack.error.code === 'pack_non_utf8_name';
     return (
       <section className="datapack-detail" aria-label="Datapack details">
         <h3>{filename}</h3>
@@ -56,8 +57,9 @@ export default function DatapackDetail({
             it points at is never touched.
           </p>
         ) : null}
+        {nonUtf8 ? <p className="panel-note">Rename this file in a file manager to manage it.</p> : null}
         <div className="datapack-detail-actions">
-          {!locked ? (
+          {!locked && !nonUtf8 ? (
             <button
               type="button"
               className="button"
@@ -70,7 +72,7 @@ export default function DatapackDetail({
           <button
             type="button"
             className="button button-danger"
-            disabled={writesBlocked || busy}
+            disabled={writesBlocked || busy || nonUtf8}
             onClick={() => onDelete(pack.path)}
           >
             Delete

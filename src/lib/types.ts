@@ -95,8 +95,10 @@ export interface PackIcon {
   url: string;
 }
 
+export type PackIssueCode = 'pack_non_utf8_name' | (string & {});
+
 export interface PackIssue {
-  code: string;
+  code: PackIssueCode;
   message: string;
 }
 

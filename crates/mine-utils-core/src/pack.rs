@@ -222,6 +222,8 @@ impl Pack {
 /// Everything that can go wrong while reading or importing one pack.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PackError {
+    #[error("{name} has a non-UTF-8 filename and cannot be managed")]
+    NonUtf8Name { name: String },
     #[error("{name} has no assets or data directory")]
     UnknownKind { name: String },
     #[error("{name} is not a readable pack: {reason}")]
@@ -249,6 +251,7 @@ pub enum PackError {
 impl PackError {
     pub fn code(&self) -> &'static str {
         match self {
+            PackError::NonUtf8Name { .. } => "pack_non_utf8_name",
             PackError::UnknownKind { .. } => "pack_unknown_kind",
             PackError::BrokenArchive { .. } => "pack_broken_archive",
             PackError::MissingMeta { .. } => "pack_missing_meta",
