@@ -474,7 +474,7 @@ fn slow_streaming_reader_still_streams() {
     assert!(leftovers(&target).is_empty());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn download_sweeps_only_stale_regular_download_temps() {
     use std::os::unix::fs::symlink;
@@ -498,7 +498,14 @@ fn download_sweeps_only_stale_regular_download_temps() {
         ".unrelated",
         ".bad.mine-utils-download-4294967295-x-0.tmp",
     ] {
-        std::fs::write(dir.path().join(name), b"keep").unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"keep").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200))
+            .unwrap();
     }
     symlink(dir.path().join(".unrelated"), dir.path().join(link)).unwrap();
     let listing = || {
