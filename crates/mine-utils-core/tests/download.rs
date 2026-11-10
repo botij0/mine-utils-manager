@@ -480,6 +480,11 @@ fn download_sweeps_only_stale_regular_download_temps() {
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir().unwrap();
+    let mut foreign = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap();
+    let recycled = format!(".foreign.zip.mine-utils-download-{}-1-0.tmp", foreign.id());
     let stale = ".old.zip.mine-utils-download-4294967295-1-0.tmp";
     let current = format!(
         ".active.zip.mine-utils-download-{}-1-0.tmp",
@@ -488,6 +493,7 @@ fn download_sweeps_only_stale_regular_download_temps() {
     let link = ".link.zip.mine-utils-download-4294967295-1-0.tmp";
     for name in [
         stale,
+        &recycled,
         &current,
         ".unrelated",
         ".bad.mine-utils-download-4294967295-x-0.tmp",
@@ -516,6 +522,8 @@ fn download_sweeps_only_stale_regular_download_temps() {
     )
     .unwrap();
     drop(verified);
+    foreign.kill().unwrap();
+    foreign.wait().unwrap();
     println!("after: {:?}", listing());
     let mut expected = vec![
         current,
