@@ -118,7 +118,9 @@ The browser mock is a UI development aid, not a safety reference. The Rust backe
 
 ## Desktop shell and startup
 
-`src-tauri/src/lib.rs` configures single-instance behavior, logging, saved window state, native opener support, and native file dialogs.
+`src-tauri/src/lib.rs` configures single-instance behavior, logging, saved window state, and native file dialogs.
+
+The webview runs under the Content Security Policy in `src-tauri/tauri.conf.json`. It allows bundled code, inline styles, Tauri IPC, Modrinth CDN images, `data:` images, and cached `asset://` icons, and blocks every other origin. The capability grants only `dialog:allow-open` from the dialog plugin. `src-tauri/tests/security_config.rs` fails if the policy loses `default-src 'self'` or if an opener or `dialog:default` permission comes back.
 
 ```mermaid
 sequenceDiagram
