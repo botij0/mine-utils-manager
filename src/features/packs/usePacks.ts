@@ -44,9 +44,9 @@ export function snapshotOf(stack: ResourceStack): StackSnapshot {
 }
 
 /**
- * Loads the active game dir's pack list and resource stack, and keeps both
- * fresh after every mutation. Each write rechecks the stack first, so a game
- * that started in the meantime blocks the write before it reaches the disk.
+ * Loads the active game dir's pack list and resource stack. Toggle and reorder
+ * render the stack their write returns instead of re-reading it. The backend
+ * rechecks the game guard before each write reaches the disk.
  */
 export function usePacks(client: PackClient): PacksState {
   const [packs, setPacks] = useState<Pack[]>([]);
@@ -93,8 +93,9 @@ export function usePacks(client: PackClient): PacksState {
         setStackError(null);
       }
     } catch (err) {
+      // Keep the last stack on screen. A failed re-read is not a reason to
+      // replace a usable view with an error card.
       if (!mounted.current) return;
-      setStack(null);
       setStackError(toAppError(err));
     } finally {
       if (mounted.current) setStackLoading(false);
@@ -146,24 +147,29 @@ export function usePacks(client: PackClient): PacksState {
     async (filename: string, enabled: boolean) => {
       setBusy(true);
       try {
-        await refreshStack();
-        await client.setResourcePackEnabled(filename, enabled);
-        await refreshStack();
+        const next = await client.setResourcePackEnabled(filename, enabled);
+        if (mounted.current) setStack(next);
       } finally {
         if (mounted.current) setBusy(false);
       }
     },
-    [client, refreshStack],
+    [client],
   );
 
   const reorderStack = useCallback(
     async (order: string[]) => {
       setBusy(true);
       try {
+        // The snapshot is the stack on screen, not a fresh read. If the file
+        // set changed since that render, the backend refuses the write.
         const expected = snapshotOf(stack ?? (await client.getResourceStack()));
-        await refreshStack();
-        await client.reorderResourceStack(order, expected);
-        await refreshStack();
+        const next = await client.reorderResourceStack(order, expected);
+        if (mounted.current) setStack(next);
+      } catch (err) {
+        // A refused write leaves the rendered stack behind the disk. Re-read it
+        // so the user sees the current order along with the error.
+        if (toAppError(err).code === 'stale_stack') await refreshStack();
+        throw err;
       } finally {
         if (mounted.current) setBusy(false);
       }
