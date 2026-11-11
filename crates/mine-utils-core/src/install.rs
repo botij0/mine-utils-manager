@@ -115,6 +115,9 @@ pub fn prepare_modrinth_install<T: Transport>(
             })?;
             // Resolve the world eagerly so a typo fails before any download.
             let resolved = WorldPaths::for_world(game_dir, name)?;
+            // A symlinked datapacks folder or level.dat fails here, before any
+            // metadata or CDN request, with the same error finish gives.
+            data_stack::reject_link_targets(&resolved.world_dir)?;
             // The name may resolve while the world is missing or unreadable
             // (typo, deleted world): refuse before any metadata request.
             if !resolved.world_dir.is_dir() {
