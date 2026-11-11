@@ -250,46 +250,33 @@ fn live_owner_survives(mode: &str, phase: &str) {
 }
 
 #[test]
-fn sweep_keeps_live_downloads_from_copied_executable() {
-    for phase in ["streaming", "verified"] {
-        live_owner_survives("copied", phase);
+fn sweep_keeps_live_downloads_across_executables_and_pid_namespaces() {
+    for mode in ["copied", "replaced", "unlinked"] {
+        for phase in ["streaming", "verified"] {
+            live_owner_survives(mode, phase);
+        }
     }
-}
 
-#[test]
-fn sweep_keeps_live_downloads_from_replaced_executable() {
-    for phase in ["streaming", "verified"] {
-        live_owner_survives("replaced", phase);
+    #[cfg(target_os = "linux")]
+    {
+        let available = Command::new("unshare")
+            .args([
+                "--user",
+                "--map-root-user",
+                "--pid",
+                "--fork",
+                "--kill-child",
+                "--mount-proc",
+                "sh",
+                "-c",
+                "echo 4000000 > /proc/sys/kernel/ns_last_pid",
+            ])
+            .output();
+        if !available.is_ok_and(|output| output.status.success()) {
+            eprintln!("SKIP: unprivileged PID namespaces unavailable");
+            return;
+        }
+        live_owner_survives("namespace", "streaming");
+        live_owner_survives("namespace", "verified");
     }
-}
-
-#[test]
-fn sweep_keeps_live_downloads_from_unlinked_executable() {
-    for phase in ["streaming", "verified"] {
-        live_owner_survives("unlinked", phase);
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn sweep_keeps_live_download_in_another_pid_namespace() {
-    let available = Command::new("unshare")
-        .args([
-            "--user",
-            "--map-root-user",
-            "--pid",
-            "--fork",
-            "--kill-child",
-            "--mount-proc",
-            "sh",
-            "-c",
-            "echo 4000000 > /proc/sys/kernel/ns_last_pid",
-        ])
-        .output();
-    if !available.is_ok_and(|output| output.status.success()) {
-        eprintln!("SKIP: unprivileged PID namespaces unavailable");
-        return;
-    }
-    live_owner_survives("namespace", "streaming");
-    live_owner_survives("namespace", "verified");
 }
