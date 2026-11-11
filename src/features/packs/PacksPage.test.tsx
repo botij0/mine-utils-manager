@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { PackClient } from '../../lib/ipc';
@@ -11,6 +11,7 @@ import {
   BROKEN_PACK,
   SYMLINK_PACK,
   VANILLA_PACK,
+  resourceStack,
 } from '../../test/fake-packs';
 import PacksPage from './PacksPage';
 
@@ -554,4 +555,153 @@ describe('PacksPage', () => {
 
     expect(await screen.findByRole('button', { name: 'Import pack' })).toBeDisabled();
   });
+
+  it('toggles with one client call and renders the stack the write returns', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient({
+      packs: [VANILLA_PACK],
+      resource: ['vanilla', 'file/Vanilla.zip'],
+    });
+    const calls: string[] = [];
+    const read = client.getResourceStack;
+    const write = client.setResourcePackEnabled;
+    client.getResourceStack = async () => {
+      calls.push('getResourceStack');
+      return read();
+    };
+    client.setResourcePackEnabled = async (filename, enabled) => {
+      calls.push('setResourcePackEnabled');
+      return write(filename, enabled);
+    };
+    renderPage(client);
+    await screen.findByRole('list', { name: 'Stack order' });
+    calls.length = 0;
+
+    await user.click(screen.getByRole('checkbox', { name: 'Enabled: Vanilla' }));
+    await settle();
+
+    expect(calls).toEqual(['setResourcePackEnabled']);
+    expect(stackNames()).toEqual(['vanilla']);
+  });
+
+  it('reorders with one client call and renders the stack the write returns', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient({
+      packs: [VANILLA_PACK],
+      resource: ['vanilla', 'file/Vanilla.zip', 'file/Autumn.zip'],
+    });
+    const calls: string[] = [];
+    const read = client.getResourceStack;
+    const write = client.reorderResourceStack;
+    client.getResourceStack = async () => {
+      calls.push('getResourceStack');
+      return read();
+    };
+    client.reorderResourceStack = async (order, expected) => {
+      calls.push('reorderResourceStack');
+      return write(order, expected);
+    };
+    renderPage(client);
+    await screen.findByRole('list', { name: 'Stack order' });
+    expect(stackNames()).toEqual(['Autumn.zip', 'Vanilla', 'vanilla']);
+    calls.length = 0;
+
+    await user.click(screen.getByRole('button', { name: 'Move Autumn.zip down' }));
+    await settle();
+
+    expect(calls).toEqual(['reorderResourceStack']);
+    expect(stackNames()).toEqual(['Vanilla', 'Autumn.zip', 'vanilla']);
+  });
+
+  it('keeps the toggled stack on screen when a read fails after the write', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient({
+      packs: [VANILLA_PACK],
+      resource: ['vanilla', 'file/Vanilla.zip'],
+    });
+    const read = client.getResourceStack;
+    const write = client.setResourcePackEnabled;
+    let committed = false;
+    client.setResourcePackEnabled = async (filename, enabled) => {
+      const next = await write(filename, enabled);
+      committed = true;
+      return next;
+    };
+    client.getResourceStack = async () => {
+      if (committed) throw new IpcError('options_txt', 'options.txt is unreadable');
+      return read();
+    };
+    renderPage(client);
+    await screen.findByRole('list', { name: 'Stack order' });
+
+    await user.click(screen.getByRole('checkbox', { name: 'Enabled: Vanilla' }));
+    await settle();
+
+    expect(committed).toBe(true);
+    expect(stackNames()).toEqual(['vanilla']);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the stack on screen when a recheck read fails', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient({
+      packs: [VANILLA_PACK],
+      resource: ['vanilla', 'file/Vanilla.zip'],
+    });
+    const read = client.getResourceStack;
+    let failing = false;
+    client.getResourceStack = async () => {
+      if (failing) throw new IpcError('options_txt', 'options.txt is unreadable');
+      return read();
+    };
+    render(<PacksPage client={client} gameRunning={null} gameGuardUnknown />);
+    await screen.findByRole('list', { name: 'Stack order' });
+
+    failing = true;
+    await user.click(screen.getByRole('button', { name: 'Recheck' }));
+    await settle();
+
+    expect(stackNames()).toEqual(['Vanilla', 'vanilla']);
+    expect(screen.getByText('options.txt is unreadable')).toBeInTheDocument();
+
+    failing = false;
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await settle();
+
+    expect(screen.queryByText('options.txt is unreadable')).not.toBeInTheDocument();
+    expect(stackNames()).toEqual(['Vanilla', 'vanilla']);
+  });
+
+  it('shows the disk stack after a reorder is refused as stale', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
+    let disk = resourceStack(['vanilla', 'file/Vanilla.zip', 'file/Autumn.zip']);
+    client.getResourceStack = async () => disk;
+    client.reorderResourceStack = async () => {
+      throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+    };
+    renderPage(client);
+    await screen.findByRole('list', { name: 'Stack order' });
+
+    disk = resourceStack(['vanilla', 'file/Vanilla.zip', 'file/Autumn.zip', 'file/Brand.zip']);
+    await user.click(screen.getByRole('button', { name: 'Move Autumn.zip down' }));
+    await settle();
+
+    expect(screen.getByRole('alert')).toHaveTextContent('the stack changed on disk');
+    expect(stackNames()).toEqual(['Brand.zip', 'Autumn.zip', 'Vanilla', 'vanilla']);
+  });
 });
+
+/** Flushes the resolved fake calls and the React updates they trigger. */
+async function settle() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/** The stack list's entries, top first, by their accessible names. */
+function stackNames(): Array<string | null> {
+  return within(screen.getByRole('list', { name: 'Stack order' }))
+    .getAllByRole('listitem')
+    .map((item) => item.getAttribute('aria-label'));
+}
