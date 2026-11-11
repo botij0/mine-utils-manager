@@ -698,6 +698,7 @@ fn import_pack_with_services(
             reason: "source has no file name".to_string(),
         })?;
     let destination = root.join(&file_name);
+    reject_ambiguous_name(&destination, &root)?;
     let destination_taken = std::fs::symlink_metadata(&destination).is_ok();
 
     if let Some(existing_path) = &existing {

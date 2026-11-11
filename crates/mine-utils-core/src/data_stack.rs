@@ -305,8 +305,15 @@ pub fn set_enabled_with_guard(
     enabled: bool,
     guard: &dyn WriteGuard,
 ) -> Result<DataStack, AppError> {
-    validate_filename(filename).map_err(AppError::from)?;
-    pack_scan::reject_ambiguous_name(&paths.datapacks_dir.join(filename), &paths.datapacks_dir)?;
+    if enabled {
+        validate_filename(filename).map_err(AppError::from)?;
+    }
+    if validate_filename(filename).is_ok() {
+        pack_scan::reject_ambiguous_name(
+            &paths.datapacks_dir.join(filename),
+            &paths.datapacks_dir,
+        )?;
+    }
     let change = stack_core::Change::Toggle {
         filename: filename.to_string(),
         enabled,
@@ -331,8 +338,12 @@ pub fn reorder_stack(
 
 /// Remove every reference to a deleted pack from both lists.
 pub fn remove_references(paths: &DataPaths, filename: &str) -> Result<bool, AppError> {
-    validate_filename(filename).map_err(AppError::from)?;
-    pack_scan::reject_ambiguous_name(&paths.datapacks_dir.join(filename), &paths.datapacks_dir)?;
+    if validate_filename(filename).is_ok() {
+        pack_scan::reject_ambiguous_name(
+            &paths.datapacks_dir.join(filename),
+            &paths.datapacks_dir,
+        )?;
+    }
     if !paths.level_dat_path.exists() {
         return Ok(false);
     }
@@ -739,7 +750,6 @@ fn remove_lists(
     lists: &mut stack_core::Lists,
     filename: &str,
 ) -> Result<bool, stack_core::EntryError> {
-    stack_core::validate_filename(filename)?;
     let value = format!("file/{filename}");
     let before = lists.primary.len() + lists.secondary.len();
     lists.primary.retain(|entry| entry != &value);
