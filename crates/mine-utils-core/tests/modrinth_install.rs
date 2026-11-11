@@ -612,6 +612,47 @@ fn colliding_existing_file_reports_collision_and_keeps_dest() {
     assert!(leftovers(&fx.game_dir).is_empty(), "no download temps left");
 }
 
+#[cfg(unix)]
+#[test]
+fn ambiguous_lossy_name_is_refused_before_download() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let fx = fixture();
+    let packs = fx.game_dir.join("resourcepacks");
+    let raw = packs.join(std::ffi::OsStr::from_bytes(b"Caf\xe9.zip"));
+    std::fs::write(&raw, b"raw").unwrap();
+    let lossy = "Caf\u{FFFD}.zip";
+    let bytes = resource_zip();
+    let (client, api) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(RESOURCE_URL, lossy, &sha512_hex(&bytes), &["1.21.10"]),
+            )
+            .with(RESOURCE_URL, bytes),
+    );
+
+    let error = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        lossy,
+        "resourcepack",
+    )
+    .expect_err("an ambiguous name is refused");
+
+    assert_eq!(error.code(), "pack_non_utf8_name");
+    assert!(api.cdn_calls().is_empty(), "nothing was downloaded");
+    let mut names: Vec<_> = std::fs::read_dir(&packs)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec![raw.file_name().unwrap().to_owned()]);
+}
+
 #[test]
 fn datapack_target_version_mismatch_is_refused_before_download() {
     let fx = fixture();

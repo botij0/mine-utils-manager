@@ -201,6 +201,7 @@ pub fn prepare_modrinth_install<T: Transport>(
         SearchKind::Datapack => ZipRoot::Data,
     };
     let dest = target_dir.join(filename);
+    crate::pack_scan::reject_ambiguous_name(&dest, &target_dir)?;
     let source = if dest.is_file() {
         match hash_file(&dest)? {
             hashes if hashes.sha512_eq(&file.hashes.sha512) => {
