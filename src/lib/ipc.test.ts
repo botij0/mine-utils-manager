@@ -233,3 +233,21 @@ describe('mock backend alignment', () => {
   });
 
 });
+
+describe('mock install preflight', () => {
+  beforeEach(async () => {
+    resetMockPacks();
+    resetMockWorlds();
+    setMockGameState('none');
+    await ipc.setActiveGameDir('/home/demo/.minecraft');
+  });
+
+  it('checks the game guard before attempting a resource pack download', async () => {
+    setMockGameState('running');
+    await expect(ipc.installModrinthPack({ projectId: 'demo', versionId: '1', filename: 'offline.zip', kind: 'resourcepack' })).rejects.toMatchObject({ code: 'game_running' });
+  });
+
+  it('checks the target world before attempting a datapack download', async () => {
+    await expect(ipc.installModrinthPack({ projectId: 'demo', versionId: '1', filename: 'offline.zip', kind: 'datapack' })).rejects.toMatchObject({ code: 'modrinth_parse' });
+  });
+});
