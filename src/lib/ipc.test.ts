@@ -201,10 +201,13 @@ describe('mock backend alignment', () => {
     await expect(ipc.listWorlds()).rejects.toMatchObject({ code: 'no_active_game_dir' });
   });
 
-  it('returns duplicate on a second Modrinth install', async () => {
+  it('reuses and re-enables a pack on a second Modrinth install, as Rust does', async () => {
     const args = { projectId: 'demo-pack-01', versionId: 'demo-pack-01-1.0', filename: 'demo-pack-01-1.0.zip', kind: 'resourcepack' } as const;
     expect(await ipc.installModrinthPack(args)).toMatchObject({ outcome: { status: 'imported' } });
-    expect(await ipc.installModrinthPack(args)).toMatchObject({ outcome: { status: 'duplicate' } });
+    await ipc.setResourcePackEnabled('demo-pack-01-1.0.zip', false);
+    expect(await ipc.installModrinthPack(args)).toMatchObject({ outcome: { status: 'imported' } });
+    const entries = (await ipc.getResourceStack()).entries.map((entry) => entry.value);
+    expect(entries.filter((value) => value === 'file/demo-pack-01-1.0.zip')).toHaveLength(1);
   });
 
   it('rebases valid orders and rejects invalid stale orders', async () => {

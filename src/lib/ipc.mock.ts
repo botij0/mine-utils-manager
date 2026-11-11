@@ -630,13 +630,17 @@ export const mockClient: IpcClient = {
       throw new IpcError('modrinth_offline', 'Modrinth is unreachable (simulated offline); check the network');
     }
     if (args.kind === 'datapack') {
-      if (!args.world) throw new IpcError('modrinth_parse', 'a datapack install needs a target world');
-      const outcome = mockImportDatapack(args.world, args.filename, 'default');
+      const outcome = mockImportDatapack(args.world!, args.filename, 'default');
       return { kind: 'datapack', outcome } as ModrinthInstallOutcome;
     }
+    const entry = `file/${args.filename}`;
     const existing = mockPacks.find((pack) => pack.path.endsWith(`/${args.filename}`));
     if (existing) {
-      return { kind: 'resourcepack', outcome: { status: 'duplicate', name: args.filename, sha256: `mock-${args.filename}`, existing: existing.path } };
+      // Rust reuses identical bytes already at the target name and enables them again.
+      if (!mockStack.resource.includes(entry)) {
+        mockStack = { ...mockStack, resource: [...mockStack.resource, entry] };
+      }
+      return { kind: 'resourcepack', outcome: { status: 'imported', pack: existing } } as ModrinthInstallOutcome;
     }
     const pack: Pack = {
       ...makePack(
@@ -653,7 +657,7 @@ export const mockClient: IpcClient = {
     mockPacks = [...mockPacks, pack];
     mockStack = {
       ...mockStack,
-      resource: mockStack.resource.includes(`file/${args.filename}`) ? mockStack.resource : [...mockStack.resource, `file/${args.filename}`],
+      resource: mockStack.resource.includes(entry) ? mockStack.resource : [...mockStack.resource, entry],
     };
     const outcome: ImportOutcome = { status: 'imported', pack };
     return { kind: 'resourcepack', outcome } as ModrinthInstallOutcome;
