@@ -501,3 +501,44 @@ fn unchanged_metadata_reuses_folder_and_zip_hashes() {
         );
     }
 }
+
+#[test]
+fn stale_unsafe_reference_can_be_disabled_and_removed() {
+    let fixture = Fixture::new();
+    let initial = "resourcePacks:[\"vanilla\",\"file/sub/x.zip\"]\n";
+    std::fs::write(&fixture.paths.options_path, initial).unwrap();
+    resource_stack::set_enabled(&fixture.paths, "sub/x.zip", false).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&fixture.paths.options_path).unwrap(),
+        "resourcePacks:[\"vanilla\"]\n"
+    );
+    std::fs::write(&fixture.paths.options_path, initial).unwrap();
+    assert!(resource_stack::remove_references(&fixture.paths, "sub/x.zip").unwrap());
+    assert_eq!(
+        std::fs::read_to_string(&fixture.paths.options_path).unwrap(),
+        "resourcePacks:[\"vanilla\"]\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ambiguous_import_is_refused_before_copy() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    let root = fixture.paths.game_dir.join("resourcepacks");
+    let bad = root.join(std::ffi::OsStr::from_bytes(b"Caf\xe9"));
+    std::fs::write(&bad, b"bad").unwrap();
+    let source = fixture._root.path().join("Caf�");
+    std::fs::rename(&fixture.source, &source).unwrap();
+    let error = resource_stack::import_pack_safely(
+        &fixture.paths,
+        &source,
+        ImportChoice::Replace,
+        &fixture.icons,
+        &HashCache::new(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "pack_non_utf8_name");
+    assert!(!root.join("Caf�").exists());
+    assert_eq!(std::fs::read(bad).unwrap(), b"bad");
+}
