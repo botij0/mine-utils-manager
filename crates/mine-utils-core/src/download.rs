@@ -221,6 +221,9 @@ fn temp_path_for(target_dir: &Path, filename: &str) -> PathBuf {
 
 #[cfg(unix)]
 fn sweep_download_temps(target_dir: &Path) {
+    if !is_local_download_filesystem(target_dir) {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(target_dir) else {
         return;
     };
@@ -266,6 +269,49 @@ fn sweep_download_temps(target_dir: &Path) {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn is_local_download_filesystem(target_dir: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(path) = CString::new(target_dir.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: path is NUL-terminated and stat points to writable storage.
+    if unsafe { libc::statfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    // SAFETY: a successful statfs initialized stat.
+    let stat = unsafe { stat.assume_init() };
+    #[cfg(target_os = "linux")]
+    return is_local_linux_filesystem(stat.f_type as u32);
+    #[cfg(target_os = "macos")]
+    return stat.f_flags & libc::MNT_LOCAL as u32 != 0;
+}
+
+#[cfg(target_os = "linux")]
+fn is_local_linux_filesystem(fs_type: u32) -> bool {
+    const RAMFS_MAGIC: u32 = 0x858458f6;
+
+    // Locks on network and FUSE mounts may not exclude owners on another mount.
+    // Unknown filesystems stay excluded until their locking semantics are known.
+    [
+        libc::EXT4_SUPER_MAGIC as u32,
+        libc::BTRFS_SUPER_MAGIC as u32,
+        libc::XFS_SUPER_MAGIC as u32,
+        libc::F2FS_SUPER_MAGIC as u32,
+        libc::TMPFS_MAGIC as u32,
+        RAMFS_MAGIC,
+    ]
+    .contains(&fs_type)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn is_local_download_filesystem(_target_dir: &Path) -> bool {
+    false
+}
+
 #[cfg(unix)]
 fn sweep_download_temp(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -281,7 +327,6 @@ fn sweep_download_temp(path: &Path) -> std::io::Result<()> {
         return Ok(());
     }
     lock_download_temp(&file, libc::LOCK_EX | libc::LOCK_NB)?;
-    // Shared filesystems may enforce locks only on this machine.
     let old = metadata
         .modified()?
         .elapsed()
@@ -367,9 +412,27 @@ pub fn download_verified_capped<T: Transport>(
         temp_file,
     };
     #[cfg(unix)]
-    lock_download_temp(&verified.temp_file, libc::LOCK_EX).map_err(|err| DownloadError::Io {
-        reason: format!("cannot lock {}: {err}", verified.temp_path.display()),
-    })?;
+    if let Err(err) = lock_download_temp(&verified.temp_file, libc::LOCK_EX) {
+        if err.raw_os_error().is_some_and(|code| {
+            [
+                libc::EOPNOTSUPP,
+                libc::ENOTSUP,
+                libc::ENOLCK,
+                libc::ENOSYS,
+                libc::EINVAL,
+            ]
+            .contains(&code)
+        }) {
+            log::debug!(
+                "download temp lock unavailable for {}: {err}",
+                verified.temp_path.display()
+            );
+        } else {
+            return Err(DownloadError::Io {
+                reason: format!("cannot lock {}: {err}", verified.temp_path.display()),
+            });
+        }
+    }
     let (sha256, bytes) = download_into(
         client,
         url,
@@ -543,5 +606,35 @@ mod tests {
             assert!(validate_filename(bad).is_err(), "{bad:?} must be refused");
         }
         assert!(validate_filename("Fresh Animations v1.9.zip").is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_known_local_filesystems_allow_sweeping() {
+        for local in [
+            0xef53, 0x9123683e, 0x58465342, 0xf2f52010, 0x01021994, 0x858458f6,
+        ] {
+            assert!(is_local_linux_filesystem(local), "{local:#x}");
+        }
+        for (name, fs_type) in [
+            ("NFS", 0x6969),
+            ("SMB", 0x517b),
+            ("CIFS", 0xff534d42),
+            ("SMB2", 0xfe534d42),
+            ("FUSE including SSHFS", 0x65735546),
+            ("9P", 0x01021997),
+            ("AFS", 0x5346414f),
+            ("kAFS", 0x6b414653),
+            ("Ceph", 0x00c36400),
+            ("Lustre", 0x0bd00bd0),
+            ("GFS2", 0x01161970),
+            ("OCFS2", 0x7461636f),
+            ("overlay with unknown backing filesystem", 0x794c7630),
+            ("unknown", 0x12345678),
+            ("zero", 0),
+            ("all bits set", u32::MAX),
+        ] {
+            assert!(!is_local_linux_filesystem(fs_type), "{name}: {fs_type:#x}");
+        }
     }
 }
