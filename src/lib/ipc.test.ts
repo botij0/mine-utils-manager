@@ -170,6 +170,7 @@ describe('mock resource import guards', () => {
   });
 
   it('refuses Modrinth resource installs while Minecraft runs', async () => {
+    await ipc.setActiveGameDir('/home/demo/.minecraft');
     const args = { projectId: 'demo-pack-01', versionId: 'demo-pack-01-1.0', filename: 'demo-pack-01-1.0.zip', kind: 'resourcepack' } as const;
     setMockGameState('running');
     await expect(ipc.installModrinthPack(args)).rejects.toMatchObject({ code: 'game_running' });

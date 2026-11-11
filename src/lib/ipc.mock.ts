@@ -612,19 +612,28 @@ export const mockClient: IpcClient = {
   },
   async installModrinthPack(args: ModrinthInstallArgs) {
     await delay();
+    assertActiveGameDir();
+    if (args.kind === 'datapack') {
+      if (!args.world) {
+        throw new IpcError('modrinth_parse', 'a datapack install needs a target world');
+      }
+      if (mockWorldStacks[args.world] === undefined) {
+        throw new IpcError('world', `world ${args.world} does not exist`);
+      }
+      if (mockLockedWorld !== args.world) assertWritable();
+    } else {
+      assertWritable();
+    }
     const lower = args.filename.toLowerCase();
     assertDownloadHash(args.filename);
     if (lower.includes('offline')) {
       throw new IpcError('modrinth_offline', 'Modrinth is unreachable (simulated offline); check the network');
     }
     if (args.kind === 'datapack') {
-      if (!args.world) {
-        throw new IpcError('modrinth_parse', 'a datapack install needs a target world');
-      }
+      if (!args.world) throw new IpcError('modrinth_parse', 'a datapack install needs a target world');
       const outcome = mockImportDatapack(args.world, args.filename, 'default');
       return { kind: 'datapack', outcome } as ModrinthInstallOutcome;
     }
-    assertWritable();
     const existing = mockPacks.find((pack) => pack.path.endsWith(`/${args.filename}`));
     if (existing) {
       return { kind: 'resourcepack', outcome: { status: 'duplicate', name: args.filename, sha256: `mock-${args.filename}`, existing: existing.path } };
