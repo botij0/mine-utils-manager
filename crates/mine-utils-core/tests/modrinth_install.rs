@@ -220,8 +220,7 @@ fn fixture() -> Fixture {
 
 fn data_paths(fx: &Fixture) -> DataPaths {
     DataPaths::for_world(
-        &fx.game_dir,
-        &fx.game_dir.join("saves").join("alpha"),
+        &mine_utils_core::WorldPaths::for_world(&fx.game_dir, "alpha").unwrap(),
         &fx.data_dir,
         BackupsConfig {
             enabled: true,
@@ -468,7 +467,7 @@ fn datapack_installs_into_the_selected_world_and_enables() {
         .join("datapacks")
         .join(DATAPACK_FILE);
     assert_eq!(std::fs::read(&dest).unwrap(), bytes);
-    let parsed = level_dat::parse(&std::fs::read(paths.level_dat_path).unwrap()).unwrap();
+    let parsed = level_dat::parse(&std::fs::read(paths.level_dat_path()).unwrap()).unwrap();
     assert!(
         parsed
             .enabled
@@ -774,7 +773,7 @@ fn locked_world_copies_but_leaves_the_datapack_disabled() {
     );
     let dest = world_dir.join("datapacks").join(DATAPACK_FILE);
     assert_eq!(std::fs::read(&dest).unwrap(), bytes, "the file is copied");
-    let parsed = level_dat::parse(&std::fs::read(paths.level_dat_path).unwrap()).unwrap();
+    let parsed = level_dat::parse(&std::fs::read(paths.level_dat_path()).unwrap()).unwrap();
     assert!(
         !parsed.enabled.iter().any(|e| e.contains(DATAPACK_FILE)),
         "left disabled"

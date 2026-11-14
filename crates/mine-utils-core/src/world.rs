@@ -58,11 +58,22 @@ pub struct World {
 /// so a crafted name can never escape the game dir.
 #[derive(Debug, Clone)]
 pub struct WorldPaths {
-    pub game_dir: PathBuf,
-    pub world_dir: PathBuf,
+    game_dir: PathBuf,
+    world_dir: PathBuf,
+    name: String,
 }
 
 impl WorldPaths {
+    pub fn game_dir(&self) -> &Path {
+        &self.game_dir
+    }
+    pub fn world_dir(&self) -> &Path {
+        &self.world_dir
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     pub fn for_world(game_dir: &Path, world: &str) -> Result<WorldPaths, crate::error::AppError> {
         if world.is_empty()
             || world == "."
@@ -80,6 +91,7 @@ impl WorldPaths {
         Ok(WorldPaths {
             game_dir: game_dir.to_path_buf(),
             world_dir: resolved,
+            name: world.to_string(),
         })
     }
 }

@@ -54,7 +54,7 @@ impl Fixture {
     }
 
     fn listing(&self) -> Vec<String> {
-        let mut names: Vec<_> = std::fs::read_dir(self.paths.game_dir.join("resourcepacks"))
+        let mut names: Vec<_> = std::fs::read_dir(self.paths.game_dir().join("resourcepacks"))
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
             .collect();
@@ -75,13 +75,13 @@ fn replace_preserves_reference_indices_in_both_options_lists() {
     )
     .unwrap();
     assert!(matches!(outcome, ImportOutcome::Imported { .. }));
-    let after = std::fs::read_to_string(&fixture.paths.options_path).unwrap();
+    let after = std::fs::read_to_string(fixture.paths.options_path()).unwrap();
     assert_eq!(after, AFTER);
     assert_eq!(fixture.listing(), ["Faithful-1.21"]);
-    let backups = mine_utils_core::backup::list(&fixture.paths.backups_root).unwrap();
+    let backups = mine_utils_core::backup::list(fixture.paths.backups_root()).unwrap();
     assert_eq!(backups.len(), 1);
     assert_eq!(
-        std::fs::read_to_string(fixture.paths.backups_root.join(&backups[0].file_name)).unwrap(),
+        std::fs::read_to_string(fixture.paths.backups_root().join(&backups[0].file_name)).unwrap(),
         BEFORE
     );
     println!(
@@ -138,7 +138,7 @@ fn each_guard_refusal_keeps_the_original_and_never_trashes() {
             std::fs::read_to_string(
                 fixture
                     .paths
-                    .game_dir
+                    .game_dir()
                     .join("resourcepacks/Faithful/pack.mcmeta")
             )
             .unwrap(),
@@ -147,7 +147,7 @@ fn each_guard_refusal_keeps_the_original_and_never_trashes() {
         assert_eq!(*trash.0.borrow(), Vec::<PathBuf>::new());
         if fail_at <= 5 {
             assert_eq!(
-                std::fs::read_to_string(&fixture.paths.options_path).unwrap(),
+                std::fs::read_to_string(fixture.paths.options_path()).unwrap(),
                 BEFORE
             );
         }
@@ -192,7 +192,7 @@ fn held_game_lock_refuses_replace_without_changing_the_folder() {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     let fixture = Fixture::new();
-    let world = fixture.paths.game_dir.join("saves/world");
+    let world = fixture.paths.game_dir().join("saves/world");
     std::fs::create_dir_all(&world).unwrap();
     let lock = world.join("session.lock");
     std::fs::write(&lock, [0]).unwrap();
@@ -231,7 +231,7 @@ fn held_game_lock_refuses_replace_without_changing_the_folder() {
     assert_eq!(before, ["Faithful"]);
     assert_eq!(fixture.listing(), ["Faithful"]);
     assert_eq!(
-        std::fs::read_to_string(&fixture.paths.options_path).unwrap(),
+        std::fs::read_to_string(fixture.paths.options_path()).unwrap(),
         BEFORE
     );
     println!(
@@ -266,7 +266,7 @@ fn post_commit_guard_error_reports_the_installed_and_restored_packs() {
     assert_eq!(wire.as_object().unwrap().len(), 2);
     assert_eq!(fixture.listing(), ["Faithful", "Faithful-1.21"]);
     assert_eq!(
-        std::fs::read_to_string(&fixture.paths.options_path).unwrap(),
+        std::fs::read_to_string(fixture.paths.options_path()).unwrap(),
         AFTER
     );
     let message = err.to_string();
@@ -275,7 +275,7 @@ fn post_commit_guard_error_reports_the_installed_and_restored_packs() {
             "New pack installed at {}",
             fixture
                 .paths
-                .game_dir
+                .game_dir()
                 .join("resourcepacks/Faithful-1.21")
                 .display()
         )),
@@ -286,7 +286,7 @@ fn post_commit_guard_error_reports_the_installed_and_restored_packs() {
             "Original pack retained at {}",
             fixture
                 .paths
-                .game_dir
+                .game_dir()
                 .join("resourcepacks/Faithful")
                 .display()
         )),
@@ -318,7 +318,7 @@ fn different_name_replace_trashes_the_original_name() {
     assert!(matches!(outcome, ImportOutcome::Imported { .. }));
     assert_eq!(
         *trash.0.borrow(),
-        [fixture.paths.game_dir.join("resourcepacks/Faithful")]
+        [fixture.paths.game_dir().join("resourcepacks/Faithful")]
     );
     assert_eq!(fixture.listing(), ["Faithful-1.21"]);
 }
@@ -332,7 +332,7 @@ fn hidden_import_sources_are_refused_inside_and_outside_the_pack_folder() {
         ] {
             let fixture = Fixture::new();
             let root = if inside {
-                fixture.paths.game_dir.join("resourcepacks")
+                fixture.paths.game_dir().join("resourcepacks")
             } else {
                 fixture._root.path().join("incoming")
             };
@@ -383,7 +383,7 @@ fn same_name_post_commit_guard_error_names_the_holding_path() {
     )
     .unwrap_err();
     assert_eq!(err.code(), "game_running");
-    let holding = std::fs::read_dir(fixture.paths.game_dir.join("resourcepacks"))
+    let holding = std::fs::read_dir(fixture.paths.game_dir().join("resourcepacks"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .find(|path| {
@@ -407,7 +407,7 @@ fn same_name_post_commit_guard_error_names_the_holding_path() {
             "New pack installed at {}",
             fixture
                 .paths
-                .game_dir
+                .game_dir()
                 .join("resourcepacks/Faithful")
                 .display()
         )),
@@ -506,16 +506,16 @@ fn unchanged_metadata_reuses_folder_and_zip_hashes() {
 fn stale_unsafe_reference_can_be_disabled_and_removed() {
     let fixture = Fixture::new();
     let initial = "resourcePacks:[\"vanilla\",\"file/sub/x.zip\"]\n";
-    std::fs::write(&fixture.paths.options_path, initial).unwrap();
+    std::fs::write(fixture.paths.options_path(), initial).unwrap();
     resource_stack::set_enabled(&fixture.paths, "sub/x.zip", false).unwrap();
     assert_eq!(
-        std::fs::read_to_string(&fixture.paths.options_path).unwrap(),
+        std::fs::read_to_string(fixture.paths.options_path()).unwrap(),
         "resourcePacks:[\"vanilla\"]\n"
     );
-    std::fs::write(&fixture.paths.options_path, initial).unwrap();
+    std::fs::write(fixture.paths.options_path(), initial).unwrap();
     assert!(resource_stack::remove_references(&fixture.paths, "sub/x.zip").unwrap());
     assert_eq!(
-        std::fs::read_to_string(&fixture.paths.options_path).unwrap(),
+        std::fs::read_to_string(fixture.paths.options_path()).unwrap(),
         "resourcePacks:[\"vanilla\"]\n"
     );
 }
@@ -525,7 +525,7 @@ fn stale_unsafe_reference_can_be_disabled_and_removed() {
 fn ambiguous_import_is_refused_before_copy() {
     use std::os::unix::ffi::OsStrExt;
     let fixture = Fixture::new();
-    let root = fixture.paths.game_dir.join("resourcepacks");
+    let root = fixture.paths.game_dir().join("resourcepacks");
     let bad = root.join(std::ffi::OsStr::from_bytes(b"Caf\xe9"));
     std::fs::write(&bad, b"bad").unwrap();
     let source = fixture._root.path().join("Caf�");

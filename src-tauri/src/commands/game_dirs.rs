@@ -124,8 +124,7 @@ impl GameDirSnapshot {
     pub fn world_data_paths(&self, world: &str) -> Result<DataPaths, AppError> {
         let resolved = WorldPaths::for_world(&self.game_dir, world)?;
         Ok(DataPaths::for_world(
-            &self.game_dir,
-            &resolved.world_dir,
+            &resolved,
             &self.data_dir,
             self.backups.clone(),
         ))

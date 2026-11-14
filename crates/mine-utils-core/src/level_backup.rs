@@ -219,10 +219,7 @@ where
             Ok(())
         },
         |bytes| {
-            level_dat::write_level_dat(
-                level_dat_path.parent().unwrap_or_else(|| Path::new(".")),
-                bytes,
-            )?;
+            level_dat::write_level_dat(level_dat_path, bytes)?;
             Ok(())
         },
         before_write,

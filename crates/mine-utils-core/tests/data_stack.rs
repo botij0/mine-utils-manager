@@ -66,17 +66,14 @@ fn temp_world(enabled: &[&str], disabled: &[&str]) -> World {
     std::fs::create_dir_all(world.join("datapacks")).unwrap();
     let bytes = level_bytes(enabled, disabled);
     std::fs::write(world.join("level.dat"), &bytes).unwrap();
-    let paths = DataPaths {
-        game_dir: game.clone(),
-        world_dir: world.clone(),
-        level_dat_path: world.join("level.dat"),
-        datapacks_dir: world.join("datapacks"),
-        backups_root: dir.path().join("data").join("backups"),
-        backups: BackupsConfig {
+    let paths = DataPaths::for_world(
+        &mine_utils_core::WorldPaths::for_world(&game, "alpha").unwrap(),
+        &dir.path().join("data"),
+        BackupsConfig {
             enabled: true,
             keep: 10,
         },
-    };
+    );
     World {
         _dir: dir,
         paths,
@@ -85,8 +82,18 @@ fn temp_world(enabled: &[&str], disabled: &[&str]) -> World {
     }
 }
 
+#[test]
+fn paths_use_the_validated_world_name_and_level_target() {
+    let world = temp_world(&["vanilla"], &[]);
+    assert_eq!(world.paths.world_name(), "alpha");
+    assert_eq!(
+        world.paths.level_dat_path(),
+        world.paths.world_dir().join("level.dat")
+    );
+}
+
 fn view(paths: &DataPaths) -> (Vec<String>, Vec<String>) {
-    let bytes = std::fs::read(&paths.level_dat_path).unwrap();
+    let bytes = std::fs::read(paths.level_dat_path()).unwrap();
     let parsed = level_dat::parse(&bytes).unwrap();
     (parsed.enabled, parsed.disabled)
 }
@@ -227,43 +234,43 @@ fn datapack_source(dir: &Path, name: &str) -> PathBuf {
 #[test]
 fn commit_backs_up_before_writing() {
     let world = temp_world(&["vanilla"], &[]);
-    let before = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let before = std::fs::read(world.paths.level_dat_path()).unwrap();
     let stack =
         data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard).unwrap();
     assert!(stack.enabled.iter().any(|e| e.value() == "file/a.zip"));
-    let backups = mine_utils_core::level_backup::list(&world.paths.backups_root, "alpha").unwrap();
+    let backups = mine_utils_core::level_backup::list(world.paths.backups_root(), "alpha").unwrap();
     assert_eq!(backups.len(), 1, "one backup per write");
     assert_eq!(
-        std::fs::read(world.paths.backups_root.join(&backups[0].file_name)).unwrap(),
+        std::fs::read(world.paths.backups_root().join(&backups[0].file_name)).unwrap(),
         before,
         "the backup holds the pre-write bytes"
     );
     let (enabled, _) = view(&world.paths);
     assert!(enabled.contains(&"file/a.zip".to_string()));
-    let after = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let after = std::fs::read(world.paths.level_dat_path()).unwrap();
     level_dat::assert_outside_datapacks_unchanged(&before, &after).unwrap();
 }
 
 #[test]
 fn guard_failure_after_the_backup_keeps_the_old_bytes_and_the_backup() {
     let world = temp_world(&["vanilla"], &[]);
-    let before = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let before = std::fs::read(world.paths.level_dat_path()).unwrap();
     let guard = ScriptedGuard::failing_at(2);
     let err = data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &guard).unwrap_err();
     assert_eq!(err.code(), "game_running");
     assert_eq!(
-        std::fs::read(&world.paths.level_dat_path).unwrap(),
+        std::fs::read(world.paths.level_dat_path()).unwrap(),
         before,
         "the old bytes survive a guard failure before the replace"
     );
-    let backups = mine_utils_core::level_backup::list(&world.paths.backups_root, "alpha").unwrap();
+    let backups = mine_utils_core::level_backup::list(world.paths.backups_root(), "alpha").unwrap();
     assert_eq!(backups.len(), 1, "the previous bytes became a backup");
 }
 
 #[test]
 fn external_write_between_backup_and_replace_is_rebased_once() {
     let world = temp_world(&["vanilla"], &[]);
-    let guard = RaceGuard::once(world.paths.level_dat_path.clone());
+    let guard = RaceGuard::once(world.paths.level_dat_path().to_path_buf());
     let stack = data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &guard).unwrap();
     let values: Vec<&str> = stack.enabled.iter().map(|e| e.value()).collect();
     assert!(
@@ -282,7 +289,7 @@ fn external_write_between_backup_and_replace_is_rebased_once() {
 #[test]
 fn a_second_race_comes_back_stale() {
     let world = temp_world(&["vanilla"], &[]);
-    let guard = RaceGuard::always(world.paths.level_dat_path.clone());
+    let guard = RaceGuard::always(world.paths.level_dat_path().to_path_buf());
     let err = data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &guard).unwrap_err();
     assert_eq!(err.code(), "stale_stack");
 }
@@ -307,7 +314,7 @@ fn import_copies_validates_and_enables() {
             filename: "cool-pack".to_string()
         }
     );
-    assert!(world.paths.datapacks_dir.join("cool-pack").is_dir());
+    assert!(world.paths.datapacks_dir().join("cool-pack").is_dir());
     let (enabled, _) = view(&world.paths);
     assert!(enabled.contains(&"file/cool-pack".to_string()));
 }
@@ -329,7 +336,7 @@ fn running_game_refusal_copies_nothing() {
     .unwrap_err();
     assert_eq!(err.code(), "game_running");
     assert!(
-        !world.paths.datapacks_dir.join("cool-pack").exists(),
+        !world.paths.datapacks_dir().join("cool-pack").exists(),
         "a refused game copies nothing"
     );
     let (enabled, _) = view(&world.paths);
@@ -357,7 +364,7 @@ fn locked_world_copy_leaves_the_pack_disabled() {
         matches!(outcome, data_stack::DatapackImportOutcome::Locked { .. }),
         "a locked world copies but stays disabled, got {outcome:?}"
     );
-    assert!(world.paths.datapacks_dir.join("cool-pack").is_dir());
+    assert!(world.paths.datapacks_dir().join("cool-pack").is_dir());
     let (enabled, disabled) = view(&world.paths);
     assert!(!enabled.contains(&"file/cool-pack".to_string()));
     assert!(!disabled.contains(&"file/cool-pack".to_string()));
@@ -366,7 +373,7 @@ fn locked_world_copy_leaves_the_pack_disabled() {
 #[test]
 fn import_collision_symlink_and_resource_only_are_refused() {
     let world = temp_world(&["vanilla"], &[]);
-    std::fs::write(world.paths.datapacks_dir.join("taken.zip"), b"installed").unwrap();
+    std::fs::write(world.paths.datapacks_dir().join("taken.zip"), b"installed").unwrap();
     let clash_dir = datapack_source(world._dir.path(), "taken.zip");
     // A directory source colliding with an installed zip name reports a
     // collision and removes nothing.
@@ -387,7 +394,7 @@ fn import_collision_symlink_and_resource_only_are_refused() {
         }
     );
     assert_eq!(
-        std::fs::read(world.paths.datapacks_dir.join("taken.zip")).unwrap(),
+        std::fs::read(world.paths.datapacks_dir().join("taken.zip")).unwrap(),
         b"installed"
     );
 
@@ -447,7 +454,7 @@ fn broken_zip_is_refused_before_any_copy() {
     .unwrap_err();
     assert_eq!(err.code(), "pack_broken_archive");
     assert!(
-        std::fs::read_dir(&world.paths.datapacks_dir)
+        std::fs::read_dir(world.paths.datapacks_dir())
             .unwrap()
             .next()
             .is_none(),
@@ -478,7 +485,7 @@ fn failing_trash(path: &Path) -> Result<(), PackError> {
 #[test]
 fn delete_disables_the_pack_before_the_trash_and_drops_it_after() {
     let world = temp_world(&["vanilla", "file/gone.zip"], &["file/old.zip"]);
-    let pack = world.paths.datapacks_dir.join("gone.zip");
+    let pack = world.paths.datapacks_dir().join("gone.zip");
     std::fs::write(&pack, b"zip").unwrap();
     let at_trash = RefCell::new(None);
     let trash = FnTrash(|_: &Path| {
@@ -499,7 +506,7 @@ fn delete_disables_the_pack_before_the_trash_and_drops_it_after() {
 #[test]
 fn delete_trash_failure_keeps_a_disabled_pack_disabled() {
     let world = temp_world(&["vanilla"], &["file/old.zip"]);
-    let pack = world.paths.datapacks_dir.join("old.zip");
+    let pack = world.paths.datapacks_dir().join("old.zip");
     std::fs::write(&pack, b"zip").unwrap();
     let err = data_stack::delete_datapack_safely_with_guard(
         &world.paths,
@@ -516,7 +523,7 @@ fn delete_trash_failure_keeps_a_disabled_pack_disabled() {
 #[test]
 fn delete_second_guard_failure_leaves_the_pack_disabled_and_untrashed() {
     let world = temp_world(&["vanilla", "file/gone.zip"], &[]);
-    let pack = world.paths.datapacks_dir.join("gone.zip");
+    let pack = world.paths.datapacks_dir().join("gone.zip");
     std::fs::write(&pack, b"zip").unwrap();
     let trash = RecordingTrash::new();
     let guard = ScriptedGuard::failing_at(2);
@@ -535,10 +542,10 @@ fn delete_succeeds_when_the_cleanup_after_the_trash_fails() {
         &["vanilla", "file/keep.zip", "file/gone.zip"],
         &["file/old.zip"],
     );
-    let pack = world.paths.datapacks_dir.join("gone.zip");
+    let pack = world.paths.datapacks_dir().join("gone.zip");
     std::fs::write(&pack, b"zip").unwrap();
     let trash_then_lock_world = FnTrash(|_: &Path| {
-        std::fs::create_dir(world.paths.world_dir.join("session.lock")).unwrap();
+        std::fs::create_dir(world.paths.world_dir().join("session.lock")).unwrap();
         Ok(())
     });
     let outcome = data_stack::delete_datapack_safely_with_guard(
@@ -559,11 +566,11 @@ fn delete_succeeds_when_the_cleanup_after_the_trash_fails() {
 }
 
 fn backed_up_lists(paths: &DataPaths) -> Vec<(Vec<String>, Vec<String>)> {
-    mine_utils_core::level_backup::list(&paths.backups_root, "alpha")
+    mine_utils_core::level_backup::list(paths.backups_root(), "alpha")
         .unwrap()
         .iter()
         .map(|backup| {
-            let bytes = std::fs::read(paths.backups_root.join(&backup.file_name)).unwrap();
+            let bytes = std::fs::read(paths.backups_root().join(&backup.file_name)).unwrap();
             let parsed = level_dat::parse(&bytes).unwrap();
             (parsed.enabled, parsed.disabled)
         })
@@ -572,8 +579,15 @@ fn backed_up_lists(paths: &DataPaths) -> Vec<(Vec<String>, Vec<String>)> {
 
 fn delete_gone_pack(enabled: &[&str], disabled: &[&str], keep: u32) -> World {
     let mut world = temp_world(enabled, disabled);
-    world.paths.backups.keep = keep;
-    let pack = world.paths.datapacks_dir.join("gone.zip");
+    world.paths = DataPaths::for_world(
+        &mine_utils_core::WorldPaths::for_world(world.paths.game_dir(), "alpha").unwrap(),
+        &world._dir.path().join("data"),
+        BackupsConfig {
+            enabled: true,
+            keep,
+        },
+    );
+    let pack = world.paths.datapacks_dir().join("gone.zip");
     std::fs::write(&pack, b"zip").unwrap();
     data_stack::delete_datapack_safely_with_guard(
         &world.paths,
@@ -614,9 +628,8 @@ fn delete_of_a_disabled_pack_backs_up_the_pre_delete_file() {
 
 #[test]
 fn delete_of_an_unlisted_pack_backs_up_the_pre_delete_file() {
-    let mut world = temp_world(&["vanilla"], &["file/old.zip"]);
-    world.paths.backups.keep = 10;
-    let pack = world.paths.datapacks_dir.join("gone.zip");
+    let world = temp_world(&["vanilla"], &["file/old.zip"]);
+    let pack = world.paths.datapacks_dir().join("gone.zip");
     std::fs::write(&pack, b"zip").unwrap();
     let outcome = data_stack::delete_datapack_safely_with_guard(
         &world.paths,
@@ -651,10 +664,10 @@ fn restore_refuses_legacy_current_with_different_seed() {
     );
     let backup = level_dat::gzip(&fastnbt::to_bytes(&backup).unwrap());
     let created = mine_utils_core::level_backup::create(
-        &world.paths.backups_root,
+        world.paths.backups_root(),
         "alpha",
         &backup,
-        &world.paths.backups,
+        world.paths.backups(),
     )
     .unwrap()
     .created
@@ -672,91 +685,97 @@ fn restore_refuses_legacy_current_with_different_seed() {
         .collect(),
     );
     let current = level_dat::gzip(&fastnbt::to_bytes(&current).unwrap());
-    std::fs::write(&world.paths.level_dat_path, &current).unwrap();
+    std::fs::write(world.paths.level_dat_path(), &current).unwrap();
     let err = data_stack::restore_backup(&world.paths, &created.file_name).unwrap_err();
     assert_eq!(err.code(), "world_mismatch");
-    assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), current);
+    assert_eq!(
+        std::fs::read(world.paths.level_dat_path()).unwrap(),
+        current
+    );
 }
 
 #[test]
 fn restore_replaces_and_backs_up_current() {
     let world = temp_world(&["vanilla"], &[]);
-    let first = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let first = std::fs::read(world.paths.level_dat_path()).unwrap();
     let created = mine_utils_core::level_backup::create(
-        &world.paths.backups_root,
+        world.paths.backups_root(),
         "alpha",
         &first,
-        &world.paths.backups,
+        world.paths.backups(),
     )
     .unwrap()
     .created
     .unwrap();
     data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard).unwrap();
-    let modified = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let modified = std::fs::read(world.paths.level_dat_path()).unwrap();
     assert_ne!(modified, first);
     data_stack::restore_backup(&world.paths, &created.file_name).unwrap();
-    assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), first);
-    let backups = mine_utils_core::level_backup::list(&world.paths.backups_root, "alpha").unwrap();
+    assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), first);
+    let backups = mine_utils_core::level_backup::list(world.paths.backups_root(), "alpha").unwrap();
     assert!(backups.len() >= 2, "the replaced bytes became a backup");
 }
 
 #[test]
 fn restore_of_a_corrupt_world_works_through_the_backend() {
     let world = temp_world(&["vanilla"], &[]);
-    let first = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let first = std::fs::read(world.paths.level_dat_path()).unwrap();
     let created = mine_utils_core::level_backup::create(
-        &world.paths.backups_root,
+        world.paths.backups_root(),
         "alpha",
         &first,
-        &world.paths.backups,
+        world.paths.backups(),
     )
     .unwrap()
     .created
     .unwrap();
-    std::fs::write(&world.paths.level_dat_path, b"not gzip").unwrap();
+    std::fs::write(world.paths.level_dat_path(), b"not gzip").unwrap();
     data_stack::restore_backup(&world.paths, &created.file_name).unwrap();
-    assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), first);
+    assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), first);
 }
 
 #[test]
 fn restore_recreates_a_missing_level_dat() {
     let world = temp_world(&["vanilla"], &[]);
-    let first = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let first = std::fs::read(world.paths.level_dat_path()).unwrap();
     let created = mine_utils_core::level_backup::create(
-        &world.paths.backups_root,
+        world.paths.backups_root(),
         "alpha",
         &first,
-        &world.paths.backups,
+        world.paths.backups(),
     )
     .unwrap()
     .created
     .unwrap();
-    std::fs::remove_file(&world.paths.level_dat_path).unwrap();
+    std::fs::remove_file(world.paths.level_dat_path()).unwrap();
     data_stack::restore_backup(&world.paths, &created.file_name).unwrap();
-    assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), first);
+    assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), first);
 }
 
 #[test]
 fn restore_malformed_backup_leaves_current_file() {
     let world = temp_world(&["vanilla"], &[]);
-    let current = std::fs::read(&world.paths.level_dat_path).unwrap();
-    std::fs::create_dir_all(&world.paths.backups_root).unwrap();
+    let current = std::fs::read(world.paths.level_dat_path()).unwrap();
+    std::fs::create_dir_all(world.paths.backups_root()).unwrap();
     let name = "20260101T000000.000000000-alpha-level.dat";
-    std::fs::write(world.paths.backups_root.join(name), b"not nbt").unwrap();
+    std::fs::write(world.paths.backups_root().join(name), b"not nbt").unwrap();
     let err = data_stack::restore_backup(&world.paths, name).unwrap_err();
     assert_eq!(err.code(), "level_backup");
-    assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), current);
+    assert_eq!(
+        std::fs::read(world.paths.level_dat_path()).unwrap(),
+        current
+    );
 }
 
 #[test]
 fn restore_guard_failure_leaves_current_file() {
     let world = temp_world(&["vanilla"], &[]);
-    let current = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let current = std::fs::read(world.paths.level_dat_path()).unwrap();
     let created = mine_utils_core::level_backup::create(
-        &world.paths.backups_root,
+        world.paths.backups_root(),
         "alpha",
         &current,
-        &world.paths.backups,
+        world.paths.backups(),
     )
     .unwrap()
     .created
@@ -767,7 +786,10 @@ fn restore_guard_failure_leaves_current_file() {
     let err = data_stack::restore_backup_with_guard(&world.paths, &created.file_name, &guard)
         .unwrap_err();
     assert_eq!(err.code(), "game_running");
-    assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), current);
+    assert_eq!(
+        std::fs::read(world.paths.level_dat_path()).unwrap(),
+        current
+    );
 }
 
 /// Spawned helper: holds a POSIX write lock on `$MINE_UTILS_LOCK_HOLDER`
@@ -846,7 +868,7 @@ fn replace_commits_the_new_datapack_before_trashing_the_holding_folder() {
     let observed = RefCell::new(None);
     let trash = FnTrash(|holding: &Path| {
         *observed.borrow_mut() = Some((
-            std::fs::read(world.paths.datapacks_dir.join("cool-pack/data/new.json")).unwrap(),
+            std::fs::read(world.paths.datapacks_dir().join("cool-pack/data/new.json")).unwrap(),
             holding
                 .file_name()
                 .unwrap()
@@ -887,15 +909,15 @@ fn replace_commits_the_new_datapack_before_trashing_the_holding_folder() {
 fn locked_world_replace_is_refused_before_any_trash() {
     let world = temp_world(&["vanilla"], &[]);
     let source = install_pack(&world, "cool-pack");
-    let installed = world.paths.datapacks_dir.join("cool-pack");
+    let installed = world.paths.datapacks_dir().join("cool-pack");
     assert!(installed.is_dir(), "setup installed the pack");
-    let before = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let before = std::fs::read(world.paths.level_dat_path()).unwrap();
 
-    let lock_path = world.paths.world_dir.join("session.lock");
+    let lock_path = world.paths.world_dir().join("session.lock");
     std::fs::write(&lock_path, b"\x00").unwrap();
     let mut child = spawn_lock_holder(&lock_path);
     assert!(
-        wait_for_world_lock(&world.paths.world_dir),
+        wait_for_world_lock(world.paths.world_dir()),
         "a second process holds the world lock"
     );
 
@@ -923,7 +945,7 @@ fn locked_world_replace_is_refused_before_any_trash() {
     );
     assert!(trash.calls().is_empty(), "nothing was trashed");
     assert_eq!(
-        std::fs::read(&world.paths.level_dat_path).unwrap(),
+        std::fs::read(world.paths.level_dat_path()).unwrap(),
         before,
         "level.dat is untouched"
     );
@@ -933,15 +955,15 @@ fn locked_world_replace_is_refused_before_any_trash() {
 fn locked_world_collision_replace_is_refused() {
     let world = temp_world(&["vanilla"], &[]);
     install_pack(&world, "clash-pack");
-    let installed_pack = world.paths.datapacks_dir.join("clash-pack");
+    let installed_pack = world.paths.datapacks_dir().join("clash-pack");
     assert!(installed_pack.is_dir());
     let installed_meta_before = std::fs::read(installed_pack.join("pack.mcmeta")).unwrap();
-    let level_before = std::fs::read(&world.paths.level_dat_path).unwrap();
+    let level_before = std::fs::read(world.paths.level_dat_path()).unwrap();
 
-    let lock_path = world.paths.world_dir.join("session.lock");
+    let lock_path = world.paths.world_dir().join("session.lock");
     std::fs::write(&lock_path, b"\x00").unwrap();
     let mut child = spawn_lock_holder(&lock_path);
-    assert!(wait_for_world_lock(&world.paths.world_dir));
+    assert!(wait_for_world_lock(world.paths.world_dir()));
 
     // A colliding source: same file name as the installed pack, different
     // bytes, so `Replace` would trash the installed pack to install it.
@@ -979,7 +1001,7 @@ fn locked_world_collision_replace_is_refused() {
         "the installed bytes are untouched"
     );
     assert_eq!(
-        std::fs::read(&world.paths.level_dat_path).unwrap(),
+        std::fs::read(world.paths.level_dat_path()).unwrap(),
         level_before,
         "level.dat is untouched"
     );
@@ -992,8 +1014,8 @@ fn symlinked_level_dat_is_never_written() {
     let world = temp_world(&["vanilla"], &["file/a.zip"]);
     let outside = world._dir.path().join("outside.dat");
     std::fs::write(&outside, b"precious").unwrap();
-    std::fs::remove_file(&world.paths.level_dat_path).unwrap();
-    std::os::unix::fs::symlink(&outside, &world.paths.level_dat_path).unwrap();
+    std::fs::remove_file(world.paths.level_dat_path()).unwrap();
+    std::os::unix::fs::symlink(&outside, world.paths.level_dat_path()).unwrap();
 
     let err =
         data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard).unwrap_err();
@@ -1008,7 +1030,7 @@ fn symlinked_level_dat_is_never_written() {
         "nothing was written through the link"
     );
     assert!(
-        std::fs::symlink_metadata(&world.paths.level_dat_path)
+        std::fs::symlink_metadata(world.paths.level_dat_path())
             .unwrap()
             .file_type()
             .is_symlink(),
@@ -1023,10 +1045,10 @@ fn symlinked_datapacks_dir_fails_closed() {
     let outside = world._dir.path().join("outside-packs");
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(outside.join("mine.txt"), b"precious").unwrap();
-    std::fs::remove_dir(&world.paths.datapacks_dir).unwrap();
-    std::os::unix::fs::symlink(&outside, &world.paths.datapacks_dir).unwrap();
+    std::fs::remove_dir(world.paths.datapacks_dir()).unwrap();
+    std::os::unix::fs::symlink(&outside, world.paths.datapacks_dir()).unwrap();
 
-    let err = data_stack::scan_datapacks(&world.paths.datapacks_dir, &world.icons).unwrap_err();
+    let err = data_stack::scan_datapacks(world.paths.datapacks_dir(), &world.icons).unwrap_err();
     assert_eq!(
         err.code(),
         "world",
@@ -1064,11 +1086,11 @@ fn symlinked_datapacks_dir_fails_closed() {
 #[test]
 fn replace_backup_failure_keeps_the_original_at_its_name() {
     let world = temp_world(&["vanilla", "file/old"], &[]);
-    let old = datapack_source(&world.paths.datapacks_dir, "old");
+    let old = datapack_source(world.paths.datapacks_dir(), "old");
     let source = datapack_source(world._dir.path(), "new");
-    std::fs::create_dir_all(world.paths.backups_root.parent().unwrap()).unwrap();
-    std::fs::write(&world.paths.backups_root, b"backup directory blocked").unwrap();
-    let before = std::fs::read(&world.paths.level_dat_path).unwrap();
+    std::fs::create_dir_all(world.paths.backups_root().parent().unwrap()).unwrap();
+    std::fs::write(world.paths.backups_root(), b"backup directory blocked").unwrap();
+    let before = std::fs::read(world.paths.level_dat_path()).unwrap();
     let trash = FnTrash(|path: &Path| {
         std::fs::remove_dir_all(path).unwrap();
         Ok(())
@@ -1087,8 +1109,12 @@ fn replace_backup_failure_keeps_the_original_at_its_name() {
         std::fs::read(old.join("pack.mcmeta")).unwrap(),
         br#"{"pack": {"pack_format": 48, "description": "temp"}}"#
     );
-    assert_eq!(std::fs::read(&world.paths.level_dat_path).unwrap(), before);
-    assert!(world.paths.datapacks_dir.join("new/pack.mcmeta").is_file());
+    assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), before);
+    assert!(world
+        .paths
+        .datapacks_dir()
+        .join("new/pack.mcmeta")
+        .is_file());
     assert!(
         err.to_string()
             .contains(&format!("Original pack retained at {}", old.display())),
@@ -1103,7 +1129,7 @@ fn replace_backup_failure_keeps_the_original_at_its_name() {
 #[test]
 fn replace_updates_level_dat_before_trashing_the_original() {
     let world = temp_world(&["vanilla"], &[]);
-    datapack_source(&world.paths.datapacks_dir, "old");
+    datapack_source(world.paths.datapacks_dir(), "old");
     let source = datapack_source(world._dir.path(), "new");
     let observed = RefCell::new(None);
     let trash = FnTrash(|path: &Path| {
@@ -1152,7 +1178,7 @@ fn ambiguous_import_is_refused_before_copy() {
     let world = temp_world(&["vanilla"], &[]);
     let bad = world
         .paths
-        .datapacks_dir
+        .datapacks_dir()
         .join(std::ffi::OsStr::from_bytes(b"Caf\xe9"));
     std::fs::write(&bad, b"bad").unwrap();
     let source = datapack_source(world._dir.path(), "Caf�");
@@ -1167,6 +1193,6 @@ fn ambiguous_import_is_refused_before_copy() {
     )
     .unwrap_err();
     assert_eq!(error.code(), "pack_non_utf8_name");
-    assert!(!world.paths.datapacks_dir.join("Caf�").exists());
+    assert!(!world.paths.datapacks_dir().join("Caf�").exists());
     assert_eq!(std::fs::read(bad).unwrap(), b"bad");
 }

@@ -49,7 +49,7 @@ pub async fn set_resource_pack_enabled(
 ) -> Result<ResourceStack, AppError> {
     state.note_ipc();
     let paths = state.stack_paths()?;
-    let guard = stack.lock_for(&paths.game_dir);
+    let guard = stack.lock_for(paths.game_dir());
     tauri::async_runtime::spawn_blocking(move || {
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         resource_stack::set_enabled(&paths, &filename, enabled)
@@ -70,7 +70,7 @@ pub async fn reorder_resource_stack(
 ) -> Result<ResourceStack, AppError> {
     state.note_ipc();
     let paths = state.stack_paths()?;
-    let guard = stack.lock_for(&paths.game_dir);
+    let guard = stack.lock_for(paths.game_dir());
     tauri::async_runtime::spawn_blocking(move || {
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         resource_stack::reorder_stack(&paths, &order, &expected)
@@ -84,7 +84,7 @@ pub async fn reorder_resource_stack(
 pub async fn list_options_backups(state: State<'_, AppState>) -> Result<Vec<BackupInfo>, AppError> {
     state.note_ipc();
     let paths = state.stack_paths()?;
-    tauri::async_runtime::spawn_blocking(move || backup::list(&paths.backups_root))
+    tauri::async_runtime::spawn_blocking(move || backup::list(paths.backups_root()))
         .await
         .map_err(join_error)?
 }
@@ -98,7 +98,7 @@ pub async fn restore_options_backup(
 ) -> Result<ResourceStack, AppError> {
     state.note_ipc();
     let paths = state.stack_paths()?;
-    let guard = stack.lock_for(&paths.game_dir);
+    let guard = stack.lock_for(paths.game_dir());
     tauri::async_runtime::spawn_blocking(move || {
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         resource_stack::restore_backup(&paths, &backup)

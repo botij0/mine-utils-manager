@@ -65,7 +65,7 @@ pub async fn import_resource_pack(
 ) -> Result<ImportOutcome, AppError> {
     state.note_ipc();
     let paths = state.stack_paths()?;
-    let guard = stack.lock_for(&paths.game_dir);
+    let guard = stack.lock_for(paths.game_dir());
     let icons = packs.icons();
     let hashes = packs.hashes();
     tauri::async_runtime::spawn_blocking(move || {
@@ -93,7 +93,7 @@ pub async fn delete_resource_pack(
     // One config read decides the root and the stack paths, so a concurrent
     // active-dir change cannot split the delete across two game dirs.
     let stack_paths = state.stack_paths()?;
-    let guard = stack.lock_for(&stack_paths.game_dir);
+    let guard = stack.lock_for(stack_paths.game_dir());
     tauri::async_runtime::spawn_blocking(move || {
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         resource_stack::delete_pack_safely(&stack_paths, Path::new(&path), &SystemTrash).map(|_| ())

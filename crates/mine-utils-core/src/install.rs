@@ -121,24 +121,24 @@ pub fn prepare_modrinth_install<T: Transport>(
             let resolved = WorldPaths::for_world(game_dir, name)?;
             // A symlinked datapacks folder or level.dat fails here, before any
             // metadata or CDN request, with the same error finish gives.
-            data_stack::reject_link_targets(&resolved.world_dir)?;
+            data_stack::reject_link_targets(resolved.world_dir())?;
             // The name may resolve while the world is missing or unreadable
             // (typo, deleted world): refuse before any metadata request.
-            if !resolved.world_dir.is_dir() {
+            if !resolved.world_dir().is_dir() {
                 return Err(AppError::World {
                     reason: format!("world {name} does not exist in this game dir"),
                 });
             }
-            if !resolved.world_dir.join("level.dat").is_file() {
+            if !resolved.world_dir().join("level.dat").is_file() {
                 return Err(AppError::World {
                     reason: format!("world {name} has no readable level.dat"),
                 });
             }
             let version =
-                world_version_name(&resolved.world_dir).ok_or_else(|| AppError::World {
+                world_version_name(resolved.world_dir()).ok_or_else(|| AppError::World {
                     reason: format!("world {name} has no readable level.dat"),
                 })?;
-            (resolved.world_dir.join("datapacks"), Some(version))
+            (resolved.world_dir().join("datapacks"), Some(version))
         }
     };
     let world_locked = match kind {
@@ -345,7 +345,7 @@ pub fn finish_modrinth_install(
     let kind = prepared.kind;
     match kind {
         SearchKind::ResourcePack => {
-            game_lock::ensure_writable(&stack_paths.game_dir)?;
+            game_lock::ensure_writable(stack_paths.game_dir())?;
             let (dest, sha256, fresh) = match commit_source(prepared)? {
                 Committed::Ready(dest, sha256, fresh) => (dest, sha256, fresh),
                 Committed::Collision { name } => {
@@ -504,7 +504,7 @@ fn import_resource(
     // as a no-op returning the pack; duplicates/collisions surface here.
     crate::pack_scan::import_pack(
         dest,
-        &stack_paths.game_dir.join("resourcepacks"),
+        &stack_paths.game_dir().join("resourcepacks"),
         icons,
         ImportChoice::Default,
         hashes,
