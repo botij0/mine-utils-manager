@@ -212,8 +212,6 @@ fn import_pack_with_services(
     commit: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<ImportOutcome, AppError> {
     services.hooks.before_write()?;
-    // A symlinked source is rejected instead of followed, so no later step can
-    // remove a pack that only a link points at.
     let source_meta = std::fs::symlink_metadata(source).map_err(|_| PackError::NotFound {
         path: source.to_path_buf(),
     })?;
@@ -258,8 +256,6 @@ fn import_pack_with_services(
     if kind == PackKind::Unknown {
         return Err(PackError::UnknownKind { name }.into());
     }
-    // Kind and pack.mcmeta are validated before anything is copied or removed,
-    // so a broken pack can never replace a working one.
     validate_meta(&source, location, &name)?;
 
     std::fs::create_dir_all(resourcepacks)?;
@@ -415,14 +411,11 @@ fn import_pack_with_services(
     })
 }
 
-/// Validate kind and pack.mcmeta for an import source or its temp copy.
 fn validate_meta(path: &Path, location: PackLocation, name: &str) -> Result<(), PackError> {
     let source = PackSource::new(path, location)?;
     read_meta(&source, name, &mut 0).map(|_| ())
 }
 
-/// The installed pack with the same content, if any. I/O errors propagate:
-/// silently skipping an unreadable pack would hide a real duplicate.
 pub(crate) fn find_duplicate(
     resourcepacks: &Path,
     sha256: &str,
@@ -492,8 +485,6 @@ fn copy_dir(source: &Path, destination: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Permanent removal, used only for temp paths this module created itself.
-/// Packs always go through `TrashService`.
 fn remove_any(path: &Path) -> std::io::Result<()> {
     if path.is_dir() {
         std::fs::remove_dir_all(path)

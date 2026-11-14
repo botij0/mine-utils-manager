@@ -167,6 +167,7 @@ The `mine-utils-core` crate does not depend on Tauri. This keeps filesystem and 
 | `paths.rs` | Resolve platform config, data, and cache directories |
 | `pack_scan.rs`, `pack.rs`, `pack_meta.rs` | Scan zip and folder packs, read `pack.mcmeta`, classify content, and expose metadata |
 | `pack_source.rs` | Shared zip and folder entry listing, capped reads, fingerprints, and digests |
+| `pack_import.rs` | Plan duplicate and collision outcomes, stage imports, recheck guards, and commit without replacement |
 | `icon_cache.rs` | Cache local pack and world icons by content hash |
 | `world.rs` | Scan saves, read world metadata, and report world state |
 | `options_txt.rs` | Parse and atomically update resource pack arrays while preserving unrelated options |
