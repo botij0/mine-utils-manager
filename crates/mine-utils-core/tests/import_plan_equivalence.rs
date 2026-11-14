@@ -293,8 +293,6 @@ fn import_entries_preserve_outcomes_and_disk_state() {
                     );
                     assert_eq!(disk(&trash_dir), BTreeMap::new());
                 }
-                let receipt: Value = json!({"data":data,"zip":zipped,"case":case,"result":outcome,"files":disk(&game),"trash":disk(&trash_dir)});
-                println!("SELFPROOF {receipt}");
             }
         }
     }

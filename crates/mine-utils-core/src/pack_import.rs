@@ -416,6 +416,8 @@ fn validate_meta(path: &Path, location: PackLocation, name: &str) -> Result<(), 
     read_meta(&source, name, &mut 0).map(|_| ())
 }
 
+/// I/O errors propagate: silently skipping an unreadable pack would hide a
+/// real duplicate.
 pub(crate) fn find_duplicate(
     resourcepacks: &Path,
     sha256: &str,
@@ -485,6 +487,8 @@ fn copy_dir(source: &Path, destination: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Permanent removal, only for temp paths this module created. Packs always
+/// go through `TrashService`.
 fn remove_any(path: &Path) -> std::io::Result<()> {
     if path.is_dir() {
         std::fs::remove_dir_all(path)
