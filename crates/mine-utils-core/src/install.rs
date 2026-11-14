@@ -129,13 +129,13 @@ pub fn prepare_modrinth_install<T: Transport>(
                     reason: format!("world {name} does not exist in this game dir"),
                 });
             }
-            if !resolved.world_dir().join("level.dat").is_file() {
+            if !resolved.level_dat_path().is_file() {
                 return Err(AppError::World {
                     reason: format!("world {name} has no readable level.dat"),
                 });
             }
             let version =
-                world_version_name(resolved.world_dir()).ok_or_else(|| AppError::World {
+                world_version_name(&resolved.level_dat_path()).ok_or_else(|| AppError::World {
                     reason: format!("world {name} has no readable level.dat"),
                 })?;
             (resolved.world_dir().join("datapacks"), Some(version))
@@ -321,8 +321,8 @@ fn hash_file(path: &Path) -> Result<FileHashes, AppError> {
 /// Read a world's game version from its `level.dat`. `None` when the file is
 /// missing or unreadable; `prepare` treats that as a refusal (a typo or an
 /// unreadable world must fail before any download), never as a skip.
-fn world_version_name(world_dir: &Path) -> Option<String> {
-    let bytes = std::fs::read(world_dir.join("level.dat")).ok()?;
+fn world_version_name(level_dat: &Path) -> Option<String> {
+    let bytes = std::fs::read(level_dat).ok()?;
     level_dat::parse(&bytes).ok().map(|view| view.version_name)
 }
 

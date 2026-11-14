@@ -131,7 +131,7 @@ impl DataPaths {
         DataPaths {
             game_dir: world.game_dir().to_path_buf(),
             world_dir: world.world_dir().to_path_buf(),
-            level_dat_path: world.world_dir().join("level.dat"),
+            level_dat_path: world.level_dat_path(),
             datapacks_dir: world.world_dir().join("datapacks"),
             backups_root: level_backup::root_for(data_dir, world.game_dir()),
             backups,
@@ -276,7 +276,10 @@ fn writable(game_dir: &Path, world_dir: &Path, guard: &dyn WriteGuard) -> Result
 /// of the world. Missing targets are fine; only links are refused. Install
 /// prepare calls it too, so the refusal lands before any download.
 pub(crate) fn reject_link_targets(world_dir: &Path) -> Result<(), AppError> {
-    for target in [world_dir.join("level.dat"), world_dir.join("datapacks")] {
+    for target in [
+        crate::world::level_dat_in(world_dir),
+        world_dir.join("datapacks"),
+    ] {
         if let Ok(meta) = std::fs::symlink_metadata(&target) {
             if meta.file_type().is_symlink() {
                 return Err(crate::error::AppError::World {
