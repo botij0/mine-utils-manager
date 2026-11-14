@@ -48,6 +48,10 @@ interface AppProps {
 
 export default function App({ client = ipc }: AppProps) {
   const [page, setPage] = useState<PageId>(() => pageFromHash() ?? DEFAULT_PAGE);
+  const [visited, setVisited] = useState<PageId[]>([]);
+  useEffect(() => {
+    setVisited((previous) => previous.includes(page) ? previous : [...previous, page]);
+  }, [page]);
   const [config, setConfig] = useState<Config>(defaultConfig);
   const [error, setError] = useState<AppError | null>(null);
   const [startupWarning, setStartupWarning] = useState<string | null>(null);
@@ -253,28 +257,33 @@ export default function App({ client = ipc }: AppProps) {
               {error.message}
             </p>
           ) : null}
-          {page === 'packs' ? (
+          {page === 'packs' || visited.includes('packs') ? (
+            <div hidden={page !== 'packs'}>
             <PacksPage
-              key={`packs-${refreshEpoch}`}
+              active={page === 'packs'} reloadSignal={`${refreshEpoch}:${config.active_game_dir}`}
               client={client}
               gameRunning={gameRunning}
               gameGuardUnknown={guardPause !== null}
               gameGuardChecking={guardPause === 'checking'}
               refreshGameRunning={refreshGameRunning}
             />
+            </div>
           ) : null}
-          {page === 'worlds' ? (
+          {page === 'worlds' || visited.includes('worlds') ? (
+            <div hidden={page !== 'worlds'}>
             <WorldsPage
-              key={`worlds-${refreshEpoch}`}
+              active={page === 'worlds'} reloadSignal={`${refreshEpoch}:${config.active_game_dir}`}
               client={client}
               gameRunning={gameRunning}
               gameGuardUnknown={guardPause !== null}
               gameGuardChecking={guardPause === 'checking'}
               refreshGameRunning={refreshGameRunning}
             />
+            </div>
           ) : null}
-          {page === 'discover' ? (
-            <DiscoverPage
+          {page === 'discover' || visited.includes('discover') ? (
+            <div hidden={page !== 'discover'}>
+            <DiscoverPage active={page === 'discover'}
               client={client}
               gameRunning={gameRunning}
               gameGuardUnknown={guardPause !== null}
@@ -283,9 +292,12 @@ export default function App({ client = ipc }: AppProps) {
               refreshGameRunning={refreshGameRunning}
               onInstalled={() => setRefreshEpoch((epoch) => epoch + 1)}
             />
+            </div>
           ) : null}
-          {page === 'settings' ? (
+          {page === 'settings' || visited.includes('settings') ? (
+            <div hidden={page !== 'settings'}>
             <SettingsPage
+              active={page === 'settings'}
               client={client}
               config={config}
               gameRunning={gameRunning}
@@ -294,6 +306,7 @@ export default function App({ client = ipc }: AppProps) {
               refreshGameRunning={refreshGameRunning}
               onConfigChanged={setConfig}
             />
+            </div>
           ) : null}
         </main>
       </div>

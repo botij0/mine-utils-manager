@@ -299,10 +299,7 @@ describe('App', () => {
     expect(within(list).getByRole('button', { name: 'Remove' })).toBeDisabled();
 
     await user.click(screen.getByRole('button', { name: 'Discover' }));
-    expect(screen.getByText(/^Checking whether Minecraft is running/)).toHaveAttribute(
-      'role',
-      'status',
-    );
+    expect(screen.getByRole('status')).toHaveTextContent(/^Checking whether Minecraft is running/);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));

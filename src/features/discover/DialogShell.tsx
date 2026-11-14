@@ -37,7 +37,7 @@ export default function DialogShell({ label, onClose, children, dismissOnEscape 
     document.addEventListener('keydown', onKey, true);
     return () => {
       document.removeEventListener('keydown', onKey, true);
-      if (openerRef.current instanceof HTMLElement) {
+      if (openerRef.current instanceof HTMLElement && !openerRef.current.closest('[hidden]')) {
         openerRef.current.focus();
       }
     };

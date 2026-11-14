@@ -12,6 +12,8 @@ import WorldRail from './WorldRail';
 import { compatibilityWarning, useWorlds } from './useWorlds';
 
 interface WorldsPageProps {
+  active?: boolean;
+  reloadSignal?: string;
   client?: WorldsClient;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
@@ -25,6 +27,8 @@ interface WorldsPageProps {
 
 export default function WorldsPage({
   client = ipc,
+  active = true,
+  reloadSignal = '',
   gameRunning,
   gameGuardUnknown = false,
   gameGuardChecking = false,
@@ -52,7 +56,7 @@ export default function WorldsPage({
     deleteDatapack,
     removeDatapackReference,
     clearActionError,
-  } = useWorlds(client);
+  } = useWorlds(client, active, reloadSignal);
   const [selectedFilename, setSelectedFilename] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importPrompt, setImportPrompt] = useState<

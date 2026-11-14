@@ -18,6 +18,8 @@ import { usePacks } from './usePacks';
 import { hasNestedSymlink, packFilename } from '../../lib/packPath';
 
 interface PacksPageProps {
+  active?: boolean;
+  reloadSignal?: string;
   client?: PackClient;
   /** File and folder picker. Injected in tests. */
   pickPath?: (directory: boolean) => Promise<string | null>;
@@ -46,6 +48,8 @@ function droppedPaths(transfer: DataTransfer | null): string[] {
 
 export default function PacksPage({
   client = ipc,
+  active = true,
+  reloadSignal = '',
   pickPath = pickPackPath,
   gameRunning,
   gameGuardUnknown = false,
@@ -66,7 +70,7 @@ export default function PacksPage({
     deletePack,
     togglePack,
     reorderStack,
-  } = usePacks(client);
+  } = usePacks(client, active, reloadSignal);
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<PackKind | 'all'>('all');
   const [format, setFormat] = useState('all');
@@ -257,7 +261,7 @@ export default function PacksPage({
   );
 
   useEffect(() => {
-    if (!isTauriRuntime()) return undefined;
+    if (!active || !isTauriRuntime()) return undefined;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void import('@tauri-apps/api/webview')
@@ -276,7 +280,7 @@ export default function PacksPage({
       cancelled = true;
       unlisten?.();
     };
-  }, [handleDroppedPaths]);
+  }, [active, handleDroppedPaths]);
 
   return (
     <section className="packs-page">

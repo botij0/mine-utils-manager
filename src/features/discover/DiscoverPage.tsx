@@ -10,6 +10,7 @@ import SearchBar from './SearchBar';
 import { useModrinth } from './useModrinth';
 
 interface DiscoverPageProps {
+  active?: boolean;
   client?: IpcClient;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
@@ -27,6 +28,7 @@ interface DiscoverPageProps {
 
 export default function DiscoverPage({
   client = ipc,
+  active = true,
   gameRunning,
   gameGuardUnknown = false,
   gameGuardChecking = false,
@@ -179,7 +181,7 @@ export default function DiscoverPage({
       ) : null}
       {/* One dialog at a time: the install sheet replaces the detail sheet
           instead of stacking on top of it. */}
-      {installOpen && discover.selected ? (
+      {active && (installOpen && discover.selected ? (
         <InstallSheet
           open
           kind={discover.kind}
@@ -217,7 +219,7 @@ export default function DiscoverPage({
           onInstall={openInstall}
           onClose={discover.closeDetail}
         />
-      ) : null}
+      ) : null)}
     </section>
   );
 }

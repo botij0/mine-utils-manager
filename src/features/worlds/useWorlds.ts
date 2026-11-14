@@ -90,7 +90,7 @@ export function compatibilityWarning(
  * Loads the world's list and the selected world's datapacks, and keeps both
  * fresh after every mutation.
  */
-export function useWorlds(client: WorldsClient): WorldsState {
+export function useWorlds(client: WorldsClient, active = true, reloadSignal = ''): WorldsState {
   const [worlds, setWorlds] = useState<World[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<IpcError | null>(null);
@@ -160,8 +160,8 @@ export function useWorlds(client: WorldsClient): WorldsState {
   }, [client]);
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    if (active) void reload();
+  }, [reload, active, reloadSignal]);
 
   const selected = worlds.find((world) => world.dir_name === selectedName) ?? null;
 
@@ -204,8 +204,8 @@ export function useWorlds(client: WorldsClient): WorldsState {
   }, [client, selectedName, isCurrentRequest]);
 
   useEffect(() => {
-    void refreshListing();
-  }, [refreshListing]);
+    if (active) void refreshListing();
+  }, [refreshListing, active, reloadSignal]);
 
   const select = useCallback((dirName: string) => {
     // Invalidate every in-flight request, drop the old world's rows so the

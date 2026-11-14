@@ -15,6 +15,7 @@ const THEMES: { value: Theme; label: string }[] = [
 const pendingWrites = new WeakMap<IpcClient, Promise<void>>();
 
 interface SettingsPageProps {
+  active?: boolean;
   client: IpcClient;
   config: Config;
   onConfigChanged: (config: Config) => void;
@@ -30,6 +31,7 @@ interface SettingsPageProps {
 
 export default function SettingsPage({
   client,
+  active = true,
   config,
   onConfigChanged,
   gameRunning,
@@ -92,6 +94,7 @@ export default function SettingsPage({
         onConfigChanged={onConfigChanged}
       />
       <BackupsPanel
+        active={active}
         client={client}
         activeGameDir={config.active_game_dir}
         gameRunning={gameRunning}

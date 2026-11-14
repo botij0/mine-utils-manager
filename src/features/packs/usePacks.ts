@@ -48,7 +48,7 @@ export function snapshotOf(stack: ResourceStack): StackSnapshot {
  * render the stack their write returns instead of re-reading it. The backend
  * rechecks the game guard before each write reaches the disk.
  */
-export function usePacks(client: PackClient): PacksState {
+export function usePacks(client: PackClient, active = true, reloadSignal = ''): PacksState {
   const [packs, setPacks] = useState<Pack[]>([]);
   const [stats, setStats] = useState<PackStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,9 +103,10 @@ export function usePacks(client: PackClient): PacksState {
   }, [client]);
 
   useEffect(() => {
+    if (!active) return;
     void reload();
     void refreshStack();
-  }, [reload, refreshStack]);
+  }, [reload, refreshStack, active, reloadSignal]);
 
   const importPack = useCallback(
     async (path: string, choice: ImportChoice = 'default') => {
