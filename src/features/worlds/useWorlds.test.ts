@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { WorldsClient } from '../../lib/ipc';
 import type { DatapackListing, DataStack } from '../../lib/types';
 import { worldsClient } from '../../test/fake-ipc';
-import { datapack, stack, world } from '../../test/fake-packs';
+import { datapack, datapackListing, stack, world } from '../../test/fake-packs';
 import { checkCompatibility, compatibilityWarning, useWorlds } from './useWorlds';
 
 describe('useWorlds', () => {
@@ -281,5 +281,41 @@ describe('useWorlds', () => {
     expect(result.current.busy).toBe(false);
     expect(setEnabled).toHaveBeenCalledTimes(1);
     expect(setEnabled).toHaveBeenCalledWith('Survival 1_17', 'a.zip', false);
+  });
+
+  it('sends the rendered snapshot on a reorder, not a fresh listing', async () => {
+    const listDatapacks = vi
+      .fn<WorldsClient['listDatapacks']>()
+      .mockResolvedValueOnce(datapackListing(['a.zip', 'b.zip']))
+      .mockResolvedValue(datapackListing(['a.zip', 'b.zip', 'c.zip']));
+    const reorder = vi.fn(async () => stack());
+    const client = worldsClient({ listDatapacks, reorderDatapacks: reorder });
+    const { result } = renderHook(() => useWorlds(client));
+    await act(async () => {});
+    await act(async () => {
+      await result.current.reorderDatapacks(['file/b.zip', 'file/a.zip']);
+    });
+    expect(reorder).toHaveBeenCalledWith('Survival 1_17', ['file/b.zip', 'file/a.zip'], {
+      enabled: ['file/a.zip', 'file/b.zip'],
+      disabled: [],
+    });
+  });
+
+  it('makes no listDatapacks call between the move and the write', async () => {
+    const listDatapacks = vi.fn(async () => datapackListing(['a.zip', 'b.zip']));
+    const listedAtWrite: number[] = [];
+    const reorder = vi.fn(async () => {
+      listedAtWrite.push(listDatapacks.mock.calls.length);
+      return stack();
+    });
+    const client = worldsClient({ listDatapacks, reorderDatapacks: reorder });
+    const { result } = renderHook(() => useWorlds(client));
+    await act(async () => {});
+    expect(listDatapacks).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await result.current.reorderDatapacks(['file/b.zip', 'file/a.zip']);
+    });
+    expect(listedAtWrite).toEqual([1]);
+    expect(listDatapacks).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,6 +1,7 @@
 import type {
   Config,
   DataStack,
+  DatapackListing,
   FormatRange,
   FormatVersion,
   GameDirEntry,
@@ -149,6 +150,22 @@ export function stack(overrides: Partial<DataStack> = {}): DataStack {
     stale_locks: [],
     detection_supported: true,
     ...overrides,
+  };
+}
+
+/** A datapack listing whose `enabled` stack is exactly `files`, in load order. */
+export function datapackListing(files: string[]): DatapackListing {
+  return {
+    packs: {
+      packs: files.map((name) => datapack(name)),
+      count: files.length,
+      bytes_read: 0,
+      elapsed_ms: 0,
+    },
+    stack: stack({
+      enabled: files.map((name) => stackEntry(`file/${name}`)),
+      disabled: [],
+    }),
   };
 }
 
