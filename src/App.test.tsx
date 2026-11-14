@@ -848,4 +848,46 @@ describe('App', () => {
     });
     expect(calls).toHaveLength(1);
   });
+
+  it('shows the page the hash names after Back and Forward', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    render(<App client={client} />);
+
+    await screen.findByRole('heading', { level: 1, name: 'Resource Packs' });
+    const entries = window.history.length;
+    await user.click(screen.getByRole('button', { name: 'Worlds' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Worlds' })).toBeInTheDocument();
+    expect(window.history.length).toBe(entries + 1);
+
+    window.history.back();
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Resource Packs' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resource Packs' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(window.history.length).toBe(entries + 1);
+
+    window.history.forward();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Worlds' })).toBeInTheDocument();
+  });
+
+  it('falls back to Packs when the hash names no page', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    render(<App client={client} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Worlds' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Worlds' })).toBeInTheDocument();
+    const entries = window.history.length;
+
+    window.location.hash = 'nonsense';
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Resource Packs' }),
+    ).toBeInTheDocument();
+    expect(window.location.hash).toBe('#packs');
+    expect(window.history.length).toBe(entries + 1);
+  });
 });
