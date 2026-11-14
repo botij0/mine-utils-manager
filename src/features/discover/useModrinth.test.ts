@@ -761,3 +761,41 @@ describe('isCurrentSearchResponse', () => {
     expect(isCurrentSearchResponse(true, 2, 2)).toBe(true);
   });
 });
+
+
+it('preserves a compatible manual pick when the target world changes', async () => {
+  const client = makeFakeClient([]);
+  const list = client.listModrinthVersions;
+  client.listModrinthVersions = async (project) => (await list(project)).map((version) => ({
+    ...version, game_versions: ['1.21.1', '1.20.1'],
+  }));
+  client.modrinthTargets = async (world) => ({
+    installed_versions: ['1.21.1'], preferred_launcher: '1.21.1',
+    world_version: world === 'second' ? '1.20.1' : '1.21.1',
+  });
+  const { result } = renderHook(() => useModrinth(client));
+  await act(async () => { result.current.setKind('datapack'); });
+  await act(async () => { await result.current.select(freshHit()); });
+  await act(async () => { result.current.setSelectedVersionId('v1'); });
+  await act(async () => { result.current.setWorld('second'); });
+  expect(result.current.targetVersion).toBe('1.20.1');
+  expect(result.current.selectedVersionId).toBe('v1');
+});
+
+it('preserves an incompatible manual pick through a transient null target', async () => {
+  const client = makeFakeClient([]);
+  const { result, rerender } = renderHook(({ signal }) => useModrinth(client, true, signal), {
+    initialProps: { signal: '0' },
+  });
+  await act(async () => { await result.current.select(freshHit()); });
+  await act(async () => { result.current.setSelectedVersionId('v1'); });
+  let release = () => {};
+  const targets = client.modrinthTargets;
+  client.modrinthTargets = (world) => new Promise((resolve) => { release = () => resolve(targets(world)); });
+  rerender({ signal: '1' });
+  expect(result.current.targetVersion).toBeNull();
+  expect(result.current.selectedVersionId).toBe('v1');
+  await act(async () => release());
+  expect(result.current.targetVersion).toBe('1.21.1');
+  expect(result.current.selectedVersionId).toBe('v1');
+});
