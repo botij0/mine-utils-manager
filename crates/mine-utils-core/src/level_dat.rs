@@ -490,6 +490,15 @@ mod tests {
     }
 
     #[test]
+    fn write_uses_the_supplied_target_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("chosen.dat");
+        write_level_dat(&target, b"chosen bytes").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"chosen bytes");
+        assert!(!dir.path().join("level.dat").exists());
+    }
+
+    #[test]
     fn write_is_atomic_and_leaves_old_temp_files_alone() {
         let dir = tempfile::tempdir().unwrap();
         let world = dir.path().join("world");
