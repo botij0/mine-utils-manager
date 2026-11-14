@@ -20,9 +20,8 @@ use crate::game_lock;
 use crate::level_backup::{self, LevelBackupOutcome};
 use crate::level_dat::{self, LevelDatError};
 use crate::pack::{ImportChoice, PackError};
-use crate::pack_scan::{
-    self, display_name, HashCache, PackListing, SystemTrash, TrashService, MAX_META_BYTES,
-};
+use crate::pack_import::{self, HashCache, SystemTrash, TrashService};
+use crate::pack_scan::{self, display_name, PackListing, MAX_META_BYTES};
 use crate::resource_stack::{stack_core, SystemGuard, WriteGuard};
 
 /// Everything that can go wrong with a datapack stack change request.
@@ -525,13 +524,13 @@ pub fn import_datapack_with(
         choice,
         guard,
     };
-    let outcome = pack_scan::import_pack_guarded(
+    let outcome = pack_import::import_pack_guarded(
         source,
         &paths.datapacks_dir,
         icons,
         choice,
         hashes,
-        &pack_scan::ImportServices {
+        &pack_import::ImportServices {
             trash,
             hooks: &hooks,
         },
@@ -565,7 +564,7 @@ struct DatapackImport<'a> {
     guard: &'a dyn WriteGuard,
 }
 
-impl pack_scan::ImportHooks for DatapackImport<'_> {
+impl pack_import::ImportHooks for DatapackImport<'_> {
     fn replaced(&self, _old: &Path, new: &Path) -> Result<(), AppError> {
         set_enabled_with_guard(self.paths, &pack_filename(new)?, true, self.guard)?;
         Ok(())

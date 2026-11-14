@@ -3,7 +3,7 @@ use std::path::Path;
 
 use mine_utils_core::data_stack::{self, DataPaths};
 use mine_utils_core::pack::{PackError, PackLocation};
-use mine_utils_core::pack_scan::TrashService;
+use mine_utils_core::pack_import::TrashService;
 use mine_utils_core::resource_stack::WriteGuard;
 use mine_utils_core::{scan_packs, AppError, BackupsConfig, HashCache, IconCache, ImportChoice};
 

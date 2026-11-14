@@ -8,7 +8,7 @@ use mine_utils_core::data_stack::{self, DataPaths};
 use mine_utils_core::game_lock::{GameRunning, GameRunningKind};
 use mine_utils_core::level_dat;
 use mine_utils_core::pack::PackError;
-use mine_utils_core::pack_scan::TrashService;
+use mine_utils_core::pack_import::TrashService;
 use mine_utils_core::resource_stack::WriteGuard;
 use mine_utils_core::{AppError, BackupsConfig, HashCache, IconCache};
 

@@ -19,7 +19,8 @@ use crate::config::BackupsConfig;
 use crate::error::AppError;
 use crate::game_lock;
 use crate::options_txt::{self, OptionsTxt};
-use crate::pack_scan::{delete_pack_with, validate_delete_target, TrashService};
+use crate::pack_import::TrashService;
+use crate::pack_scan::{delete_pack_with, validate_delete_target};
 
 /// The parts of a two-array pack stack that do not depend on which stack it is:
 /// entry parsing, filename rules, and reorder validation. The resource and
@@ -619,13 +620,13 @@ pub fn import_pack_safely_with(
     guard: &dyn WriteGuard,
 ) -> Result<crate::ImportOutcome, AppError> {
     let hooks = ResourceImport { paths, guard };
-    crate::pack_scan::import_pack_guarded(
+    crate::pack_import::import_pack_guarded(
         source,
         &paths.game_dir.join("resourcepacks"),
         icons,
         choice,
         hashes,
-        &crate::pack_scan::ImportServices {
+        &crate::pack_import::ImportServices {
             trash,
             hooks: &hooks,
         },
@@ -637,7 +638,7 @@ struct ResourceImport<'a> {
     guard: &'a dyn WriteGuard,
 }
 
-impl crate::pack_scan::ImportHooks for ResourceImport<'_> {
+impl crate::pack_import::ImportHooks for ResourceImport<'_> {
     fn before_write(&self) -> Result<(), AppError> {
         self.guard.ensure_writable(&self.paths.game_dir)
     }

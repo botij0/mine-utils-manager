@@ -9,7 +9,7 @@ use mine_utils_core::backup;
 use mine_utils_core::game_lock::{
     check_in, lock_detection_supported, GameRunning, GameRunningKind,
 };
-use mine_utils_core::pack_scan::TrashService;
+use mine_utils_core::pack_import::TrashService;
 use mine_utils_core::resource_stack::{self, StackPaths, WriteGuard};
 use mine_utils_core::AppError;
 use mine_utils_core::BackupsConfig;

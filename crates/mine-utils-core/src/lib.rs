@@ -65,10 +65,10 @@ pub use pack::{
     FormatRange, FormatVersion, ImportChoice, ImportOutcome, Pack, PackError, PackIcon, PackIssue,
     PackKind, PackLocation, PackMeta,
 };
+pub use pack_import::{import_pack, import_pack_with, HashCache, SystemTrash, TrashService};
 pub use pack_scan::{
-    delete_pack, delete_pack_with, import_pack, import_pack_with, pack_names, scan_packs,
-    validate_delete_target, HashCache, PackListing, SystemTrash, TrashService, MAX_ICON_BYTES,
-    MAX_META_BYTES, MAX_ZIP_ENTRIES,
+    delete_pack, delete_pack_with, pack_names, scan_packs, validate_delete_target, PackListing,
+    MAX_ICON_BYTES, MAX_META_BYTES, MAX_ZIP_ENTRIES,
 };
 pub use paths::{home_dir, AppPaths};
 pub use provenance::{
