@@ -134,6 +134,7 @@ impl ConfigStore {
         &mut self,
         path: &Path,
         entries: &[GameDirEntry],
+        discovered: bool,
     ) -> Result<(), AppError> {
         let entry = entries
             .iter()
@@ -145,6 +146,11 @@ impl ConfigStore {
             return Err(AppError::InvalidGameDir {
                 path: path.to_path_buf(),
                 reason: "expected one of versions, saves, or resourcepacks".to_string(),
+            });
+        }
+        if !discovered && !self.config.game_dirs.iter().any(|dir| dir.path == path) {
+            return Err(AppError::UnknownGameDir {
+                path: path.to_path_buf(),
             });
         }
         let mut next = self.config.clone();
@@ -388,7 +394,9 @@ mod tests {
         }];
         let mut store = ConfigStore::new(path, Config::default());
 
-        let err = store.set_active_game_dir(&game, &entries).unwrap_err();
+        let err = store
+            .set_active_game_dir(&game, &entries, false)
+            .unwrap_err();
 
         assert_eq!(err.code(), "invalid_game_dir");
         assert_eq!(store.config().active_game_dir, None);
@@ -413,7 +421,7 @@ mod tests {
         store.remove_game_dir(&game).unwrap();
         assert_eq!(
             store
-                .set_active_game_dir(&game, &entries)
+                .set_active_game_dir(&game, &entries, false)
                 .unwrap_err()
                 .code(),
             "unknown_game_dir"

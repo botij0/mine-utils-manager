@@ -215,8 +215,13 @@ pub async fn set_active_game_dir(
             std::fs::canonicalize(Path::new(&path)).map_err(|_| AppError::UnknownGameDir {
                 path: PathBuf::from(&path),
             })?;
-        let entries = listing(&state.config())?;
-        let (_, config) = state.update(|store| store.set_active_game_dir(&target, &entries))?;
+        let discovered = discover_game_dirs(&home_dir()?);
+        let found = discovered.iter().any(|dir| dir.path == target);
+        let config = state.config();
+        let merged = merge_game_dirs(discovered, &config.game_dirs);
+        let entries: Vec<_> = merged.iter().map(entry_for).collect();
+        let (_, config) =
+            state.update(|store| store.set_active_game_dir(&target, &entries, found))?;
         state_for(config)
     })
     .await
