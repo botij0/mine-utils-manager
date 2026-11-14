@@ -58,8 +58,7 @@ fn import_result(
     )
     .unwrap();
     let paths = DataPaths::for_world(
-        &root.join("game"),
-        &world,
+        &mine_utils_core::WorldPaths::for_world(&root.join("game"), "test").unwrap(),
         &root.join("app-data"),
         BackupsConfig {
             enabled: false,
