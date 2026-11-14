@@ -58,6 +58,7 @@ export default function DatapackGrid({
         // same `file/` value twice, and value keys would mis-render.
         const key = `${row.entry.value}#${index}`;
         const broken = row.pack?.error ?? null;
+        const selectionId = broken?.code === 'pack_non_utf8_name' ? row.pack!.id : name;
         if (broken) {
           // A broken pack is an error card, but an *enabled* broken row is
           // still a live `level.dat` entry: it keeps Disable (and any move
@@ -67,12 +68,12 @@ export default function DatapackGrid({
           return (
             <li
               key={key}
-              className={`datapack-card datapack-card-broken${selectedFilename === name ? ' is-selected' : ''}`}
+              className={`datapack-card datapack-card-broken${selectedFilename === selectionId ? ' is-selected' : ''}`}
             >
               <button
                 type="button"
                 className="datapack-card-main"
-                onClick={() => onSelect(name)}
+                onClick={() => onSelect(selectionId)}
                 aria-label={`${name}, broken`}
               >
                 <span className="datapack-name">{name}</span>
@@ -123,12 +124,12 @@ export default function DatapackGrid({
         return (
           <li
             key={key}
-            className={`datapack-card${selectedFilename === name ? ' is-selected' : ''}${row.locked ? ' is-locked' : ''}`}
+            className={`datapack-card${selectedFilename === selectionId ? ' is-selected' : ''}${row.locked ? ' is-locked' : ''}`}
           >
             <button
               type="button"
               className="datapack-card-main"
-              onClick={() => onSelect(name)}
+              onClick={() => onSelect(selectionId)}
               aria-label={`${name}${row.enabled ? ', enabled' : ', disabled'}`}
             >
               <span className="datapack-name">{name}</span>

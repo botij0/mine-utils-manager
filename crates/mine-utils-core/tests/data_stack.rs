@@ -1132,3 +1132,41 @@ fn replace_updates_level_dat_before_trashing_the_original() {
         Some(lists(&["vanilla", "file/new"], &[]))
     );
 }
+
+#[test]
+fn stale_unsafe_reference_can_be_disabled_and_removed() {
+    let world = temp_world(&["vanilla", "file/sub/x.zip"], &[]);
+    data_stack::set_enabled_with_guard(&world.paths, "sub/x.zip", false, &PassGuard).unwrap();
+    assert_eq!(
+        view(&world.paths),
+        (vec!["vanilla".into()], vec!["file/sub/x.zip".into()])
+    );
+    assert!(data_stack::remove_references(&world.paths, "sub/x.zip").unwrap());
+    assert_eq!(view(&world.paths), (vec!["vanilla".into()], vec![]));
+}
+
+#[cfg(unix)]
+#[test]
+fn ambiguous_import_is_refused_before_copy() {
+    use std::os::unix::ffi::OsStrExt;
+    let world = temp_world(&["vanilla"], &[]);
+    let bad = world
+        .paths
+        .datapacks_dir
+        .join(std::ffi::OsStr::from_bytes(b"Caf\xe9"));
+    std::fs::write(&bad, b"bad").unwrap();
+    let source = datapack_source(world._dir.path(), "Caf�");
+    let error = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &RecordingTrash::new(),
+        &PassGuard,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "pack_non_utf8_name");
+    assert!(!world.paths.datapacks_dir.join("Caf�").exists());
+    assert_eq!(std::fs::read(bad).unwrap(), b"bad");
+}

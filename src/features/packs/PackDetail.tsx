@@ -48,6 +48,7 @@ export default function PackDetail({
   const range = pack.format_range;
   const stackEligible = pack.kind === 'resource' || pack.kind === 'both';
   const symlinkPack = pack.error?.code === 'pack_symlink';
+  const nonUtf8Pack = pack.error?.code === 'pack_non_utf8_name';
   return (
     <aside className="pack-detail" aria-label="Pack details">
       <div className="pack-detail-head">
@@ -116,7 +117,9 @@ export default function PackDetail({
         </p>
       )}
 
-      {symlinkPack ? (
+      {nonUtf8Pack ? (
+        <p className="pack-range-note">Rename this file in a file manager to manage it.</p>
+      ) : symlinkPack ? (
         <p className="pack-range-note">
           This entry is a symlink. Remove the link from resourcepacks in a file
           manager; Mine Utils does not delete links.

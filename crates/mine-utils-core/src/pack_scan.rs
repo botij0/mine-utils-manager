@@ -76,6 +76,20 @@ pub fn scan_packs(resourcepacks: &Path, icons: &IconCache) -> Result<PackListing
         } else {
             PackLocation::Directory
         };
+        if path.file_name().is_some_and(|name| name.to_str().is_none()) {
+            let display_path = PathBuf::from(path.to_string_lossy().into_owned());
+            let mut pack = error_pack(
+                &display_path,
+                location,
+                PackError::NonUtf8Name {
+                    name: display_name(&display_path),
+                },
+                0,
+            );
+            pack.id = format!("non-utf8:{:?}", path.as_os_str());
+            packs.push(pack);
+            continue;
+        }
         if file_type.is_symlink() {
             // A symlinked pack is an error card. The link is never followed
             // into the root, so scanning cannot read or later delete a pack
@@ -657,12 +671,18 @@ fn import_pack_with_services(
 
     std::fs::create_dir_all(resourcepacks)?;
     let root = std::fs::canonicalize(resourcepacks)?;
+    if source.parent() == Some(root.as_path()) {
+        let mut bytes_read = 0;
+        let pack = inspect_entry(&source, location, icons, &mut bytes_read)?;
+        return Ok(ImportOutcome::Imported {
+            pack: Box::new(pack),
+        });
+    }
+
     let sha256 = hashes.hash(&source, location)?;
     let existing = find_duplicate(&root, &sha256, hashes)?;
 
-    // Re-importing a pack that already lives in resourcepacks is a no-op. The
-    // source is never deleted, whatever the caller chose.
-    if source.parent() == Some(root.as_path()) || existing.as_deref() == Some(source.as_path()) {
+    if existing.as_deref() == Some(source.as_path()) {
         let mut bytes_read = 0;
         let pack = inspect_entry(&source, location, icons, &mut bytes_read)?;
         return Ok(ImportOutcome::Imported {
@@ -678,6 +698,7 @@ fn import_pack_with_services(
             reason: "source has no file name".to_string(),
         })?;
     let destination = root.join(&file_name);
+    reject_ambiguous_name(&destination, &root)?;
     let destination_taken = std::fs::symlink_metadata(&destination).is_ok();
 
     if let Some(existing_path) = &existing {
@@ -836,12 +857,41 @@ pub fn delete_pack_with(
     Ok(())
 }
 
+pub(crate) fn reject_ambiguous_name(path: &Path, root: &Path) -> Result<(), AppError> {
+    if let Some(name) = path.file_name() {
+        let mut ambiguous = name.to_str().is_none();
+        if name.to_string_lossy().contains('�') {
+            let entries = match std::fs::read_dir(root) {
+                Ok(entries) => Some(entries),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+                Err(err) => return Err(err.into()),
+            };
+            for entry in entries.into_iter().flatten() {
+                let sibling = entry?.file_name();
+                if sibling.to_str().is_none() && sibling.to_string_lossy() == name.to_string_lossy()
+                {
+                    ambiguous = true;
+                    break;
+                }
+            }
+        }
+        if ambiguous {
+            return Err(PackError::NonUtf8Name {
+                name: display_name(path),
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
 /// Validate that `path` is an existing direct child (file or folder, never a
 /// symlink) of the resolved `resourcepacks`. A path outside the root, nested
 /// under it, missing, or a symlink is refused before any caller touches
 /// `options.txt`. The entry itself is never canonicalized, so the check cannot
 /// redirect a delete elsewhere.
 pub fn validate_delete_target(path: &Path, resourcepacks: &Path) -> Result<(), AppError> {
+    reject_ambiguous_name(path, resourcepacks)?;
     let root = std::fs::canonicalize(resourcepacks)?;
     let metadata = std::fs::symlink_metadata(path).map_err(|_| PackError::NotFound {
         path: path.to_path_buf(),
@@ -1192,6 +1242,36 @@ mod tests {
         let trash = RecordingTrash::new(&root.path().join("trash-box"));
         let hashes = HashCache::new();
         (root, cache_root, icons, hashes, trash)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_name_is_serializable_and_cannot_delete_collision() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = tempfile::tempdir().unwrap();
+        let (_cache_root, icons) = cache();
+        simple_zip(&root.path().join("Good.zip"), 55, None);
+        let bad = root
+            .path()
+            .join(std::ffi::OsStr::from_bytes(b"Caf\xe9.zip"));
+        std::fs::write(&bad, b"bad").unwrap();
+        let listing = scan_packs(root.path(), &icons).unwrap();
+        let json = serde_json::to_value(&listing).unwrap();
+        let packs = json["packs"].as_array().unwrap();
+        assert_eq!(packs.len(), 2);
+        let good = packs.iter().find(|p| p["name"] == "Good").unwrap();
+        assert_eq!(good["error"], serde_json::Value::Null);
+        let card = packs.iter().find(|p| p["name"] == "Caf�").unwrap();
+        assert_eq!(card["error"]["code"], "pack_non_utf8_name");
+        let display_path = PathBuf::from(card["path"].as_str().unwrap());
+        std::fs::write(&display_path, b"collision").unwrap();
+        let trash = RecordingTrash::new(&root.path().join("trash"));
+        assert!(delete_pack_with(&display_path, root.path(), &trash).is_err());
+        assert_eq!(std::fs::read(&display_path).unwrap(), b"collision");
+        assert_eq!(std::fs::read(&bad).unwrap(), b"bad");
+        std::fs::remove_file(&bad).unwrap();
+        delete_pack_with(&display_path, root.path(), &trash).unwrap();
+        assert!(!display_path.exists());
     }
 
     #[test]
@@ -2085,6 +2165,26 @@ mod tests {
         assert_eq!(listing.packs[0].description, "Demo pack");
         assert_eq!(listing.packs[1].description, "Colliding");
         assert!(source.is_file());
+    }
+
+    #[test]
+    fn in_place_import_does_not_hash_the_pack_or_siblings() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let packs = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&packs).unwrap();
+        simple_zip(&packs.join("Sibling.zip"), 34, None);
+        simple_zip(&packs.join("Pack.zip"), 34, None);
+        let outcome = import_pack_with(
+            &packs.join("Pack.zip"),
+            &packs,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+        assert!(matches!(outcome, ImportOutcome::Imported { .. }));
+        assert_eq!(hashes.entries.lock().unwrap().len(), 0);
     }
 
     #[test]

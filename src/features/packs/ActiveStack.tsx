@@ -48,7 +48,7 @@ function fileKey(entry: StackEntryData): string {
 function packByFilename(packs: Pack[]): Map<string, Pack> {
   const byName = new Map<string, Pack>();
   for (const pack of packs) {
-    byName.set(packFilename(pack), pack);
+    if (pack.error?.code !== 'pack_non_utf8_name') byName.set(packFilename(pack), pack);
   }
   return byName;
 }

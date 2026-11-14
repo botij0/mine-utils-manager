@@ -79,7 +79,7 @@ export default function WorldsPage({
 
   const rows = useMemo<DatapackRow[]>(() => {
     if (!stack) return [];
-    const byFilename = new Map(packs.map((pack) => [packFilename(pack), pack]));
+    const byFilename = new Map(packs.filter((pack) => pack.error?.code !== 'pack_non_utf8_name').map((pack) => [packFilename(pack), pack]));
     const listed = new Set([
       ...stack.enabled.map((entry) => entry.value),
       ...stack.disabled.map((entry) => entry.value),
@@ -129,7 +129,7 @@ export default function WorldsPage({
     const installed = packs.flatMap((pack) => {
       const filename = packFilename(pack);
       const value = `file/${filename}`;
-      if (listed.has(value)) return [];
+      if (listed.has(value) && pack.error?.code !== 'pack_non_utf8_name') return [];
       const row: DatapackRow = {
         pack,
         entry: { kind: 'file', value, filename },
@@ -146,7 +146,7 @@ export default function WorldsPage({
     return [...topFirst, ...disabled, ...installed];
   }, [stack, packs, worldFormat, worldLabel]);
 
-  const selectedRow = rows.find((row) => row.filename === selectedFilename) ?? null;
+  const selectedRow = rows.find((row) => (row.pack?.error?.code === 'pack_non_utf8_name' ? row.pack.id : row.filename) === selectedFilename) ?? null;
 
   // Writes stop while the game runs, while this world is locked, while the
   // file is unreadable, while the app-level guard check failed, or while the

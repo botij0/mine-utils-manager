@@ -38,9 +38,7 @@ function resultText(result: ModrinthInstallOutcome): string {
     case 'duplicate':
       return `${result.outcome.name} is already installed (same content as ${result.outcome.existing}).`;
     case 'collision':
-      return `${result.outcome.name} already exists with different content; import it from the ${
-        result.kind === 'resourcepack' ? 'Packs' : 'Worlds'
-      } page to choose Replace.`;
+      return `${result.outcome.name} already exists with different content. Remove or rename the existing file before installing.`;
     default:
       return 'Import skipped.';
   }

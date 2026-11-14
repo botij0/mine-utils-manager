@@ -169,6 +169,7 @@ pub struct VerifiedDownload {
     /// Bytes written.
     pub bytes: u64,
     committed: bool,
+    temp_file: std::fs::File,
 }
 
 impl Drop for VerifiedDownload {
@@ -218,6 +219,143 @@ fn temp_path_for(target_dir: &Path, filename: &str) -> PathBuf {
     ))
 }
 
+#[cfg(unix)]
+fn sweep_download_temps(target_dir: &Path) {
+    if !is_local_download_filesystem(target_dir) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(target_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some((prefix, suffix)) = name.rsplit_once(".mine-utils-download-") else {
+            continue;
+        };
+        if !prefix.starts_with('.') || prefix.len() < 2 {
+            continue;
+        }
+        let Some(suffix) = suffix.strip_suffix(".tmp") else {
+            continue;
+        };
+        let mut parts = suffix.split('-');
+        let (Some(pid), Some(stamp), Some(counter), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if ![pid, stamp, counter]
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        {
+            continue;
+        }
+        let Ok(pid) = pid.parse::<u32>() else {
+            continue;
+        };
+        if pid == std::process::id() {
+            continue;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if !kind.is_file() {
+            continue;
+        }
+        if let Err(err) = sweep_download_temp(&entry.path()) {
+            log::debug!("keeping download temp {}: {err}", entry.path().display());
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn is_local_download_filesystem(target_dir: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(path) = CString::new(target_dir.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: path is NUL-terminated and stat points to writable storage.
+    if unsafe { libc::statfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    // SAFETY: a successful statfs initialized stat.
+    let stat = unsafe { stat.assume_init() };
+    #[cfg(target_os = "linux")]
+    return is_local_linux_filesystem(stat.f_type as u32);
+    #[cfg(target_os = "macos")]
+    return stat.f_flags & libc::MNT_LOCAL as u32 != 0;
+}
+
+#[cfg(target_os = "linux")]
+fn is_local_linux_filesystem(fs_type: u32) -> bool {
+    const RAMFS_MAGIC: u32 = 0x858458f6;
+
+    // Locks on network and FUSE mounts may not exclude owners on another mount.
+    // Unknown filesystems stay excluded until their locking semantics are known.
+    [
+        libc::EXT4_SUPER_MAGIC as u32,
+        libc::BTRFS_SUPER_MAGIC as u32,
+        libc::XFS_SUPER_MAGIC as u32,
+        libc::F2FS_SUPER_MAGIC as u32,
+        libc::TMPFS_MAGIC as u32,
+        RAMFS_MAGIC,
+    ]
+    .contains(&fs_type)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn is_local_download_filesystem(_target_dir: &Path) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn sweep_download_temp(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use std::time::Duration;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Ok(());
+    }
+    lock_download_temp(&file, libc::LOCK_EX | libc::LOCK_NB)?;
+    let old = metadata
+        .modified()?
+        .elapsed()
+        .is_ok_and(|age| age > Duration::from_secs(3600));
+    if !old {
+        return Ok(());
+    }
+    let current = std::fs::symlink_metadata(path)?;
+    if current.is_file() && current.dev() == metadata.dev() && current.ino() == metadata.ino() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn lock_download_temp(file: &std::fs::File, operation: libc::c_int) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    // SAFETY: file keeps the descriptor valid throughout flock.
+    if unsafe { libc::flock(file.as_raw_fd(), operation) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(unix))]
+fn sweep_download_temps(_target_dir: &Path) {}
+
 /// Stream a CDN file into a temp file in `target_dir`, checking the 500 MB
 /// cap and the SHA-512 while streaming, then validating the zip root.
 /// The URL must be `https://cdn.modrinth.com/...` and every redirect hop
@@ -257,31 +395,68 @@ pub fn download_verified_capped<T: Transport>(
     std::fs::create_dir_all(target_dir).map_err(|err| DownloadError::Io {
         reason: format!("cannot use {}: {err}", target_dir.display()),
     })?;
+    sweep_download_temps(target_dir);
     let temp = temp_path_for(target_dir, filename);
-    let result = download_into(client, url, &temp, expected_sha512, root, max_bytes);
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result.map(|(sha256, bytes)| VerifiedDownload {
+    let temp_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|err| DownloadError::Io {
+            reason: format!("cannot create {}: {err}", temp.display()),
+        })?;
+    let mut verified = VerifiedDownload {
         temp_path: temp,
-        sha256,
-        bytes,
+        sha256: String::new(),
+        bytes: 0,
         committed: false,
-    })
+        temp_file,
+    };
+    #[cfg(unix)]
+    if let Err(err) = lock_download_temp(&verified.temp_file, libc::LOCK_EX) {
+        if err.raw_os_error().is_some_and(|code| {
+            [
+                libc::EOPNOTSUPP,
+                libc::ENOTSUP,
+                libc::ENOLCK,
+                libc::ENOSYS,
+                libc::EINVAL,
+            ]
+            .contains(&code)
+        }) {
+            log::debug!(
+                "download temp lock unavailable for {}: {err}",
+                verified.temp_path.display()
+            );
+        } else {
+            return Err(DownloadError::Io {
+                reason: format!("cannot lock {}: {err}", verified.temp_path.display()),
+            });
+        }
+    }
+    let (sha256, bytes) = download_into(
+        client,
+        url,
+        &verified.temp_path,
+        &mut verified.temp_file,
+        expected_sha512,
+        root,
+        max_bytes,
+    )?;
+    verified.sha256 = sha256;
+    verified.bytes = bytes;
+    Ok(verified)
 }
 
 fn download_into<T: Transport>(
     client: &ModrinthClient<T>,
     url: &str,
     temp: &Path,
+    out: &mut std::fs::File,
     expected_sha512: &str,
     root: ZipRoot,
     max_bytes: u64,
 ) -> Result<(String, u64), DownloadError> {
     let fetched = client.file_stream(url)?;
-    let mut out = std::fs::File::create(temp).map_err(|err| DownloadError::Io {
-        reason: format!("cannot write {}: {err}", temp.display()),
-    })?;
     let mut sha512 = Sha512::new();
     let mut sha256 = Sha256::new();
     let mut bytes: u64 = 0;
@@ -318,7 +493,6 @@ fn download_into<T: Transport>(
     out.sync_all().map_err(|err| DownloadError::Io {
         reason: format!("cannot write {}: {err}", temp.display()),
     })?;
-    drop(out);
     let actual_sha512 = hex::encode(sha512.finalize());
     if !constant_time_eq_hex(&actual_sha512, expected_sha512) {
         return Err(DownloadError::HashMismatch {
@@ -432,5 +606,35 @@ mod tests {
             assert!(validate_filename(bad).is_err(), "{bad:?} must be refused");
         }
         assert!(validate_filename("Fresh Animations v1.9.zip").is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_known_local_filesystems_allow_sweeping() {
+        for local in [
+            0xef53, 0x9123683e, 0x58465342, 0xf2f52010, 0x01021994, 0x858458f6,
+        ] {
+            assert!(is_local_linux_filesystem(local), "{local:#x}");
+        }
+        for (name, fs_type) in [
+            ("NFS", 0x6969),
+            ("SMB", 0x517b),
+            ("CIFS", 0xff534d42),
+            ("SMB2", 0xfe534d42),
+            ("FUSE including SSHFS", 0x65735546),
+            ("9P", 0x01021997),
+            ("AFS", 0x5346414f),
+            ("kAFS", 0x6b414653),
+            ("Ceph", 0x00c36400),
+            ("Lustre", 0x0bd00bd0),
+            ("GFS2", 0x01161970),
+            ("OCFS2", 0x7461636f),
+            ("overlay with unknown backing filesystem", 0x794c7630),
+            ("unknown", 0x12345678),
+            ("zero", 0),
+            ("all bits set", u32::MAX),
+        ] {
+            assert!(!is_local_linux_filesystem(fs_type), "{name}: {fs_type:#x}");
+        }
     }
 }
