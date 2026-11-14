@@ -14,7 +14,9 @@ import { compatibilityWarning, useWorlds } from './useWorlds';
 interface WorldsPageProps {
   active?: boolean;
   reloadSignal?: string;
+  gameDir?: string | null;
   client?: WorldsClient;
+  onDataChanged?: () => void;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
   /** No current guard answer is unknown, so writes stay paused. */
@@ -29,6 +31,8 @@ export default function WorldsPage({
   client = ipc,
   active = true,
   reloadSignal = '',
+  gameDir = null,
+  onDataChanged,
   gameRunning,
   gameGuardUnknown = false,
   gameGuardChecking = false,
@@ -56,7 +60,7 @@ export default function WorldsPage({
     deleteDatapack,
     removeDatapackReference,
     clearActionError,
-  } = useWorlds(client, active, reloadSignal);
+  } = useWorlds(client, active, reloadSignal, gameDir);
   const [selectedFilename, setSelectedFilename] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importPrompt, setImportPrompt] = useState<
@@ -76,7 +80,8 @@ export default function WorldsPage({
     void refreshGameRunning();
     await refreshListing();
     await reload();
-  }, [refreshGameRunning, refreshListing, reload]);
+    onDataChanged?.();
+  }, [refreshGameRunning, refreshListing, reload, onDataChanged]);
 
   const worldFormat = selected?.version?.data_format ?? null;
   const worldLabel = selected?.version?.name ?? selected?.level_name ?? null;
@@ -226,6 +231,7 @@ export default function WorldsPage({
       const outcome = await importDatapack(world, path, choice);
       // A switch mid-import leaves this outcome addressing the old world.
       if (selectedDirRef.current !== world) return outcome;
+      if (outcome.status === 'imported' || outcome.status === 'locked') onDataChanged?.();
       if (outcome.status === 'imported') {
         setSelectedFilename(outcome.filename);
         setImportPrompt(null);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { PackClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import type {
@@ -48,7 +48,12 @@ export function snapshotOf(stack: ResourceStack): StackSnapshot {
  * render the stack their write returns instead of re-reading it. The backend
  * rechecks the game guard before each write reaches the disk.
  */
-export function usePacks(client: PackClient, active = true, reloadSignal = ''): PacksState {
+export function usePacks(
+  client: PackClient,
+  active = true,
+  reloadSignal = '',
+  gameDir: string | null = null,
+): PacksState {
   const [packs, setPacks] = useState<Pack[]>([]);
   const [stats, setStats] = useState<PackStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,6 +63,22 @@ export function usePacks(client: PackClient, active = true, reloadSignal = ''): 
   const [stackLoading, setStackLoading] = useState(true);
   const [stackError, setStackError] = useState<IpcError | null>(null);
   const mounted = useRef(true);
+  const packRequest = useRef(0);
+  const stackRequest = useRef(0);
+  const loadedSignal = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    packRequest.current += 1;
+    stackRequest.current += 1;
+    loadedSignal.current = null;
+    setPacks([]);
+    setStats(null);
+    setStack(null);
+    setError(null);
+    setStackError(null);
+    setLoading(true);
+    setStackLoading(true);
+  }, [gameDir]);
 
   useEffect(() => {
     mounted.current = true;
@@ -67,46 +88,49 @@ export function usePacks(client: PackClient, active = true, reloadSignal = ''): 
   }, []);
 
   const reload = useCallback(async () => {
+    const request = ++packRequest.current;
     setLoading(true);
     try {
       const listing = await client.listResourcePacks();
-      if (!mounted.current) return;
+      if (!mounted.current || request !== packRequest.current) return;
       setPacks(listing.packs);
       setStats({ bytesRead: listing.bytes_read, elapsedMs: listing.elapsed_ms });
       setError(null);
     } catch (err) {
-      if (!mounted.current) return;
+      if (!mounted.current || request !== packRequest.current) return;
       setError(toAppError(err));
       setPacks([]);
     } finally {
-      if (mounted.current) setLoading(false);
+      if (mounted.current && request === packRequest.current) setLoading(false);
     }
   }, [client]);
 
   const refreshStack = useCallback(async () => {
+    const request = ++stackRequest.current;
     setStackLoading(true);
     setStackError(null);
     try {
       const next = await client.getResourceStack();
-      if (mounted.current) {
+      if (mounted.current && request === stackRequest.current) {
         setStack(next);
         setStackError(null);
       }
     } catch (err) {
       // Keep the last stack on screen. A failed re-read is not a reason to
       // replace a usable view with an error card.
-      if (!mounted.current) return;
+      if (!mounted.current || request !== stackRequest.current) return;
       setStackError(toAppError(err));
     } finally {
-      if (mounted.current) setStackLoading(false);
+      if (mounted.current && request === stackRequest.current) setStackLoading(false);
     }
   }, [client]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || loadedSignal.current === reloadSignal) return;
+    loadedSignal.current = reloadSignal;
     void reload();
     void refreshStack();
-  }, [reload, refreshStack, active, reloadSignal]);
+  }, [reload, refreshStack, active, reloadSignal, gameDir]);
 
   const importPack = useCallback(
     async (path: string, choice: ImportChoice = 'default') => {

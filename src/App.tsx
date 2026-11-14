@@ -64,8 +64,7 @@ export default function App({ client = ipc }: AppProps) {
   const [configReady, setConfigReady] = useState(false);
   // Dismissed by choosing a dir or skipping; Settings stays open for later.
   const [onboarded, setOnboarded] = useState(false);
-  // Bumped after a Discover install so Packs/Worlds refetch on return.
-  const [refreshEpoch, setRefreshEpoch] = useState(0);
+  const [dataEpoch, setDataEpoch] = useState(0);
   // At most one get_game_guard is outstanding: a hung call parks a backend
   // thread, so only its real settle frees the slot. A check wanted meanwhile
   // runs once the slot frees. The outstanding answer goes stale when it
@@ -193,6 +192,8 @@ export default function App({ client = ipc }: AppProps) {
     return () => media.removeEventListener('change', onChange);
   }, [config.theme]);
 
+  const dataChanged = useCallback(() => setDataEpoch((epoch) => epoch + 1), []);
+
   const activeLabel = config.active_game_dir ?? 'No game dir selected';
   const showOnboarding =
     configReady && !onboarded && !config.active_game_dir && !error;
@@ -259,53 +260,61 @@ export default function App({ client = ipc }: AppProps) {
           ) : null}
           {page === 'packs' || visited.includes('packs') ? (
             <div hidden={page !== 'packs'}>
-            <PacksPage
-              active={page === 'packs'} reloadSignal={`${refreshEpoch}:${config.active_game_dir}`}
-              client={client}
-              gameRunning={gameRunning}
-              gameGuardUnknown={guardPause !== null}
-              gameGuardChecking={guardPause === 'checking'}
-              refreshGameRunning={refreshGameRunning}
-            />
+              <PacksPage
+                active={page === 'packs'}
+                reloadSignal={`${dataEpoch}`}
+                gameDir={config.active_game_dir}
+                client={client}
+                gameRunning={gameRunning}
+                gameGuardUnknown={guardPause !== null}
+                gameGuardChecking={guardPause === 'checking'}
+                refreshGameRunning={refreshGameRunning}
+              />
             </div>
           ) : null}
           {page === 'worlds' || visited.includes('worlds') ? (
             <div hidden={page !== 'worlds'}>
-            <WorldsPage
-              active={page === 'worlds'} reloadSignal={`${refreshEpoch}:${config.active_game_dir}`}
-              client={client}
-              gameRunning={gameRunning}
-              gameGuardUnknown={guardPause !== null}
-              gameGuardChecking={guardPause === 'checking'}
-              refreshGameRunning={refreshGameRunning}
-            />
+              <WorldsPage
+                active={page === 'worlds'}
+                onDataChanged={dataChanged}
+                reloadSignal={`${dataEpoch}`}
+                gameDir={config.active_game_dir}
+                client={client}
+                gameRunning={gameRunning}
+                gameGuardUnknown={guardPause !== null}
+                gameGuardChecking={guardPause === 'checking'}
+                refreshGameRunning={refreshGameRunning}
+              />
             </div>
           ) : null}
           {page === 'discover' || visited.includes('discover') ? (
             <div hidden={page !== 'discover'}>
-            <DiscoverPage active={page === 'discover'}
-              client={client}
-              gameRunning={gameRunning}
-              gameGuardUnknown={guardPause !== null}
-              gameGuardChecking={guardPause === 'checking'}
-              hasGameDir={config.active_game_dir != null}
-              refreshGameRunning={refreshGameRunning}
-              onInstalled={() => setRefreshEpoch((epoch) => epoch + 1)}
-            />
+              <DiscoverPage
+                active={page === 'discover'}
+                reloadSignal={`${dataEpoch}`}
+                gameDir={config.active_game_dir}
+                client={client}
+                gameRunning={gameRunning}
+                gameGuardUnknown={guardPause !== null}
+                gameGuardChecking={guardPause === 'checking'}
+                hasGameDir={config.active_game_dir != null}
+                refreshGameRunning={refreshGameRunning}
+                onInstalled={dataChanged}
+              />
             </div>
           ) : null}
           {page === 'settings' || visited.includes('settings') ? (
             <div hidden={page !== 'settings'}>
-            <SettingsPage
-              active={page === 'settings'}
-              client={client}
-              config={config}
-              gameRunning={gameRunning}
-              gameGuardUnknown={guardPause !== null}
-              gameGuardChecking={guardPause === 'checking'}
-              refreshGameRunning={refreshGameRunning}
-              onConfigChanged={setConfig}
-            />
+              <SettingsPage
+                active={page === 'settings'}
+                client={client}
+                config={config}
+                gameRunning={gameRunning}
+                gameGuardUnknown={guardPause !== null}
+                gameGuardChecking={guardPause === 'checking'}
+                refreshGameRunning={refreshGameRunning}
+                onConfigChanged={setConfig}
+              />
             </div>
           ) : null}
         </main>

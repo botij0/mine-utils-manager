@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ipc } from '../../lib/ipc';
 import type { IpcClient } from '../../lib/ipc';
 import type { GameRunning, World } from '../../lib/types';
@@ -11,6 +11,8 @@ import { useModrinth } from './useModrinth';
 
 interface DiscoverPageProps {
   active?: boolean;
+  reloadSignal?: string;
+  gameDir?: string | null;
   client?: IpcClient;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
@@ -29,6 +31,8 @@ interface DiscoverPageProps {
 export default function DiscoverPage({
   client = ipc,
   active = true,
+  reloadSignal = '',
+  gameDir = null,
   gameRunning,
   gameGuardUnknown = false,
   gameGuardChecking = false,
@@ -36,17 +40,27 @@ export default function DiscoverPage({
   refreshGameRunning = () => {},
   onInstalled = () => {},
 }: DiscoverPageProps) {
-  const discover = useModrinth(client);
+  const discover = useModrinth(client, active, reloadSignal, gameDir);
   const [worlds, setWorlds] = useState<World[]>([]);
   const [installOpen, setInstallOpen] = useState(false);
 
+  const loadedWorlds = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    loadedWorlds.current = null;
+    setWorlds([]);
+  }, [gameDir]);
+
   useEffect(() => {
     let cancelled = false;
-    if (discover.kind !== 'datapack') return () => {};
+    if (!active || discover.kind !== 'datapack' || loadedWorlds.current === reloadSignal) return;
     client
       .listWorlds()
       .then((loaded) => {
-        if (!cancelled) setWorlds(loaded.filter((world) => !world.issue));
+        if (!cancelled) {
+          loadedWorlds.current = reloadSignal;
+          setWorlds(loaded.filter((world) => !world.issue));
+        }
       })
       .catch(() => {
         if (!cancelled) setWorlds([]);
@@ -54,12 +68,17 @@ export default function DiscoverPage({
     return () => {
       cancelled = true;
     };
-  }, [client, discover.kind]);
+  }, [client, discover.kind, active, reloadSignal, gameDir]);
+
+  const { world: targetWorld, setWorld } = discover;
+  useEffect(() => {
+    if (targetWorld && !worlds.some((world) => world.dir_name === targetWorld)) setWorld(null);
+  }, [worlds, targetWorld, setWorld]);
 
   // Unknown (before the first check, or a failed check) blocks installs: the
   // UI must never offer a write it cannot guard.
   const writesBlocked =
-    gameRunning === undefined || gameRunning !== null || gameGuardUnknown || !hasGameDir;
+    gameRunning === undefined || gameRunning !== null || gameGuardUnknown || !hasGameDir || discover.targets === null;
   const blockedReason = !hasGameDir
     ? 'No game dir is active. Pick a game dir in Settings first, then install.'
     : gameRunning != null

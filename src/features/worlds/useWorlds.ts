@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { formatVersionLabel } from '../../lib/format';
 import type { WorldsClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
@@ -90,7 +90,12 @@ export function compatibilityWarning(
  * Loads the world's list and the selected world's datapacks, and keeps both
  * fresh after every mutation.
  */
-export function useWorlds(client: WorldsClient, active = true, reloadSignal = ''): WorldsState {
+export function useWorlds(
+  client: WorldsClient,
+  active = true,
+  reloadSignal = '',
+  gameDir: string | null = null,
+): WorldsState {
   const [worlds, setWorlds] = useState<World[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<IpcError | null>(null);
@@ -115,6 +120,32 @@ export function useWorlds(client: WorldsClient, active = true, reloadSignal = ''
   const requestId = useRef(0);
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedName;
+  const worldsRequest = useRef(0);
+  const listingRequest = useRef(0);
+  const loadedSignal = useRef<string | null>(null);
+  const loadedListing = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    worldsRequest.current += 1;
+    listingRequest.current += 1;
+    requestId.current += 1;
+    loadedSignal.current = null;
+    loadedListing.current = null;
+    selectedRef.current = null;
+    setSelectedName(null);
+    setWorlds([]);
+    setPacks([]);
+    setStack(null);
+    setListingWorld(null);
+    setError(null);
+    setPacksError(null);
+    setStackError(null);
+    setActionError(null);
+    setBusy(false);
+    setLoading(true);
+    setPacksLoading(false);
+    setStackLoading(false);
+  }, [gameDir]);
 
   useEffect(() => {
     mounted.current = true;
@@ -137,36 +168,36 @@ export function useWorlds(client: WorldsClient, active = true, reloadSignal = ''
   }, []);
 
   const reload = useCallback(async () => {
+    const request = ++worldsRequest.current;
     setLoading(true);
     try {
       const next = await client.listWorlds();
-      if (!mounted.current) return;
+      if (!mounted.current || request !== worldsRequest.current) return;
       setWorlds(next);
       setError(null);
-      if (next.length > 0) {
-        const first = next[0].dir_name;
-        setSelectedName((prev) => {
-          if (prev !== null && next.some((world) => world.dir_name === prev)) return prev;
-          return first;
-        });
-      }
+      setSelectedName((prev) => {
+        if (prev !== null && next.some((world) => world.dir_name === prev)) return prev;
+        return next[0]?.dir_name ?? null;
+      });
     } catch (err) {
-      if (!mounted.current) return;
+      if (!mounted.current || request !== worldsRequest.current) return;
       setError(toAppError(err));
       setWorlds([]);
     } finally {
-      if (mounted.current) setLoading(false);
+      if (mounted.current && request === worldsRequest.current) setLoading(false);
     }
   }, [client]);
 
   useEffect(() => {
-    if (active) void reload();
-  }, [reload, active, reloadSignal]);
+    if (!active || loadedSignal.current === reloadSignal) return;
+    loadedSignal.current = reloadSignal;
+    void reload();
+  }, [reload, active, reloadSignal, gameDir]);
 
   const selected = worlds.find((world) => world.dir_name === selectedName) ?? null;
 
   const refreshListing = useCallback(async () => {
-    if (!selectedName) {
+    if (!selectedName || selectedRef.current !== selectedName) {
       setPacks([]);
       setStack(null);
       setListingWorld(null);
@@ -176,6 +207,7 @@ export function useWorlds(client: WorldsClient, active = true, reloadSignal = ''
     // previous world, or one overtaken by a mutation, never repopulates the
     // new selection.
     const world = selectedName;
+    const listingId = ++listingRequest.current;
     const request = requestId.current;
     setPacksLoading(true);
     setStackLoading(true);
@@ -183,12 +215,12 @@ export function useWorlds(client: WorldsClient, active = true, reloadSignal = ''
     setStackError(null);
     try {
       const listing = await client.listDatapacks(world);
-      if (!isCurrentRequest(world, request)) return;
+      if (!isCurrentRequest(world, request) || listingId !== listingRequest.current) return;
       setPacks(listing.packs.packs);
       setStack(listing.stack);
       setListingWorld(world);
     } catch (err) {
-      if (!isCurrentRequest(world, request)) return;
+      if (!isCurrentRequest(world, request) || listingId !== listingRequest.current) return;
       const appError = toAppError(err);
       setPacks([]);
       setStack(null);
@@ -196,7 +228,7 @@ export function useWorlds(client: WorldsClient, active = true, reloadSignal = ''
       setPacksError(appError);
       setStackError(appError);
     } finally {
-      if (isCurrentRequest(world, request)) {
+      if (isCurrentRequest(world, request) && listingId === listingRequest.current) {
         setPacksLoading(false);
         setStackLoading(false);
       }
@@ -204,8 +236,12 @@ export function useWorlds(client: WorldsClient, active = true, reloadSignal = ''
   }, [client, selectedName, isCurrentRequest]);
 
   useEffect(() => {
-    if (active) void refreshListing();
-  }, [refreshListing, active, reloadSignal]);
+    if (!active || !selectedName || selectedRef.current !== selectedName) return;
+    const key = JSON.stringify([reloadSignal, selectedName]);
+    if (loadedListing.current === key) return;
+    loadedListing.current = key;
+    void refreshListing();
+  }, [refreshListing, active, reloadSignal, selectedName, gameDir]);
 
   const select = useCallback((dirName: string) => {
     // Invalidate every in-flight request, drop the old world's rows so the

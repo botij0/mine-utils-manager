@@ -20,6 +20,7 @@ import { hasNestedSymlink, packFilename } from '../../lib/packPath';
 interface PacksPageProps {
   active?: boolean;
   reloadSignal?: string;
+  gameDir?: string | null;
   client?: PackClient;
   /** File and folder picker. Injected in tests. */
   pickPath?: (directory: boolean) => Promise<string | null>;
@@ -50,6 +51,7 @@ export default function PacksPage({
   client = ipc,
   active = true,
   reloadSignal = '',
+  gameDir = null,
   pickPath = pickPackPath,
   gameRunning,
   gameGuardUnknown = false,
@@ -70,7 +72,7 @@ export default function PacksPage({
     deletePack,
     togglePack,
     reorderStack,
-  } = usePacks(client, active, reloadSignal);
+  } = usePacks(client, active, reloadSignal, gameDir);
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<PackKind | 'all'>('all');
   const [format, setFormat] = useState('all');
@@ -89,7 +91,7 @@ export default function PacksPage({
   // first check has not landed yet, so fall back to the stack response. A
   // failed check keeps the last known running value and blocks writes.
   const running = gameRunning !== undefined ? gameRunning : (stack?.running ?? null);
-  const writesBlocked = running !== null || gameGuardUnknown;
+  const writesBlocked = running !== null || gameGuardUnknown || loading || stackLoading;
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -371,7 +373,7 @@ export default function PacksPage({
             <ActiveStack
               stack={stack}
               packs={packs}
-              busy={busy}
+              busy={busy || loading || stackLoading}
               running={running}
               guardUnknown={gameGuardUnknown}
               guardChecking={gameGuardChecking}
