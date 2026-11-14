@@ -18,6 +18,7 @@ pub mod pack_meta;
 pub mod pack_scan;
 pub mod paths;
 pub mod provenance;
+mod read_capped;
 pub mod resource_stack;
 pub mod world;
 

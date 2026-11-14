@@ -16,6 +16,8 @@ use crate::icon_cache::IconCache;
 use crate::level_dat;
 use crate::pack::FormatVersion;
 use crate::pack::PackIcon;
+use crate::pack_scan::MAX_ICON_BYTES;
+use crate::read_capped::read_capped;
 
 /// A world's game version: the `Data.Version.Name` string plus the data pack
 /// format the world's datapacks must declare, when the table covers it.
@@ -190,7 +192,7 @@ fn read_world(dir: &Path, icons: &IconCache, status: &game_lock::GameStatus) -> 
         detection_supported: status.supported,
         issue: None,
     };
-    match std::fs::read(dir.join("level.dat")) {
+    match read_capped(&dir.join("level.dat"), level_dat::MAX_LEVEL_DAT_BYTES) {
         Ok(bytes) => match level_dat::parse(&bytes) {
             Ok(view) => {
                 if let Some(name) = view.level_name {
@@ -215,7 +217,7 @@ fn read_world(dir: &Path, icons: &IconCache, status: &game_lock::GameStatus) -> 
             });
         }
     }
-    if let Ok(bytes) = std::fs::read(dir.join("icon.png")) {
+    if let Ok(bytes) = read_capped(&dir.join("icon.png"), MAX_ICON_BYTES) {
         world.icon = icons.store(&bytes).ok();
     }
     Some(world)
@@ -278,6 +280,47 @@ mod tests {
         }
         let icons = IconCache::new(&dir.path().join("cache"));
         (dir, icons)
+    }
+
+    #[test]
+    fn oversized_and_symlinked_icons_are_ignored() {
+        let good = level_dat_bytes(Some("1.21.10"), true);
+        let (dir, icons) = game_with(&[("large", Some(good.clone())), ("linked", Some(good))]);
+        let saves = dir.path().join("game/saves");
+        std::fs::write(saves.join("large/icon.png"), vec![1; 3 * 1024 * 1024]).unwrap();
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("icon");
+            std::fs::write(&target, b"icon").unwrap();
+            std::os::unix::fs::symlink(target, saves.join("linked/icon.png")).unwrap();
+        }
+        let worlds = scan_worlds(&dir.path().join("game"), &icons);
+        assert_eq!(worlds.len(), 2);
+        for world in worlds {
+            assert_eq!(world.icon, None);
+            assert_eq!(world.issue, None);
+            assert_eq!(world.version.unwrap().name, "1.21.10");
+        }
+    }
+
+    #[test]
+    fn oversized_level_data_reports_issue_and_keeps_other_worlds() {
+        let bomb = level_dat::gzip(&vec![0; 64 * 1024 * 1024 + 1]);
+        let (dir, icons) = game_with(&[
+            ("bad", Some(bomb)),
+            ("good", Some(level_dat_bytes(Some("1.21.10"), true))),
+        ]);
+        let worlds = scan_worlds(&dir.path().join("game"), &icons);
+        assert_eq!(worlds.len(), 2);
+        assert_eq!(worlds[0].issue.as_ref().unwrap().code, "level_dat");
+        assert!(worlds[0]
+            .issue
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("too large"));
+        assert_eq!(worlds[1].version.as_ref().unwrap().name, "1.21.10");
+        assert_eq!(worlds[1].issue, None);
     }
 
     #[test]
