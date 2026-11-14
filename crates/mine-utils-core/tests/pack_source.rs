@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use mine_utils_core::data_stack::{self, DataPaths};
 use mine_utils_core::pack::{PackError, PackLocation};
@@ -159,22 +159,28 @@ fn source_entrypoint_receipt() {
     let listing = scan_packs(&packs, &IconCache::new(&root.path().join("icons"))).unwrap();
     assert_eq!(listing.count, 4);
     println!("name | scan | sha256 | datapack import");
+    let mut rows = Vec::new();
     for card in listing.packs {
-        let path: PathBuf = card.path.clone();
+        let path = &card.path;
         let hash = HashCache::new()
-            .hash(&path, card.location)
+            .hash(path, card.location)
             .unwrap_or_else(|e| e.code().into());
-        println!(
+        let row = format!(
             "{} | {} | {} | {}",
             card.name,
             card.error.as_ref().map_or("ok", |e| &e.code),
             hash,
-            import(&path, root.path())
+            import(path, root.path())
         );
-        if card.name == "Dir" || card.name == "Zip" {
-            assert!(card.error.is_none());
-        }
+        println!("{row}");
+        rows.push(row);
     }
+    assert_eq!(rows, [
+        "Dir | ok | 57116f1f0a3f9324a03be6b2d9fd5a9fbdcd73b43351ae64e7faae5a24907839 | imported",
+        "Dotted | ok | 42b4746227141f4b166279ffb302b788c3947866c0388955def98ef6adb86fd4 | imported",
+        "Linked | pack_symlink | pack_symlink | pack_symlink",
+        "Zip | ok | 0419bcc7bec8a1f701452f9441872481272bacdb3b92d0fa19cb5b762563ae8e | imported",
+    ]);
 }
 
 #[test]
