@@ -234,17 +234,14 @@ fn import_entries_preserve_outcomes_and_disk_state() {
                 let _lock = case.starts_with("locked").then(|| lock_world(&world));
                 let before = disk(&game);
                 let result = if data {
-                    let paths = DataPaths {
-                        game_dir: game.clone(),
-                        world_dir: world.clone(),
-                        level_dat_path: world.join("level.dat"),
-                        datapacks_dir: packs.clone(),
-                        backups_root: root.path().join("backups"),
-                        backups: mine_utils_core::BackupsConfig {
+                    let paths = DataPaths::for_world(
+                        &mine_utils_core::WorldPaths::for_world(&game, "alpha").unwrap(),
+                        &root.path().join("backups"),
+                        mine_utils_core::BackupsConfig {
                             enabled: false,
                             keep: 10,
                         },
-                    };
+                    );
                     data_stack::import_datapack_with(&paths, &source, choice, &icons, &hashes, &trash, &guard).map(|outcome| match outcome {
                         DatapackImportOutcome::Imported { filename } => json!({"outcome":"imported", "filename":filename}),
                         DatapackImportOutcome::Locked { filename, .. } => json!({"outcome":"locked", "filename":filename}),
