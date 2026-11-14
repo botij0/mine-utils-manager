@@ -248,3 +248,19 @@ fn zip_metadata_cap_uses_actual_bytes_when_declared_size_is_false() {
         .contains("larger than"));
     assert_eq!(import(&source, root.path()), "pack_broken_archive");
 }
+
+#[cfg(unix)]
+#[test]
+fn symlink_cards_serialize_the_offending_path() {
+    let root = tempfile::tempdir().unwrap();
+    let packs = root.path().join("packs");
+    folder(&packs.join("Nested"), META);
+    let nested = packs.join("Nested/data/link");
+    let linked = packs.join("Root");
+    std::os::unix::fs::symlink("missing", &nested).unwrap();
+    std::os::unix::fs::symlink(packs.join("Nested"), &linked).unwrap();
+    let cards = scan_packs(&packs, &IconCache::new(&root.path().join("icons"))).unwrap();
+    let wire = serde_json::to_value(cards).unwrap();
+    assert_eq!(wire["packs"][0]["error"]["symlink_path"], nested.to_str().unwrap());
+    assert_eq!(wire["packs"][1]["error"]["symlink_path"], linked.to_str().unwrap());
+}
