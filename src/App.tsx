@@ -22,9 +22,11 @@ const PAGES: { id: PageId; label: string }[] = [
   { id: 'settings', label: 'Settings' },
 ];
 
-function pageFromHash(): PageId {
+const DEFAULT_PAGE: PageId = 'packs';
+
+function pageFromHash(): PageId | null {
   const hash = window.location.hash.replace('#', '');
-  return PAGES.some((item) => item.id === hash) ? (hash as PageId) : 'packs';
+  return PAGES.some((item) => item.id === hash) ? (hash as PageId) : null;
 }
 
 function resolvedTheme(theme: Theme): 'light' | 'dark' {
@@ -45,7 +47,7 @@ interface AppProps {
 }
 
 export default function App({ client = ipc }: AppProps) {
-  const [page, setPage] = useState<PageId>(pageFromHash);
+  const [page, setPage] = useState<PageId>(() => pageFromHash() ?? DEFAULT_PAGE);
   const [config, setConfig] = useState<Config>(defaultConfig);
   const [error, setError] = useState<AppError | null>(null);
   const [startupWarning, setStartupWarning] = useState<string | null>(null);
@@ -74,7 +76,18 @@ export default function App({ client = ipc }: AppProps) {
   }>({ busy: false, wanted: false, stale: false });
 
   useEffect(() => {
-    window.location.hash = page;
+    const onHashChange = () => setPage(pageFromHash() ?? DEFAULT_PAGE);
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  // A click to another page adds one history entry, so Back returns here. An
+  // empty or unknown hash is rewritten in place, so it adds none.
+  useEffect(() => {
+    const hashPage = pageFromHash();
+    if (hashPage === page) return;
+    if (hashPage) window.location.hash = page;
+    else window.history.replaceState(null, '', `#${page}`);
   }, [page]);
 
   useEffect(() => {
