@@ -204,6 +204,29 @@ describe('discover dialogs', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the busy install sheet open on Escape and disables Cancel', async () => {
+    const onClose = vi.fn();
+    render(<InstallSheet {...sheetProps} busy onClose={onClose} />);
+    await userEvent.setup().keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  });
+
+  it('does not refresh after a duplicate outcome', async () => {
+    const client = makeFakeClient([]);
+    client.installModrinthPack = async () => ({
+      kind: 'resourcepack', outcome: { status: 'duplicate', name: 'a.zip', sha256: 'abc', existing: 'b.zip' },
+    });
+    const onInstalled = vi.fn();
+    render(<DiscoverPage client={client} gameRunning={null} hasGameDir onInstalled={onInstalled} />);
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
+    fireEvent.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    expect(await screen.findByText(/already installed/)).toBeInTheDocument();
+    expect(onInstalled).not.toHaveBeenCalled();
+  });
+
   it('surfaces the provenance warning without failing the install', () => {
     const result: ModrinthInstallOutcome = {
       ...importedOutcome(),

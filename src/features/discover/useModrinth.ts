@@ -385,6 +385,7 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
       setInstallError(toAppError(new Error('pick a version with a downloadable file first')));
       return null;
     }
+    const token = selectToken.current;
     setInstallBusy(true);
     setInstallError(null);
     try {
@@ -395,10 +396,11 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
         kind,
         world: kind === 'datapack' ? (world ?? undefined) : undefined,
       });
-      if (mounted.current) setInstallResult(outcome);
+      if (!mounted.current || selectToken.current !== token) return null;
+      setInstallResult(outcome);
       return outcome;
     } catch (err) {
-      if (mounted.current) setInstallError(toAppError(err));
+      if (mounted.current && selectToken.current === token) setInstallError(toAppError(err));
       return null;
     } finally {
       if (mounted.current) setInstallBusy(false);
