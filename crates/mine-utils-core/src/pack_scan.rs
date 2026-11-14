@@ -1010,8 +1010,10 @@ fn find_duplicate(
         } else {
             continue;
         };
-        if hashes.hash(&path, location)? == sha256 {
-            return Ok(Some(path));
+        match hashes.hash(&path, location) {
+            Ok(hash) if hash == sha256 => return Ok(Some(path)),
+            Ok(_) | Err(AppError::Pack(PackError::Symlink { .. })) => continue,
+            Err(err) => return Err(err),
         }
     }
     Ok(None)
@@ -2165,6 +2167,38 @@ mod tests {
         );
         assert!(resourcepacks.join("Pack.zip").is_file());
         assert!(source.is_file());
+    }
+
+    #[test]
+    fn import_succeeds_next_to_installed_pack_with_nested_symlink() {
+        let (root, _cache_root, icons, hashes, _trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        let assets = resourcepacks.join("Linked/assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(
+            resourcepacks.join("Linked/pack.mcmeta"),
+            mcmeta(34, None, "linked"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/etc/hostname", assets.join("link.txt")).unwrap();
+        let source = root.path().join("incoming/Pack.zip");
+        simple_zip(&source, 34, None);
+
+        let result = import_pack(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+        );
+        assert!(
+            matches!(result, Ok(ImportOutcome::Imported { .. })),
+            "{result:?}"
+        );
+        assert_eq!(
+            std::fs::read(resourcepacks.join("Pack.zip")).unwrap(),
+            std::fs::read(source).unwrap()
+        );
     }
 
     #[test]
