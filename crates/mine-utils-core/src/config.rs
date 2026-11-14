@@ -456,6 +456,7 @@ mod tests {
         let game = root.path().join("game");
         let world = game.join("saves/creative");
         std::fs::create_dir_all(&world).unwrap();
+        std::fs::write(world.join("level.dat"), b"level").unwrap();
         let mut config = Config::default();
         config.set_active_game_dir(&game);
         let mut store = ConfigStore::new(path.clone(), config);
@@ -463,6 +464,21 @@ mod tests {
         assert_eq!(load_config(&path).unwrap().last_world, Some(world));
         store.config.set_active_game_dir(&root.path().join("other"));
         assert_eq!(store.config().last_world, None);
+    }
+
+    #[test]
+    fn last_world_refuses_a_saves_folder_without_level_dat() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        let game = root.path().join("game");
+        std::fs::create_dir_all(game.join("saves/plain")).unwrap();
+        let mut config = Config::default();
+        config.set_active_game_dir(&game);
+        let mut store = ConfigStore::new(path.clone(), config);
+        let err = store.set_last_world("plain").unwrap_err();
+        assert_eq!(err.code(), "world");
+        assert_eq!(store.config().last_world, None);
+        assert!(!path.exists());
     }
 
     #[test]

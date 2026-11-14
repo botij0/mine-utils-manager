@@ -392,6 +392,7 @@ mod last_world_tests {
         let game = root.path().join("game");
         let world = game.join("saves/creative");
         std::fs::create_dir_all(&world).unwrap();
+        std::fs::write(world.join("level.dat"), b"level").unwrap();
         let path = root.path().join("config.json");
         let mut config = Config::default();
         config.set_active_game_dir(&game);
