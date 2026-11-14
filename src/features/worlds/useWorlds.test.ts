@@ -25,7 +25,7 @@ describe('useWorlds', () => {
     const client = worldsClient({
       listWorlds: async () => available,
       getConfig: async () => ({ ...defaultConfig(), last_world: remembered }),
-      setLastWorld: async (name: string) => { remembered = `/saves/${name}`; },
+      setLastWorld: async (path: string) => { remembered = path; },
     });
     const first = renderHook(() => useWorlds(client));
     await act(async () => {});
