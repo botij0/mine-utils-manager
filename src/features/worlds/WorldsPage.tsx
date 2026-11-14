@@ -231,12 +231,14 @@ export default function WorldsPage({
       const outcome = await importDatapack(world, path, choice);
       // A switch mid-import leaves this outcome addressing the old world.
       if (selectedDirRef.current !== world) return outcome;
-      if (outcome.status === 'imported' || outcome.status === 'locked') onDataChanged?.();
+      if (outcome.status === 'imported' || outcome.status === 'locked') {
+        onDataChanged?.();
+        void refreshGameRunning();
+      }
       if (outcome.status === 'imported') {
         setSelectedFilename(outcome.filename);
         setImportPrompt(null);
         setImportPath(null);
-        void refreshAfterGuard();
       } else if (outcome.status === 'locked') {
         setLockedNotice(
           `Copied ${outcome.filename} but left it disabled: ${outcome.detail}. Enable it after the lock releases.`,
@@ -244,7 +246,6 @@ export default function WorldsPage({
         setSelectedFilename(outcome.filename);
         setImportPrompt(null);
         setImportPath(null);
-        void refreshAfterGuard();
       } else if (outcome.status === 'skipped') {
         setImportPrompt(null);
         setImportPath(null);
@@ -271,7 +272,10 @@ export default function WorldsPage({
     <section className="worlds-page">
       {error && !noGameDir ? (
         <p className="error" role="alert">
-          {error.message}
+          {error.message}{' '}
+          <button type="button" className="button" onClick={() => void reload()}>
+            Retry
+          </button>
         </p>
       ) : null}
       {noGameDir ? (

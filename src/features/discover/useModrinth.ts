@@ -155,6 +155,7 @@ export function useModrinth(
   const loadingMore = useRef(false);
   const [retryNonce, setRetryNonce] = useState(0);
   const loadedTargets = useRef<string | null>(null);
+  const versionChoice = useRef<{ manual: boolean; target: string | null }>({ manual: false, target: null });
 
   useLayoutEffect(() => {
     loadedTargets.current = null;
@@ -211,8 +212,16 @@ export function useModrinth(
       : (targets?.preferred_launcher ?? null);
 
   useEffect(() => {
-    const preferred = preferModrinthVersion(versions, targetVersion);
-    setSelectedVersionId(preferred?.id ?? null);
+    if (!targetVersion) return;
+    const targetChanged = versionChoice.current.target !== targetVersion;
+    versionChoice.current.target = targetVersion;
+    setSelectedVersionId((current) => {
+      const picked = versions.find((version) => version.id === current);
+      if (versionChoice.current.manual && picked &&
+          (!targetChanged || picked.game_versions.includes(targetVersion))) return current;
+      versionChoice.current.manual = false;
+      return preferModrinthVersion(versions, targetVersion)?.id ?? null;
+    });
   }, [versions, targetVersion]);
 
   useEffect(() => {
@@ -327,6 +336,7 @@ export function useModrinth(
     async (hit: ModrinthSearchHit | null) => {
       const token = selectToken.current + 1;
       selectToken.current = token;
+      versionChoice.current = { manual: false, target: targetVersion };
       setSelected(hit);
       setProject(null);
       setVersions([]);
@@ -357,7 +367,7 @@ export function useModrinth(
         if (mounted.current && selectToken.current === token) setDetailLoading(false);
       }
     },
-    [client, kind, targets],
+    [client, kind, targets, targetVersion],
   );
 
   const setKindAndClear = useCallback((next: ModrinthKind) => {
@@ -378,23 +388,10 @@ export function useModrinth(
     setInstallError(null);
   }, [resetSearchResults]);
 
-  // When the datapack target world changes, re-run the version preference:
-  // a version picked for the old world's game version may not support the
-  // new one. A compatible manual pick is left alone; an incompatible one is
-  // reset to the compatible-first (or newest) version.
-  const worldTarget = targets?.world_version ?? null;
-  useEffect(() => {
-    if (kind !== 'datapack' || versions.length === 0) return;
-    setSelectedVersionId((current) => {
-      const picked = versions.find((version) => version.id === current) ?? null;
-      if (picked && (!worldTarget || picked.game_versions.includes(worldTarget))) {
-        return current;
-      }
-      return preferModrinthVersion(versions, worldTarget)?.id ?? current;
-    });
-    // Runs only on target-world changes, not on every versions load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, worldTarget]);
+  const chooseVersion = useCallback((id: string) => {
+    versionChoice.current.manual = true;
+    setSelectedVersionId(id);
+  }, []);
 
   const retry = useCallback(() => {
     setOffline(false);
@@ -482,7 +479,7 @@ export function useModrinth(
     detailLoading,
     detailError,
     selectedVersionId,
-    setSelectedVersionId,
+    setSelectedVersionId: chooseVersion,
     installBusy,
     installResult,
     installError,

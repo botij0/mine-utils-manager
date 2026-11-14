@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ipc } from '../../lib/ipc';
 import type { IpcClient } from '../../lib/ipc';
-import type { GameRunning, World } from '../../lib/types';
+import type { GameRunning, ModrinthKind, World } from '../../lib/types';
 import GameRunningBanner from '../packs/GameRunningBanner';
 import InstallSheet from './InstallSheet';
 import ProjectDetail from './ProjectDetail';
@@ -25,7 +25,7 @@ interface DiscoverPageProps {
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
   /** Fires after a successful install so the app refreshes Packs/Worlds. */
-  onInstalled?: () => void;
+  onInstalled?: (kind: ModrinthKind) => void;
 }
 
 export default function DiscoverPage({
@@ -41,14 +41,14 @@ export default function DiscoverPage({
   onInstalled = () => {},
 }: DiscoverPageProps) {
   const discover = useModrinth(client, active, reloadSignal, gameDir);
-  const [worlds, setWorlds] = useState<World[]>([]);
+  const [worlds, setWorlds] = useState<World[] | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
 
   const loadedWorlds = useRef<string | null>(null);
 
   useLayoutEffect(() => {
     loadedWorlds.current = null;
-    setWorlds([]);
+    setWorlds(null);
   }, [gameDir]);
 
   useEffect(() => {
@@ -72,7 +72,7 @@ export default function DiscoverPage({
 
   const { world: targetWorld, setWorld } = discover;
   useEffect(() => {
-    if (targetWorld && !worlds.some((world) => world.dir_name === targetWorld)) setWorld(null);
+    if (targetWorld && worlds && !worlds.some((world) => world.dir_name === targetWorld)) setWorld(null);
   }, [worlds, targetWorld, setWorld]);
 
   // Unknown (before the first check, or a failed check) blocks installs: the
@@ -87,7 +87,9 @@ export default function DiscoverPage({
         ? 'Mine Utils could not check whether Minecraft is running; installs are paused until a check succeeds.'
         : gameGuardUnknown || gameRunning === undefined
           ? 'Checking whether Minecraft is running; installs are paused until the check lands.'
-          : null;
+          : discover.targets === null
+            ? 'Install targets are unavailable. Return to Discover to retry.'
+            : null;
 
   const selectedVersion =
     discover.versions.find((version) => version.id === discover.selectedVersionId) ?? null;
@@ -110,7 +112,7 @@ export default function DiscoverPage({
   const onInstall = async () => {
     const outcome = await discover.install();
     if (outcome?.outcome.status === 'imported' || outcome?.outcome.status === 'locked') {
-      onInstalled();
+      onInstalled(outcome.kind);
     }
   };
 
@@ -212,7 +214,8 @@ export default function DiscoverPage({
             ''
           }
           filename={selectedFile?.filename ?? ''}
-          worlds={worlds}
+          worlds={worlds ?? []}
+          worldsLoading={worlds === null}
           world={discover.world}
           onWorldChange={discover.setWorld}
           busy={discover.installBusy}

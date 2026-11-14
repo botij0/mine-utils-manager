@@ -105,3 +105,31 @@ it('refreshes Discover after one Worlds import without rescanning Worlds or Pack
   expect(await screen.findByLabelText('Search packs')).toHaveValue('');
   expect(packs).toHaveBeenCalledTimes(before.packs);
 });
+
+it('explains why an install is paused when targets cannot load', async () => {
+  const user = userEvent.setup();
+  const client = await clientWithWorld();
+  client.modrinthTargets = async () => { throw new IpcError('io', 'target read failed'); };
+  render(<App client={client} />);
+  await user.click(await screen.findByRole('button', { name: 'Discover' }));
+  fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
+  await user.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
+  await user.click(await screen.findByRole('button', { name: 'Install…' }));
+  expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled();
+  expect(screen.getByRole('dialog')).toHaveTextContent('Install targets are unavailable. Return to Discover to retry.');
+});
+
+it('shows loading rather than an empty world list in the install sheet', async () => {
+  const user = userEvent.setup();
+  const client = await clientWithWorld();
+  client.listWorlds = () => new Promise(() => {});
+  render(<App client={client} />);
+  await user.click(await screen.findByRole('button', { name: 'Discover' }));
+  await user.click(screen.getByRole('tab', { name: 'Datapacks' }));
+  fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'pure' } });
+  await user.click(await screen.findByRole('button', { name: /^Pure Datapack,/ }));
+  await user.click(await screen.findByRole('button', { name: 'Install…' }));
+  expect(screen.getByRole('dialog')).toHaveTextContent('Loading worlds…');
+  expect(screen.getByRole('dialog')).not.toHaveTextContent('No worlds yet.');
+  expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled();
+});

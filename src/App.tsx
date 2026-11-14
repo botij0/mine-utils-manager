@@ -64,7 +64,7 @@ export default function App({ client = ipc }: AppProps) {
   const [configReady, setConfigReady] = useState(false);
   // Dismissed by choosing a dir or skipping; Settings stays open for later.
   const [onboarded, setOnboarded] = useState(false);
-  const [dataEpoch, setDataEpoch] = useState(0);
+  const [dataEpoch, setDataEpoch] = useState({ packs: 0, worlds: 0, discover: 0 });
   // At most one get_game_guard is outstanding: a hung call parks a backend
   // thread, so only its real settle frees the slot. A check wanted meanwhile
   // runs once the slot frees. The outstanding answer goes stale when it
@@ -192,7 +192,13 @@ export default function App({ client = ipc }: AppProps) {
     return () => media.removeEventListener('change', onChange);
   }, [config.theme]);
 
-  const dataChanged = useCallback(() => setDataEpoch((epoch) => epoch + 1), []);
+  const worldsChanged = useCallback(() => {
+    setDataEpoch((epoch) => ({ ...epoch, discover: epoch.discover + 1 }));
+  }, []);
+  const installed = useCallback((kind: 'resourcepack' | 'datapack') => {
+    const page = kind === 'resourcepack' ? 'packs' : 'worlds';
+    setDataEpoch((epoch) => ({ ...epoch, [page]: epoch[page] + 1 }));
+  }, []);
 
   const activeLabel = config.active_game_dir ?? 'No game dir selected';
   const showOnboarding =
@@ -262,7 +268,7 @@ export default function App({ client = ipc }: AppProps) {
             <div hidden={page !== 'packs'}>
               <PacksPage
                 active={page === 'packs'}
-                reloadSignal={`${dataEpoch}`}
+                reloadSignal={`${dataEpoch.packs}`}
                 gameDir={config.active_game_dir}
                 client={client}
                 gameRunning={gameRunning}
@@ -276,8 +282,8 @@ export default function App({ client = ipc }: AppProps) {
             <div hidden={page !== 'worlds'}>
               <WorldsPage
                 active={page === 'worlds'}
-                onDataChanged={dataChanged}
-                reloadSignal={`${dataEpoch}`}
+                onDataChanged={worldsChanged}
+                reloadSignal={`${dataEpoch.worlds}`}
                 gameDir={config.active_game_dir}
                 client={client}
                 gameRunning={gameRunning}
@@ -291,7 +297,7 @@ export default function App({ client = ipc }: AppProps) {
             <div hidden={page !== 'discover'}>
               <DiscoverPage
                 active={page === 'discover'}
-                reloadSignal={`${dataEpoch}`}
+                reloadSignal={`${dataEpoch.discover}`}
                 gameDir={config.active_game_dir}
                 client={client}
                 gameRunning={gameRunning}
@@ -299,7 +305,7 @@ export default function App({ client = ipc }: AppProps) {
                 gameGuardChecking={guardPause === 'checking'}
                 hasGameDir={config.active_game_dir != null}
                 refreshGameRunning={refreshGameRunning}
-                onInstalled={dataChanged}
+                onInstalled={installed}
               />
             </div>
           ) : null}

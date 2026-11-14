@@ -14,6 +14,7 @@ interface InstallSheetProps {
   versionLabel: string;
   filename: string;
   worlds: World[];
+  worldsLoading?: boolean;
   world: string | null;
   onWorldChange: (world: string | null) => void;
   busy: boolean;
@@ -51,6 +52,7 @@ export default function InstallSheet({
   versionLabel,
   filename,
   worlds,
+  worldsLoading = false,
   world,
   onWorldChange,
   busy,
@@ -84,7 +86,9 @@ export default function InstallSheet({
       {kind === 'datapack' ? (
         <div className="field">
           <label htmlFor="discover-world">Target world</label>
-          {worlds.length === 0 ? (
+          {worldsLoading ? (
+            <StatusNote role="status">Loading worlds…</StatusNote>
+          ) : worlds.length === 0 ? (
             <StatusNote role="status">
               No worlds yet. Create or open a world in Minecraft first, then
               install a datapack into it.

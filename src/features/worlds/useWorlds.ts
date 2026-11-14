@@ -169,10 +169,12 @@ export function useWorlds(
 
   const reload = useCallback(async () => {
     const request = ++worldsRequest.current;
+    loadedSignal.current = null;
     setLoading(true);
     try {
       const next = await client.listWorlds();
       if (!mounted.current || request !== worldsRequest.current) return;
+      loadedSignal.current = reloadSignal;
       setWorlds(next);
       setError(null);
       setSelectedName((prev) => {
@@ -186,11 +188,10 @@ export function useWorlds(
     } finally {
       if (mounted.current && request === worldsRequest.current) setLoading(false);
     }
-  }, [client]);
+  }, [client, reloadSignal]);
 
   useEffect(() => {
     if (!active || loadedSignal.current === reloadSignal) return;
-    loadedSignal.current = reloadSignal;
     void reload();
   }, [reload, active, reloadSignal, gameDir]);
 
@@ -208,6 +209,7 @@ export function useWorlds(
     // new selection.
     const world = selectedName;
     const listingId = ++listingRequest.current;
+    loadedListing.current = null;
     const request = requestId.current;
     setPacksLoading(true);
     setStackLoading(true);
@@ -216,6 +218,7 @@ export function useWorlds(
     try {
       const listing = await client.listDatapacks(world);
       if (!isCurrentRequest(world, request) || listingId !== listingRequest.current) return;
+      loadedListing.current = JSON.stringify([reloadSignal, world]);
       setPacks(listing.packs.packs);
       setStack(listing.stack);
       setListingWorld(world);
@@ -233,13 +236,12 @@ export function useWorlds(
         setStackLoading(false);
       }
     }
-  }, [client, selectedName, isCurrentRequest]);
+  }, [client, selectedName, isCurrentRequest, reloadSignal]);
 
   useEffect(() => {
     if (!active || !selectedName || selectedRef.current !== selectedName) return;
     const key = JSON.stringify([reloadSignal, selectedName]);
     if (loadedListing.current === key) return;
-    loadedListing.current = key;
     void refreshListing();
   }, [refreshListing, active, reloadSignal, selectedName, gameDir]);
 
