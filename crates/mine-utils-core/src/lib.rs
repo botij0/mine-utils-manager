@@ -14,6 +14,7 @@ pub mod level_dat;
 pub mod modrinth;
 pub mod options_txt;
 pub mod pack;
+pub mod pack_import;
 pub mod pack_meta;
 pub mod pack_scan;
 mod pack_source;
