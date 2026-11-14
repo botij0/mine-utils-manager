@@ -17,8 +17,8 @@ const creative = world({ dir_name: 'Creative Flat', path: '/old/saves/Creative F
 const newFirst = world({ dir_name: 'New First', path: '/new/saves/New First' });
 const newCreative = world({ dir_name: 'Creative Flat', path: '/new/saves/Creative Flat' });
 
-function selectionClient() {
-  let config: Config = { ...defaultConfig(), active_game_dir: '/old' };
+function selectionClient(lastWorld: string | null = null) {
+  let config: Config = { ...defaultConfig(), active_game_dir: '/old', last_world: lastWorld };
   let available = [survival, creative];
   const setLastWorld = vi.fn(async (path: string) => { config = { ...config, last_world: path }; });
   const client = {
@@ -77,7 +77,7 @@ describe('remembered world selection', () => {
   });
 
   it('ignores a held old-directory world list and its remembered selection after a directory switch', async () => {
-    const state = selectionClient();
+    const state = selectionClient(creative.path);
     const held = deferred<World[]>();
     const listWorlds = vi.fn().mockReturnValueOnce(held.promise)
       .mockImplementation(() => state.client.listWorlds());
@@ -95,6 +95,46 @@ describe('remembered world selection', () => {
       '/new/saves/New First', '/new/saves/Creative Flat',
     ]);
     expect(state.config.last_world).toBeNull();
+    expect(state.client.setLastWorld).not.toHaveBeenCalled();
+  });
+
+  it('ignores an old-directory config response that lands after the new selection', async () => {
+    const state = selectionClient(creative.path);
+    const held = deferred<Config>();
+    const getConfig = vi.fn().mockReturnValueOnce(held.promise)
+      .mockImplementation(() => state.client.getConfig());
+    const client = { ...state.client, getConfig };
+    const oldConfig = state.config;
+    const hook = renderHook(({ dir }) => useWorlds(client, true, '', dir), {
+      initialProps: { dir: '/old' },
+    });
+    state.switchDir();
+    hook.rerender({ dir: '/new' });
+    await act(async () => {});
+    expect(hook.result.current.selected?.path).toBe('/new/saves/New First');
+    await act(async () => { held.resolve(oldConfig); });
+    expect(hook.result.current.selected?.path).toBe('/new/saves/New First');
+    expect(state.config.last_world).toBeNull();
+    expect(state.client.setLastWorld).not.toHaveBeenCalled();
+  });
+
+  it('falls back without persisting when the remembered path is missing or belongs to another directory', async () => {
+    const state = selectionClient(creative.path);
+    const client = { ...state.client, listWorlds: async () => [survival] };
+    const hook = renderHook(() => useWorlds(client, true, '', '/old'));
+    await act(async () => {});
+    expect(hook.result.current.selected?.path).toBe('/old/saves/Survival 1_17');
+    expect(state.config.last_world).toBe('/old/saves/Creative Flat');
+    hook.unmount();
+    const foreignConfig = { ...state.config, active_game_dir: '/new' };
+    const newClient = {
+      ...state.client,
+      getConfig: async () => foreignConfig,
+      listWorlds: async () => [newFirst, newCreative],
+    };
+    const restarted = renderHook(() => useWorlds(newClient, true, '', '/new'));
+    await act(async () => {});
+    expect(restarted.result.current.selected?.path).toBe('/new/saves/New First');
     expect(state.client.setLastWorld).not.toHaveBeenCalled();
   });
 

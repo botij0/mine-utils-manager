@@ -313,7 +313,9 @@ export const mockClient: IpcClient = {
   },
   async setLastWorld(path: string) {
     const config = loadConfig();
-    if (!config.active_game_dir || !mockWorldList().some((world) => `${config.active_game_dir}/saves/${world.dir_name}` === path)) throw new IpcError('world', 'world does not exist');
+    if (!config.active_game_dir || !mockWorldList().some((world) => `${config.active_game_dir}/saves/${world.dir_name}` === path)) {
+      throw new IpcError('world', 'world does not exist');
+    }
     config.last_world = path;
     storeConfig(config);
   },
