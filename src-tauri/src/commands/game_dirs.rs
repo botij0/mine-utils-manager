@@ -380,3 +380,49 @@ mod tests {
         assert_eq!(state.config().theme, Theme::System);
     }
 }
+
+#[cfg(test)]
+mod last_world_tests {
+    use super::*;
+    use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+
+    #[test]
+    fn command_persists_world_to_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let world = game.join("saves/creative");
+        std::fs::create_dir_all(&world).unwrap();
+        let path = root.path().join("config.json");
+        let mut config = Config::default();
+        config.set_active_game_dir(&game);
+        let app = mock_builder()
+            .manage(AppState::new(
+                ConfigStore::new(path.clone(), config),
+                None,
+                root.path().to_path_buf(),
+            ))
+            .invoke_handler(tauri::generate_handler![set_last_world])
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let result = get_ipc_response(
+            &window,
+            tauri::webview::InvokeRequest {
+                cmd: "set_last_world".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "tauri://localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(serde_json::json!({"path": world})),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.into(),
+            },
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            mine_utils_core::load_config(&path).unwrap().last_world,
+            Some(world)
+        );
+    }
+}
