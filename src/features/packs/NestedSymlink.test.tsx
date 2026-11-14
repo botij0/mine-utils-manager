@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { pack } from '../../test/fake-packs';
 import PackDetail from './PackDetail';
 import DatapackDetail from '../worlds/DatapackDetail';
+import PacksPage from './PacksPage';
+import { makeFakeClient } from '../../test/fake-ipc';
 
 const path = '/packs/Linked';
 const error = {
@@ -16,6 +18,17 @@ const nested = pack('Linked', {
 });
 
 describe('nested symlink pack details', () => {
+  it('removes an enabled nested-folder reference without offering to enable it through Undo', async () => {
+    const client = makeFakeClient({ packs: [nested], resource: ['vanilla', 'file/Linked'] });
+    render(<PacksPage client={client} />);
+    await userEvent.click(await screen.findByRole('button', { name: /^Linked,/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Enabled in the active stack' }));
+    expect(await screen.findByText('Linked disabled')).toBeInTheDocument();
+    expect((await client.getResourceStack()).entries).toEqual([{ kind: 'foreign', value: 'vanilla' }]);
+    expect(screen.getByRole('checkbox', { name: 'Enabled in the active stack' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+  });
+
   it('lets an enabled resource folder be disabled and trashed', async () => {
     const toggle = vi.fn();
     const remove = vi.fn().mockResolvedValue(undefined);
