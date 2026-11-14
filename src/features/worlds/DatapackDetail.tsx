@@ -55,8 +55,8 @@ export default function DatapackDetail({
         </p>
         {symlink ? (
           <p className="panel-note">
-            This entry is a link, not a real pack. Deleting it removes only the link; the folder
-            it points at is never touched.
+            This entry is a link, not a real pack. Mine Utils never deletes links. Remove the link
+            from datapacks in a file manager; the folder it points at is never touched.
           </p>
         ) : null}
         {nestedSymlink ? (
@@ -78,14 +78,16 @@ export default function DatapackDetail({
               {enabled ? 'Disable' : 'Enable'}
             </button>
           ) : null}
-          <button
-            type="button"
-            className="button button-danger"
-            disabled={writesBlocked || busy || nonUtf8}
-            onClick={() => onDelete(pack.path)}
-          >
-            Delete
-          </button>
+          {symlink ? null : (
+            <button
+              type="button"
+              className="button button-danger"
+              disabled={writesBlocked || busy || nonUtf8}
+              onClick={() => onDelete(pack.path)}
+            >
+              Delete
+            </button>
+          )}
         </div>
       </section>
     );

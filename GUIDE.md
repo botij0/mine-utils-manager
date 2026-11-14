@@ -183,7 +183,7 @@ This removes the dead entry from `level.dat`. It does not try to enable a missin
 
 Select a datapack and choose **Delete**. Mine Utils disables the pack, moves it to the system trash, then removes its reference from the world. If the pack cannot be moved to the trash, it stays installed but disabled.
 
-When the datapack root is a symlink, deletion removes only the link. The folder it points to is not touched.
+When the datapack root is a symlink, Mine Utils does not delete it. Remove the link from `datapacks` in a file manager; the folder it points to is not touched.
 
 For a real datapack folder containing a nested symlink, details show the link path. Remove that link in a file manager before enabling the pack. You can still disable an enabled pack. Deleting moves the whole pack folder to the trash, including the link, without touching its target.
 
