@@ -218,7 +218,7 @@ Special outcomes:
 
 - Identical content already at the target filename is reused without another download.
 - A duplicate is reported without replacing the installed content.
-- A filename collision must be resolved from **Packs** or **Worlds**, where Replace is available.
+- A filename collision is reported before downloading, and the existing file is left untouched. Remove or rename that file, then install again.
 - A locked datapack world receives the file, but the datapack stays disabled until the lock is released.
 - Other running-game states block the install before downloading.
 

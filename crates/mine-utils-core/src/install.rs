@@ -46,7 +46,11 @@ pub enum PreparedSource {
     /// The exact bytes (by SHA-512) were already in place; no download ran.
     /// The expected hash is carried into `finish` so a swap between prepare
     /// and finish is detected instead of misattributed.
-    Existing { sha256: String, sha512: String },
+    Existing {
+        sha256: String,
+        sha512: String,
+    },
+    Collision,
 }
 
 /// Everything [`finish_modrinth_install`] needs. Built without holding any
@@ -208,19 +212,7 @@ pub fn prepare_modrinth_install<T: Transport>(
                     sha512: file.hashes.sha512.to_ascii_lowercase(),
                 }
             }
-            _ => {
-                // Same name, different bytes: download and verify the real
-                // file, then report a collision without touching the dest.
-                let verified = download::download_verified(
-                    client,
-                    &file.url,
-                    &target_dir,
-                    &file.filename,
-                    &file.hashes.sha512,
-                    root,
-                )?;
-                PreparedSource::Downloaded(verified)
-            }
+            _ => PreparedSource::Collision,
         }
     } else {
         let verified = download::download_verified(
@@ -464,6 +456,7 @@ fn commit_source(prepared: PreparedInstall) -> Result<Committed, AppError> {
         ..
     } = prepared;
     match source {
+        PreparedSource::Collision => Ok(Committed::Collision { name: filename }),
         PreparedSource::Existing { sha256, sha512 } => {
             let dest = target_dir.join(&filename);
             let current = hash_file(&dest)?;

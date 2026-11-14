@@ -657,12 +657,18 @@ fn import_pack_with_services(
 
     std::fs::create_dir_all(resourcepacks)?;
     let root = std::fs::canonicalize(resourcepacks)?;
+    if source.parent() == Some(root.as_path()) {
+        let mut bytes_read = 0;
+        let pack = inspect_entry(&source, location, icons, &mut bytes_read)?;
+        return Ok(ImportOutcome::Imported {
+            pack: Box::new(pack),
+        });
+    }
+
     let sha256 = hashes.hash(&source, location)?;
     let existing = find_duplicate(&root, &sha256, hashes)?;
 
-    // Re-importing a pack that already lives in resourcepacks is a no-op. The
-    // source is never deleted, whatever the caller chose.
-    if source.parent() == Some(root.as_path()) || existing.as_deref() == Some(source.as_path()) {
+    if existing.as_deref() == Some(source.as_path()) {
         let mut bytes_read = 0;
         let pack = inspect_entry(&source, location, icons, &mut bytes_read)?;
         return Ok(ImportOutcome::Imported {
@@ -2085,6 +2091,26 @@ mod tests {
         assert_eq!(listing.packs[0].description, "Demo pack");
         assert_eq!(listing.packs[1].description, "Colliding");
         assert!(source.is_file());
+    }
+
+    #[test]
+    fn in_place_import_does_not_hash_the_pack_or_siblings() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let packs = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&packs).unwrap();
+        simple_zip(&packs.join("Sibling.zip"), 34, None);
+        simple_zip(&packs.join("Pack.zip"), 34, None);
+        let outcome = import_pack_with(
+            &packs.join("Pack.zip"),
+            &packs,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+        assert!(matches!(outcome, ImportOutcome::Imported { .. }));
+        assert_eq!(hashes.entries.lock().unwrap().len(), 0);
     }
 
     #[test]

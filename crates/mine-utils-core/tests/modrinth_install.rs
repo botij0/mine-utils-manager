@@ -256,6 +256,78 @@ fn leftovers(dir: &Path) -> Vec<String> {
     out
 }
 
+#[cfg(unix)]
+#[test]
+fn installs_ignore_siblings_with_nested_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    for datapack in [false, true] {
+        let fx = fixture();
+        let (kind, url, filename, bytes, root) = if datapack {
+            (
+                "datapack",
+                DATAPACK_URL,
+                DATAPACK_FILE,
+                datapack_zip(),
+                fx.game_dir.join("saves/alpha/datapacks"),
+            )
+        } else {
+            (
+                "resourcepack",
+                RESOURCE_URL,
+                RESOURCE_FILE,
+                resource_zip(),
+                fx.game_dir.join("resourcepacks"),
+            )
+        };
+        let sibling = root.join("sibling");
+        std::fs::create_dir(&sibling).unwrap();
+        symlink(fx.game_dir.join("options.txt"), sibling.join("link")).unwrap();
+        let (client, _) = client(
+            MockApi::new()
+                .with(
+                    &versions_url(),
+                    versions_json(url, filename, &sha512_hex(&bytes), &[WORLD_VERSION]),
+                )
+                .with(url, bytes.clone()),
+        );
+        let prepared = prepare_modrinth_install(
+            &client,
+            &fx.game_dir,
+            datapack.then_some("alpha"),
+            PROJECT,
+            VERSION,
+            filename,
+            kind,
+        )
+        .unwrap();
+        let paths = data_paths(&fx);
+        let outcome = finish_modrinth_install(
+            prepared,
+            &fx.stack_paths,
+            datapack.then_some(&paths),
+            &fx.data_dir,
+            &fx.icons,
+            &fx.hashes,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                outcome,
+                CoreInstallOutcome::ResourcePack {
+                    outcome: mine_utils_core::ImportOutcome::Imported { .. },
+                    ..
+                } | CoreInstallOutcome::Datapack {
+                    outcome: mine_utils_core::DatapackImportOutcome::Imported { .. },
+                    ..
+                }
+            ),
+            "{outcome:?}"
+        );
+        assert_eq!(std::fs::read(root.join(filename)).unwrap(), bytes);
+    }
+}
+
 #[test]
 fn resource_pack_installs_enables_and_records_provenance() {
     let fx = fixture();
@@ -534,8 +606,8 @@ fn colliding_existing_file_reports_collision_and_keeps_dest() {
         .expect("lookup")
         .is_none());
     assert!(
-        api.cdn_calls().len() == 1,
-        "the real bytes were verified first"
+        api.cdn_calls().is_empty(),
+        "a collision does not download the file"
     );
     assert!(leftovers(&fx.game_dir).is_empty(), "no download temps left");
 }
