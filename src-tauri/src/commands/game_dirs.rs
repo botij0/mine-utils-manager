@@ -269,15 +269,29 @@ mod tests {
             None,
             root.path().to_path_buf(),
         ));
-        let writer = state.lock();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let writer_state = Arc::clone(&state);
+        let writer = std::thread::spawn(move || {
+            writer_state
+                .update(|store| {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    store.set_theme(Theme::Dark)
+                })
+                .unwrap();
+        });
+        started_rx.recv().unwrap();
         let (tx, rx) = mpsc::channel();
         let reader = Arc::clone(&state);
         let thread =
             std::thread::spawn(move || tx.send(reader.snapshot().unwrap().game_dir).unwrap());
         let result = rx.recv_timeout(Duration::from_millis(500));
-        drop(writer);
+        release_tx.send(()).unwrap();
+        writer.join().unwrap();
         thread.join().unwrap();
         assert_eq!(result.unwrap(), root.path());
+        assert_eq!(state.config().theme, Theme::Dark);
     }
     #[test]
     fn concurrent_adds_persist_both_directories() {
