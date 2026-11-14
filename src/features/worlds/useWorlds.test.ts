@@ -20,7 +20,7 @@ describe('useWorlds', () => {
 
   it('restores the remembered world and falls back when it is missing', async () => {
     const second = world({ dir_name: 'Creative Flat', path: '/saves/Creative Flat' });
-    let remembered = '/saves/Creative Flat';
+    let remembered: string | null = null;
     let available = [world(), second];
     const client = worldsClient({
       listWorlds: async () => available,
@@ -29,8 +29,13 @@ describe('useWorlds', () => {
     });
     const first = renderHook(() => useWorlds(client));
     await act(async () => {});
-    expect(first.result.current.selected?.dir_name).toBe('Creative Flat');
+    expect(first.result.current.selected?.dir_name).toBe('Survival 1_17');
+    await act(async () => { first.result.current.select('Creative Flat'); });
     first.unmount();
+    const restored = renderHook(() => useWorlds(client));
+    await act(async () => {});
+    expect(restored.result.current.selected?.dir_name).toBe('Creative Flat');
+    restored.unmount();
     available = [world()];
     const next = renderHook(() => useWorlds(client));
     await act(async () => {});

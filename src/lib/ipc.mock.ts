@@ -307,8 +307,15 @@ export const mockClient: IpcClient = {
     await delay();
     const config = loadConfig();
     const next = withActiveGameDir(config, listing(config), path);
+    if (config.active_game_dir !== path) next.last_world = null;
     storeConfig(next);
     return makeState(next);
+  },
+  async setLastWorld(path: string) {
+    const config = loadConfig();
+    if (!config.active_game_dir || !mockWorldList().some((world) => `${config.active_game_dir}/saves/${world.dir_name}` === path)) throw new IpcError('world', 'world does not exist');
+    config.last_world = path;
+    storeConfig(config);
   },
   async getConfig() {
     await delay();
@@ -474,7 +481,8 @@ export const mockClient: IpcClient = {
   async listWorlds() {
     await delay();
     assertActiveGameDir();
-    return mockWorldList();
+    const game = loadConfig().active_game_dir;
+    return mockWorldList().map((world) => ({ ...world, path: `${game}/saves/${world.dir_name}` }));
   },
   async listDatapacks(world: string) {
     await delay();

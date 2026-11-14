@@ -48,6 +48,8 @@ export interface PackClient {
 /** The world and datapack surface. The page is tested against this interface. */
 export interface WorldsClient {
   listWorlds(): Promise<World[]>;
+  getConfig(): Promise<Config>;
+  setLastWorld(path: string): Promise<void>;
   listDatapacks(world: string): Promise<DatapackListing>;
   importDatapack(world: string, path: string, choice?: ImportChoice): Promise<DatapackImportOutcome>;
   deleteDatapack(world: string, path: string): Promise<DatapackDeleteOutcome>;
@@ -175,6 +177,7 @@ const tauriClient: IpcClient = {
   addGameDir: (path) => call<GameDirState>('add_game_dir', { path }),
   removeGameDir: (path) => call<GameDirState>('remove_game_dir', { path }),
   setActiveGameDir: (path) => call<GameDirState>('set_active_game_dir', { path }),
+  setLastWorld: (path) => call<void>('set_last_world', { path }),
   getConfig: () => call<Config>('get_config'),
   setTheme: (theme) => call<Config>('set_theme', { theme }),
   getStartupWarning: () => call<string | null>('get_startup_warning'),
@@ -278,6 +281,7 @@ export const ipc: IpcClient = {
   addGameDir: (path) => pick().addGameDir(path),
   removeGameDir: (path) => pick().removeGameDir(path),
   setActiveGameDir: (path) => pick().setActiveGameDir(path),
+  setLastWorld: (path) => pick().setLastWorld(path),
   getConfig: () => pick().getConfig(),
   setTheme: (theme) => pick().setTheme(theme),
   getStartupWarning: () => pick().getStartupWarning(),

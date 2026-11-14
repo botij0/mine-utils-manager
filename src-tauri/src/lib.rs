@@ -68,6 +68,7 @@ pub fn run() {
             commands::game_dirs::add_game_dir,
             commands::game_dirs::remove_game_dir,
             commands::game_dirs::set_active_game_dir,
+            commands::game_dirs::set_last_world,
             commands::game_dirs::get_config,
             commands::game_dirs::set_theme,
             commands::game_dirs::get_startup_warning,

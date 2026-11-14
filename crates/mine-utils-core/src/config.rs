@@ -86,6 +86,9 @@ impl Config {
     /// Mark a dir active. The caller validates that the path is known, since
     /// detection spans more than the dirs stored here.
     pub fn set_active_game_dir(&mut self, path: &Path) {
+        if self.active_game_dir.as_deref() != Some(path) {
+            self.last_world = None;
+        }
         self.active_game_dir = Some(path.to_path_buf());
     }
 
@@ -155,6 +158,23 @@ impl ConfigStore {
         }
         let mut next = self.config.clone();
         next.set_active_game_dir(path);
+        self.commit(next)
+    }
+
+    pub fn set_last_world(&mut self, world: &str) -> Result<(), AppError> {
+        let game = self
+            .config
+            .active_game_dir
+            .as_deref()
+            .ok_or(AppError::NoActiveGameDir)?;
+        let path = crate::world::WorldPaths::for_world(game, world)?.world_dir;
+        if !path.is_dir() {
+            return Err(AppError::World {
+                reason: format!("{} is not a world in this game dir", path.display()),
+            });
+        }
+        let mut next = self.config.clone();
+        next.last_world = Some(path);
         self.commit(next)
     }
 

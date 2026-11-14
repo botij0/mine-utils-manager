@@ -186,6 +186,39 @@ pub async fn add_game_dir(
 }
 
 #[tauri::command]
+pub async fn set_last_world(state: State<'_, AppState>, path: String) -> Result<(), AppError> {
+    state.note_first_ipc();
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = PathBuf::from(&path);
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| AppError::World {
+                reason: "invalid world path".into(),
+            })?;
+        state
+            .update(|store| {
+                let game = store
+                    .config()
+                    .active_game_dir
+                    .as_deref()
+                    .ok_or(AppError::NoActiveGameDir)?;
+                if path != game.join("saves").join(&name) {
+                    return Err(AppError::World {
+                        reason: "world is not in the active game dir".into(),
+                    });
+                }
+                store.set_last_world(&name)
+            })
+            .map(|_| ())
+    })
+    .await
+    .map_err(join_error)?
+}
+
+#[tauri::command]
 pub async fn remove_game_dir(
     state: State<'_, AppState>,
     path: String,

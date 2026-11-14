@@ -119,6 +119,8 @@ export function useWorlds(
   // in-flight write, it only has to lose to a newer selection or mutation.
   const requestId = useRef(0);
   const selectedRef = useRef<string | null>(null);
+  const lastWorldWrite = useRef<Promise<void>>(Promise.resolve());
+  const directoryGeneration = useRef(0);
   selectedRef.current = selectedName;
   const worldsRequest = useRef(0);
   const listingRequest = useRef(0);
@@ -126,6 +128,7 @@ export function useWorlds(
   const loadedListing = useRef<string | null>(null);
 
   useLayoutEffect(() => {
+    directoryGeneration.current += 1;
     worldsRequest.current += 1;
     listingRequest.current += 1;
     requestId.current += 1;
@@ -172,14 +175,16 @@ export function useWorlds(
     loadedSignal.current = null;
     setLoading(true);
     try {
-      const next = await client.listWorlds();
+      const [next, config] = await Promise.all([client.listWorlds(), client.getConfig()]);
       if (!mounted.current || request !== worldsRequest.current) return;
+      if (gameDir !== null && config.active_game_dir !== gameDir) return;
       loadedSignal.current = reloadSignal;
       setWorlds(next);
       setError(null);
       setSelectedName((prev) => {
         if (prev !== null && next.some((world) => world.dir_name === prev)) return prev;
-        return next[0]?.dir_name ?? null;
+        return next.find((world) => world.path === config.last_world)?.dir_name
+          ?? next[0]?.dir_name ?? null;
       });
     } catch (err) {
       if (!mounted.current || request !== worldsRequest.current) return;
@@ -188,7 +193,7 @@ export function useWorlds(
     } finally {
       if (mounted.current && request === worldsRequest.current) setLoading(false);
     }
-  }, [client, reloadSignal]);
+  }, [client, gameDir, reloadSignal]);
 
   useEffect(() => {
     if (!active || loadedSignal.current === reloadSignal) return;
@@ -262,7 +267,20 @@ export function useWorlds(
     setPacksLoading(true);
     setStackLoading(true);
     setSelectedName(dirName);
-  }, []);
+    const world = worlds.find((item) => item.dir_name === dirName);
+    if (world) {
+      const generation = directoryGeneration.current;
+      lastWorldWrite.current = lastWorldWrite.current
+        .then(() => {
+          if (generation === directoryGeneration.current) return client.setLastWorld(world.path);
+        })
+        .catch((err: unknown) => {
+          if (mounted.current && generation === directoryGeneration.current) {
+            setActionError(toAppError(err));
+          }
+        });
+    }
+  }, [client, worlds]);
 
   const toggleDatapack = useCallback(
     async (filename: string, enabled: boolean) => {
