@@ -395,6 +395,33 @@ mod tests {
     }
 
     #[test]
+    fn removed_manual_directory_cannot_be_selected_from_stale_listing() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let mut config = Config::default();
+        config.add_game_dir(GameDir {
+            path: game.clone(),
+            source: DiscoverySource::Manual,
+        });
+        let entries = vec![GameDirEntry {
+            path: game.clone(),
+            source: DiscoverySource::Manual,
+            present: true,
+            stored: true,
+        }];
+        let mut store = ConfigStore::new(root.path().join("config.json"), config);
+        store.remove_game_dir(&game).unwrap();
+        assert_eq!(
+            store
+                .set_active_game_dir(&game, &entries)
+                .unwrap_err()
+                .code(),
+            "unknown_game_dir"
+        );
+        assert_eq!(store.config().active_game_dir, None);
+    }
+
+    #[test]
     fn missing_fields_use_defaults() {
         let config: Config = serde_json::from_str(r#"{"schema":1,"theme":"dark"}"#).unwrap();
 
