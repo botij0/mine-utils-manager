@@ -166,6 +166,7 @@ The `mine-utils-core` crate does not depend on Tauri. This keeps filesystem and 
 | `config.rs` | Validate, persist, and mutate app configuration |
 | `paths.rs` | Resolve platform config, data, and cache directories |
 | `pack_scan.rs`, `pack.rs`, `pack_meta.rs` | Scan zip and folder packs, read `pack.mcmeta`, classify content, and expose metadata |
+| `pack_source.rs` | Shared zip and folder entry listing, capped reads, fingerprints, and digests |
 | `icon_cache.rs` | Cache local pack and world icons by content hash |
 | `world.rs` | Scan saves, read world metadata, and report world state |
 | `options_txt.rs` | Parse and atomically update resource pack arrays while preserving unrelated options |
@@ -196,7 +197,7 @@ flowchart TD
     Result --> UI["Updated React state"]
 ```
 
-Scanning reads each pack and its metadata. Enabling adds a `file/` entry to `resourcePacks`. Disabling removes that entry and any matching `incompatibleResourcePacks` entry. Unrelated `options.txt` lines stay intact.
+Scanning reads each pack and its metadata through `PackSource`. Folder sources reject root and nested symlinks during scanning, hashing, and import. Zip entries stay archive bytes and are never resolved as filesystem links. Both source types enforce metadata and icon limits on bytes actually read, and zip lookups normalize leading `./`. Enabling adds a `file/` entry to `resourcePacks`. Disabling removes that entry and any matching `incompatibleResourcePacks` entry. Unrelated `options.txt` lines stay intact.
 
 Both stored stacks use load order from low to high. The UI reverses that list so the top card loads last and has the highest priority. Foreign entries such as `vanilla` keep their indices and cannot move.
 

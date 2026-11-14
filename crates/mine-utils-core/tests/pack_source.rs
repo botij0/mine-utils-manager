@@ -176,3 +176,69 @@ fn source_entrypoint_receipt() {
         }
     }
 }
+
+#[test]
+fn a_file_named_data_does_not_make_a_datapack() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("fake");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("pack.mcmeta"), META).unwrap();
+    std::fs::write(source.join("data"), b"not a directory").unwrap();
+    assert_eq!(import(&source, root.path()), "level_dat");
+}
+
+#[cfg(unix)]
+#[test]
+fn zip_and_folder_root_symlinks_are_never_read() {
+    let root = tempfile::tempdir().unwrap();
+    let packs = root.path().join("packs");
+    std::fs::create_dir(&packs).unwrap();
+    let dir = root.path().join("RealDir");
+    let archive = root.path().join("RealZip.zip");
+    folder(&dir, META);
+    zip(&archive, "", META);
+    for (name, target, location) in [
+        ("Dir", dir, PackLocation::Directory),
+        ("Zip.zip", archive, PackLocation::Zip),
+    ] {
+        let source = packs.join(name);
+        std::os::unix::fs::symlink(target, &source).unwrap();
+        assert_eq!(
+            HashCache::new().hash(&source, location).unwrap_err().code(),
+            "pack_symlink"
+        );
+        assert_eq!(import(&source, root.path()), "pack_symlink");
+    }
+    let codes: Vec<_> = scan_packs(&packs, &IconCache::new(&root.path().join("icons")))
+        .unwrap()
+        .packs
+        .into_iter()
+        .map(|card| card.error.unwrap().code)
+        .collect();
+    assert_eq!(codes, vec!["pack_symlink", "pack_symlink"]);
+}
+
+#[test]
+fn zip_metadata_cap_uses_actual_bytes_when_declared_size_is_false() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("Forged.zip");
+    let mut meta = META.to_vec();
+    meta.resize(1024 * 1024 + 1, b' ');
+    zip(&source, "", &meta);
+    let mut bytes = std::fs::read(&source).unwrap();
+    let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    bytes[central + 24..central + 28].copy_from_slice(&1u32.to_le_bytes());
+    bytes[22..26].copy_from_slice(&1u32.to_le_bytes());
+    std::fs::write(&source, bytes).unwrap();
+    let packs = scan_packs(root.path(), &IconCache::new(&root.path().join("icons")))
+        .unwrap()
+        .packs;
+    assert_eq!(packs[0].error.as_ref().unwrap().code, "pack_broken_archive");
+    assert!(packs[0]
+        .error
+        .as_ref()
+        .unwrap()
+        .message
+        .contains("larger than"));
+    assert_eq!(import(&source, root.path()), "pack_broken_archive");
+}

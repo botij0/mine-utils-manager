@@ -22,7 +22,6 @@ use crate::level_dat::{self, LevelDatError};
 use crate::pack::{ImportChoice, PackError};
 use crate::pack_scan::{
     self, display_name, HashCache, PackListing, SystemTrash, TrashService, MAX_META_BYTES,
-    MAX_ZIP_ENTRIES,
 };
 use crate::resource_stack::{stack_core, SystemGuard, WriteGuard};
 
@@ -633,7 +632,7 @@ fn source_location(source: &Path) -> Result<crate::pack::PackLocation, AppError>
         path: source.to_path_buf(),
     })?;
     if canonical.is_dir() {
-        pack_scan::reject_symlinks(&canonical)?;
+        crate::pack_source::reject_symlinks(&canonical)?;
         return Ok(PackLocation::Directory);
     }
     if canonical
@@ -652,71 +651,19 @@ fn source_location(source: &Path) -> Result<crate::pack::PackLocation, AppError>
 /// A datapack must carry a `data` root and a `pack.mcmeta`. A resource-only
 /// pack is rejected before anything is copied.
 fn require_data_root(source: &Path, location: crate::pack::PackLocation) -> Result<(), AppError> {
-    use crate::pack::PackLocation;
     let name = display_name(source);
-    let (has_data, has_meta) = match location {
-        PackLocation::Directory => {
-            let has_data = source.join("data").is_dir();
-            let has_meta = source.join("pack.mcmeta").is_file();
-            (has_data, has_meta)
-        }
-        PackLocation::Zip => zip_roots(source, &name)?,
-    };
-    if !has_meta {
+    let reader = crate::pack_source::PackSource::new(source, location)?;
+    let names = reader.entry_names(&mut 0)?;
+    if reader
+        .read_capped("pack.mcmeta", MAX_META_BYTES, &mut 0)?
+        .is_none()
+    {
         return Err(PackError::MissingMeta { name }.into());
     }
-    if !has_data {
-        return Err(AppError::from(DataStackError::ResourceOnly { name }));
+    if !names.iter().any(|entry| entry.starts_with("data/")) {
+        return Err(DataStackError::ResourceOnly { name }.into());
     }
     Ok(())
-}
-
-fn zip_roots(source: &Path, name: &str) -> Result<(bool, bool), AppError> {
-    let file = std::fs::File::open(source).map_err(|_| PackError::NotFound {
-        path: source.to_path_buf(),
-    })?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|_| PackError::BrokenArchive {
-        name: name.to_string(),
-        reason: "invalid Zip archive".to_string(),
-    })?;
-    if archive.len() > MAX_ZIP_ENTRIES {
-        return Err(PackError::BrokenArchive {
-            name: name.to_string(),
-            reason: "archive has too many entries".to_string(),
-        }
-        .into());
-    }
-    let mut has_data = false;
-    let mut has_meta = false;
-    let mut meta_bytes: u64 = 0;
-    for index in 0..archive.len() {
-        let entry = archive
-            .by_index(index)
-            .map_err(|_| PackError::BrokenArchive {
-                name: name.to_string(),
-                reason: "invalid Zip archive".to_string(),
-            })?;
-        let entry_name = entry.name().to_string();
-        if entry_name == "pack.mcmeta" || entry_name.starts_with("data/") {
-            if entry_name == "pack.mcmeta" {
-                has_meta = true;
-                meta_bytes = entry.size();
-            } else {
-                has_data = true;
-            }
-        }
-        if has_data && has_meta {
-            break;
-        }
-    }
-    if meta_bytes > MAX_META_BYTES {
-        return Err(PackError::BrokenArchive {
-            name: name.to_string(),
-            reason: "pack.mcmeta is too large".to_string(),
-        }
-        .into());
-    }
-    Ok((has_data, has_meta))
 }
 
 /// List the installed datapacks of one world: a zip or a directory with

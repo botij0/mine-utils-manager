@@ -1,13 +1,11 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime};
 
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 use crate::format_table::FormatTable;
@@ -18,15 +16,11 @@ use crate::pack::{
 };
 use crate::pack_meta::parse_pack_meta;
 
-/// A pack.png larger than this is ignored rather than cached.
-pub const MAX_ICON_BYTES: u64 = 2 * 1024 * 1024;
-/// pack.mcmeta larger than this is treated as broken.
-pub const MAX_META_BYTES: u64 = 1024 * 1024;
-/// A central directory with more entries than this is treated as hostile.
-pub const MAX_ZIP_ENTRIES: usize = 65_536;
-/// Rough size of one zip central directory record plus its 22 byte end record.
-const CENTRAL_DIR_ENTRY_BYTES: u64 = 46;
-const CENTRAL_DIR_END_BYTES: u64 = 22;
+pub(crate) use crate::pack_source::display_name;
+#[cfg(test)]
+use crate::pack_source::open_zip_capped;
+use crate::pack_source::{Fingerprint, PackSource};
+pub use crate::pack_source::{MAX_ICON_BYTES, MAX_META_BYTES, MAX_ZIP_ENTRIES};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PackListing {
@@ -102,19 +96,6 @@ pub fn scan_packs(resourcepacks: &Path, icons: &IconCache) -> Result<PackListing
             ));
             continue;
         }
-        if is_dir && !path.join("pack.mcmeta").is_file() {
-            // A directory without pack.mcmeta is an error card naming the
-            // pack, not a silent skip.
-            packs.push(error_pack(
-                &path,
-                location,
-                PackError::MissingMeta {
-                    name: display_name(&path),
-                },
-                0,
-            ));
-            continue;
-        }
         let read_before = bytes_read;
         let result = inspect_entry(&path, location, icons, &mut bytes_read);
         let read_delta = bytes_read - read_before;
@@ -155,40 +136,21 @@ fn inspect_entry(
     icons: &IconCache,
     bytes_read: &mut u64,
 ) -> Result<Pack, PackError> {
-    match location {
-        PackLocation::Zip => inspect_zip(path, icons, bytes_read),
-        PackLocation::Directory => inspect_dir(path, icons, bytes_read),
-    }
-}
-
-fn inspect_zip(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<Pack, PackError> {
     let read_before = *bytes_read;
-    let name = display_name(path);
-    let mut archive = open_zip(path, &name)?;
-
-    let names: Vec<String> = archive
-        .file_names()
-        .map(|entry| normalize_entry_name(entry).to_string())
-        .collect();
-    *bytes_read += names
-        .iter()
-        .map(|entry| CENTRAL_DIR_ENTRY_BYTES + entry.len() as u64)
-        .sum::<u64>()
-        + CENTRAL_DIR_END_BYTES;
-
+    let source = PackSource::new(path, location)?;
+    let names = source.entry_names(bytes_read)?;
     let kind = kind_from_names(names.iter().map(String::as_str));
-    let meta = meta_from_zip(&mut archive, &name, bytes_read)?;
-
-    let icon = find_entry(&mut archive, "pack.png")
-        .and_then(|entry| {
-            read_zip_entry(&mut archive, &entry, &name, MAX_ICON_BYTES, bytes_read).ok()
-        })
+    let name = display_name(path);
+    let meta = read_meta(&source, &name, bytes_read)?;
+    let icon = source
+        .read_capped("pack.png", MAX_ICON_BYTES, bytes_read)
+        .ok()
+        .flatten()
         .filter(|bytes| icon_within_pixel_cap(bytes))
         .and_then(|bytes| icons.store(&bytes).ok());
-
     Ok(finish_pack(
         path,
-        PackLocation::Zip,
+        location,
         kind,
         meta,
         icon,
@@ -197,138 +159,17 @@ fn inspect_zip(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<P
     ))
 }
 
-fn inspect_dir(path: &Path, icons: &IconCache, bytes_read: &mut u64) -> Result<Pack, PackError> {
-    let read_before = *bytes_read;
-    let name = display_name(path);
-    let meta = meta_from_dir(path, &name, bytes_read)?;
-
-    let children: Vec<String> = std::fs::read_dir(path)
-        .map_err(|err| broken(&name, err))?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .collect();
-    let kind = kind_from_names(children.iter().map(String::as_str));
-
-    let icon = read_dir_icon(path, icons, bytes_read);
-    Ok(finish_pack(
-        path,
-        PackLocation::Directory,
-        kind,
-        meta,
-        icon,
-        None,
-        *bytes_read - read_before,
-    ))
-}
-
-fn read_dir_icon(
-    path: &Path,
-    icons: &IconCache,
-    bytes_read: &mut u64,
-) -> Option<crate::pack::PackIcon> {
-    let icon_path = path.join("pack.png");
-    let metadata = std::fs::metadata(&icon_path).ok()?;
-    if !metadata.is_file() || metadata.len() > MAX_ICON_BYTES {
-        return None;
-    }
-    let bytes = std::fs::read(&icon_path).ok()?;
-    *bytes_read += bytes.len() as u64;
-    if !icon_within_pixel_cap(&bytes) {
-        return None;
-    }
-    icons.store(&bytes).ok()
-}
-
-type Archive = zip::ZipArchive<File>;
-
-fn open_zip(path: &Path, name: &str) -> Result<Archive, PackError> {
-    open_zip_capped(path, name, MAX_ZIP_ENTRIES)
-}
-
-fn open_zip_capped(path: &Path, name: &str, max_entries: usize) -> Result<Archive, PackError> {
-    let file = File::open(path).map_err(|err| broken(name, err))?;
-    let archive = zip::ZipArchive::new(file).map_err(|err| broken(name, err))?;
-    // The entry count is capped before any name is collected.
-    if archive.len() > max_entries {
-        return Err(broken(
-            name,
-            format!("archive has more than {max_entries} entries"),
-        ));
-    }
-    Ok(archive)
-}
-
-/// Zip entries may be written as "./pack.mcmeta". Every reader normalizes the
-/// same way, so lookup and kind detection never disagree.
-fn normalize_entry_name(name: &str) -> &str {
-    name.trim_start_matches("./")
-}
-
-/// The first entry whose normalized name matches, under its real name.
-fn find_entry(archive: &mut Archive, target: &str) -> Option<String> {
-    archive
-        .file_names()
-        .map(str::to_string)
-        .find(|name| normalize_entry_name(name) == target)
-}
-
-fn read_zip_entry(
-    archive: &mut Archive,
-    entry: &str,
-    pack_name: &str,
-    cap: u64,
-    bytes_read: &mut u64,
-) -> Result<Vec<u8>, PackError> {
-    let file = archive
-        .by_name(entry)
-        .map_err(|err| broken(pack_name, err))?;
-    // The declared size is never trusted: capacity is capped and the read
-    // stops one byte past the cap so an oversized entry cannot fill memory.
-    let mut bytes = Vec::with_capacity(file.size().min(cap) as usize);
-    let mut limited = file.take(cap + 1);
-    let read = limited
-        .read_to_end(&mut bytes)
-        .map_err(|err| broken(pack_name, err))?;
-    if read as u64 > cap {
-        return Err(broken(
-            pack_name,
-            format!("{entry} is larger than {cap} bytes"),
-        ));
-    }
-    *bytes_read += read as u64;
-    Ok(bytes)
-}
-
-fn meta_from_zip(
-    archive: &mut Archive,
-    pack_name: &str,
+fn read_meta(
+    source: &PackSource<'_>,
+    name: &str,
     bytes_read: &mut u64,
 ) -> Result<crate::pack::PackMeta, PackError> {
-    // The error names the pack, not the metadata file.
-    let entry = find_entry(archive, "pack.mcmeta").ok_or_else(|| PackError::MissingMeta {
-        name: pack_name.to_string(),
-    })?;
-    let bytes = read_zip_entry(archive, &entry, pack_name, MAX_META_BYTES, bytes_read)?;
-    parse_pack_meta(&bytes).map_err(|err| named_meta_error(err, pack_name))
-}
-
-fn meta_from_dir(
-    path: &Path,
-    pack_name: &str,
-    bytes_read: &mut u64,
-) -> Result<crate::pack::PackMeta, PackError> {
-    let meta_path = path.join("pack.mcmeta");
-    let size = std::fs::metadata(&meta_path)
-        .map_err(|_| PackError::MissingMeta {
-            name: pack_name.to_string(),
-        })?
-        .len();
-    if size > MAX_META_BYTES {
-        return Err(broken(pack_name, "pack.mcmeta is larger than 1 MB"));
-    }
-    let bytes = std::fs::read(&meta_path).map_err(|err| broken(pack_name, err))?;
-    *bytes_read += bytes.len() as u64;
-    parse_pack_meta(&bytes).map_err(|err| named_meta_error(err, pack_name))
+    let bytes = source
+        .read_capped("pack.mcmeta", MAX_META_BYTES, bytes_read)?
+        .ok_or_else(|| PackError::MissingMeta {
+            name: name.to_string(),
+        })?;
+    parse_pack_meta(&bytes).map_err(|err| named_meta_error(err, name))
 }
 
 fn named_meta_error(err: PackError, name: &str) -> PackError {
@@ -393,22 +234,11 @@ fn error_pack(path: &Path, location: PackLocation, err: PackError, bytes_read: u
     )
 }
 
-pub(crate) fn display_name(path: &Path) -> String {
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.to_string_lossy().to_string());
-    name.strip_suffix(".zip")
-        .or_else(|| name.strip_suffix(".ZIP"))
-        .unwrap_or(&name)
-        .to_string()
-}
-
 fn kind_from_names<'a>(names: impl Iterator<Item = &'a str>) -> PackKind {
     let mut assets = false;
     let mut data = false;
     for name in names {
-        let root = normalize_entry_name(name).split('/').next().unwrap_or("");
+        let root = name.split('/').next().unwrap_or("");
         match root {
             "assets" => assets = true,
             "data" => data = true,
@@ -420,13 +250,6 @@ fn kind_from_names<'a>(names: impl Iterator<Item = &'a str>) -> PackKind {
         (true, false) => PackKind::Resource,
         (false, true) => PackKind::Data,
         (false, false) => PackKind::Unknown,
-    }
-}
-
-fn broken(name: &str, reason: impl std::fmt::Display) -> PackError {
-    PackError::BrokenArchive {
-        name: name.to_string(),
-        reason: reason.to_string(),
     }
 }
 
@@ -459,37 +282,14 @@ struct HashEntry {
     sha256: String,
 }
 
-#[derive(PartialEq, Eq)]
-enum Fingerprint {
-    Zip(u64, Option<SystemTime>),
-    Directory(Vec<(PathBuf, u64, Option<SystemTime>)>),
-}
-
 impl HashCache {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn hash(&self, path: &Path, location: PackLocation) -> Result<String, AppError> {
-        let fingerprint = match location {
-            PackLocation::Zip => {
-                let metadata = std::fs::metadata(path)?;
-                Fingerprint::Zip(metadata.len(), metadata.modified().ok())
-            }
-            PackLocation::Directory => {
-                let mut files = Vec::new();
-                collect_files(path, path, &mut files)?;
-                files.sort();
-                let files = files
-                    .into_iter()
-                    .map(|relative| {
-                        let metadata = std::fs::metadata(path.join(&relative))?;
-                        Ok((relative, metadata.len(), metadata.modified().ok()))
-                    })
-                    .collect::<Result<Vec<_>, std::io::Error>>()?;
-                Fingerprint::Directory(files)
-            }
-        };
+        let source = PackSource::new(path, location)?;
+        let fingerprint = source.fingerprint()?;
         let cached = {
             let entries = self.entries.lock().unwrap_or_else(|err| err.into_inner());
             entries
@@ -499,7 +299,7 @@ impl HashCache {
         if let Some(sha256) = cached {
             return Ok(sha256);
         }
-        let sha256 = hash_source(path, location)?;
+        let sha256 = source.digest()?;
         self.entries
             .lock()
             .unwrap_or_else(|err| err.into_inner())
@@ -657,9 +457,6 @@ fn import_pack_with_services(
     } else {
         PackLocation::Zip
     };
-    if is_dir {
-        reject_symlinks(&source)?;
-    }
     let name = display_name(&source);
     let kind = detect_kind(&source, location)?;
     if kind == PackKind::Unknown {
@@ -826,17 +623,8 @@ fn import_pack_with_services(
 
 /// Validate kind and pack.mcmeta for an import source or its temp copy.
 fn validate_meta(path: &Path, location: PackLocation, name: &str) -> Result<(), PackError> {
-    match location {
-        PackLocation::Zip => {
-            let mut archive = open_zip(path, name)?;
-            let mut bytes_read = 0;
-            meta_from_zip(&mut archive, name, &mut bytes_read).map(|_| ())
-        }
-        PackLocation::Directory => {
-            let mut bytes_read = 0;
-            meta_from_dir(path, name, &mut bytes_read).map(|_| ())
-        }
-    }
+    let source = PackSource::new(path, location)?;
+    read_meta(&source, name, &mut 0).map(|_| ())
 }
 
 /// Move a pack to the system trash. Only direct children of resourcepacks are
@@ -924,106 +712,9 @@ pub fn validate_delete_target(path: &Path, resourcepacks: &Path) -> Result<(), A
 }
 
 fn detect_kind(path: &Path, location: PackLocation) -> Result<PackKind, AppError> {
-    match location {
-        PackLocation::Directory => {
-            let children: Vec<String> = std::fs::read_dir(path)?
-                .filter_map(|entry| entry.ok())
-                .map(|entry| entry.file_name().to_string_lossy().to_string())
-                .collect();
-            Ok(kind_from_names(children.iter().map(String::as_str)))
-        }
-        PackLocation::Zip => {
-            let name = display_name(path);
-            let archive = open_zip(path, &name)?;
-            Ok(kind_from_names(archive.file_names()))
-        }
-    }
-}
-
-pub(crate) fn reject_symlinks(root: &Path) -> Result<(), AppError> {
-    for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() {
-            return Err(PackError::Symlink { path: entry.path() }.into());
-        }
-        if file_type.is_dir() {
-            reject_symlinks(&entry.path())?;
-        }
-    }
-    Ok(())
-}
-
-fn hash_source(path: &Path, location: PackLocation) -> Result<String, AppError> {
-    match location {
-        PackLocation::Zip => hash_file(path),
-        PackLocation::Directory => hash_dir(path),
-    }
-}
-
-/// Chunk size for pack content hashing. Shared by `hash_file` and `hash_dir`
-/// via `feed_hasher`.
-const HASH_CHUNK_BYTES: usize = 64 * 1024;
-
-fn hash_file(path: &Path) -> Result<String, AppError> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    feed_hasher(&mut file, &mut hasher)?;
-    Ok(hex::encode(hasher.finalize()))
-}
-
-/// Hash a directory tree by relative path and content. File order is sorted so
-/// the same tree always produces the same digest.
-fn hash_dir(root: &Path) -> Result<String, AppError> {
-    let mut files = Vec::new();
-    collect_files(root, root, &mut files)?;
-    files.sort();
-    let mut hasher = Sha256::new();
-    for relative in files {
-        hasher.update(relative.to_string_lossy().as_bytes());
-        hasher.update([0u8]);
-        let mut file = File::open(root.join(&relative))?;
-        feed_hasher(&mut file, &mut hasher)?;
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
-/// The one chunked-read loop for pack content hashing. Both `hash_file` and
-/// `hash_dir` pump through here, so the 64KiB pattern has a single owner.
-/// `install::hash_file` stays separate: it hashes SHA-512 and SHA-256 in one
-/// pass for the install commit. `download` stays separate: it hashes while
-/// writing and enforcing the byte cap.
-fn feed_hasher(reader: &mut impl Read, hasher: &mut Sha256) -> Result<(), AppError> {
-    let mut buffer = vec![0u8; HASH_CHUNK_BYTES];
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(())
-}
-
-fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), AppError> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() {
-            return Err(PackError::Symlink { path: entry.path() }.into());
-        }
-        if file_type.is_dir() {
-            collect_files(root, &entry.path(), out)?;
-        } else if file_type.is_file() {
-            let relative = entry
-                .path()
-                .strip_prefix(root)
-                .map(|path| path.to_path_buf())
-                .unwrap_or_else(|_| entry.path());
-            out.push(relative);
-        }
-    }
-    Ok(())
+    let source = PackSource::new(path, location)?;
+    let names = source.entry_names(&mut 0)?;
+    Ok(kind_from_names(names.iter().map(String::as_str)))
 }
 
 /// The installed pack with the same content, if any. I/O errors propagate:
