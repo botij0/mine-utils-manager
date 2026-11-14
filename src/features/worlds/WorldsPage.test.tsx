@@ -140,6 +140,25 @@ describe('WorldsPage', () => {
     expect(screen.queryByRole('list', { name: 'Datapack stack' })).not.toBeInTheDocument();
   });
 
+  it('keeps a lossy error card distinct from a valid filename', async () => {
+    const user = userEvent.setup();
+    const valid = datapack('Caf�.zip', 7, 7);
+    const bad = datapack('Caf�.zip', null, null, {
+      id: 'non-utf8:bad', path: valid.path,
+      error: { code: 'pack_non_utf8_name', message: 'Invalid filename' },
+    });
+    const client = pageClient({ listDatapacks: async () => ({
+      packs: { packs: [bad, valid], count: 2, bytes_read: 0, elapsed_ms: 0 },
+      stack: stack({ enabled: [], disabled: [stackEntry('file/Caf�.zip')] }),
+    }) });
+    render(<WorldsPage client={client} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    await user.click(within(grid).getByRole('button', { name: 'Caf�.zip, broken' }));
+    expect(within(screen.getByRole('region', { name: 'Datapack details' })).getByRole('button', { name: 'Delete' })).toBeDisabled();
+    await user.click(within(grid).getByRole('button', { name: 'Caf�.zip, disabled' }));
+    expect(within(screen.getByRole('region', { name: 'Datapack details' })).getByRole('button', { name: 'Delete' })).toBeEnabled();
+  });
+
   it('shows the locked banner and disables toggles', async () => {
     const lockedWorld = world({
       world_locked: {

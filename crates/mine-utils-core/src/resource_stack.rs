@@ -505,6 +505,13 @@ pub fn set_enabled_with_guard(
     enabled: bool,
     guard: &dyn WriteGuard,
 ) -> Result<ResourceStack, AppError> {
+    if enabled {
+        validate_filename(filename).map_err(AppError::from)?;
+    }
+    if validate_filename(filename).is_ok() {
+        let root = paths.game_dir.join("resourcepacks");
+        crate::pack_scan::reject_ambiguous_name(&root.join(filename), &root)?;
+    }
     let change = stack_core::Change::Toggle {
         filename: filename.to_string(),
         enabled,
@@ -540,6 +547,10 @@ pub fn reorder_stack(
 /// delete path calls this before trashing the file, so the arrays can never
 /// point at a trashed pack. Returns whether anything was written.
 pub fn remove_references(paths: &StackPaths, filename: &str) -> Result<bool, AppError> {
+    if validate_filename(filename).is_ok() {
+        let root = paths.game_dir.join("resourcepacks");
+        crate::pack_scan::reject_ambiguous_name(&root.join(filename), &root)?;
+    }
     if !paths.options_path.exists() {
         // Nothing can reference the pack when the file is missing.
         return Ok(false);

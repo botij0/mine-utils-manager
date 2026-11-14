@@ -201,6 +201,7 @@ pub fn prepare_modrinth_install<T: Transport>(
         SearchKind::Datapack => ZipRoot::Data,
     };
     let dest = target_dir.join(filename);
+    crate::pack_scan::reject_ambiguous_name(&dest, &target_dir)?;
     let source = if dest.is_file() {
         match hash_file(&dest)? {
             hashes if hashes.sha512_eq(&file.hashes.sha512) => {
@@ -455,6 +456,7 @@ fn commit_source(prepared: PreparedInstall) -> Result<Committed, AppError> {
         source,
         ..
     } = prepared;
+    crate::pack_scan::reject_ambiguous_name(&target_dir.join(&filename), &target_dir)?;
     match source {
         PreparedSource::Collision => Ok(Committed::Collision { name: filename }),
         PreparedSource::Existing { sha256, sha512 } => {
