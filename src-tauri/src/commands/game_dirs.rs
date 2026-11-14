@@ -198,3 +198,25 @@ pub fn get_startup_warning(state: State<'_, AppState>) -> Result<Option<String>,
     state.note_first_ipc();
     Ok(state.startup_warning.clone())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
+
+    #[test]
+    fn snapshot_completes_while_writer_is_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let config = Config { active_game_dir: Some(root.path().to_path_buf()), ..Config::default() };
+        let state = Arc::new(AppState::new(ConfigStore::new(root.path().join("config.json"), config), None, root.path().to_path_buf()));
+        let writer = state.lock();
+        let (tx, rx) = mpsc::channel();
+        let reader = Arc::clone(&state);
+        let thread = std::thread::spawn(move || tx.send(reader.snapshot().unwrap().game_dir).unwrap());
+        let result = rx.recv_timeout(Duration::from_millis(500));
+        drop(writer);
+        thread.join().unwrap();
+        assert_eq!(result.unwrap(), root.path());
+    }
+}
