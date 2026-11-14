@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
@@ -7,6 +7,7 @@ import type { GameRunning } from './lib/types';
 import { IpcError } from './lib/types';
 import { datapack, makeFakeClient, gameDir, stack, world } from './test/fake-ipc';
 import type { FakeClient } from './test/fake-ipc';
+import { freshHit, pack as worldPack } from './test/fake-packs';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -890,4 +891,62 @@ describe('App', () => {
     expect(window.location.hash).toBe('#packs');
     expect(window.history.length).toBe(entries + 1);
   });
+  it('retains the selected world across navigation', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    client.listWorlds = async () => [world(), world({ dir_name: 'second', level_name: 'Second World' })];
+    render(<App client={client} />);
+    await user.click(await screen.findByRole('button', { name: 'Worlds' }));
+    await user.click(await screen.findByRole('button', { name: /Second World/ }));
+    await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+    await user.click(screen.getByRole('button', { name: 'Worlds' }));
+    expect(await screen.findByRole('button', { name: /Second World/ })).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('retains Discover search and loaded results across navigation', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    client.searchModrinth = async (_query, _kind, _version, _sort, offset = 0) => ({
+      hits: [{ ...freshHit(), project_id: offset === 0 ? 'first' : 'second', title: offset === 0 ? 'First result' : 'Second result' }],
+      has_more: offset === 0,
+    });
+    render(<App client={client} />);
+    await user.click(await screen.findByRole('button', { name: 'Discover' }));
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
+    await user.click(await screen.findByRole('button', { name: 'Load more' }));
+    expect(await screen.findByText('Second result')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await user.click(screen.getByRole('button', { name: 'Discover' }));
+    expect(screen.getByLabelText('Search Modrinth')).toHaveValue('fresh');
+    expect(screen.getByText('First result')).toBeInTheDocument();
+    expect(screen.getByText('Second result')).toBeInTheDocument();
+  });
+
+  it('refreshes Packs after a pending install without losing its filter', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    const install = client.installModrinthPack;
+    const list = client.listResourcePacks;
+    let installed = false;
+    client.listResourcePacks = async () => {
+      const listing = await list();
+      return installed ? { ...listing, packs: [...listing.packs, { ...worldPack('fresh.zip'), name: 'Fresh Animations' }] } : listing;
+    };
+    let release = () => {};
+    client.installModrinthPack = (args) => new Promise((resolve, reject) => {
+      release = () => { installed = true; void install(args).then(resolve, reject); };
+    });
+    render(<App client={client} />);
+    await user.type(await screen.findByLabelText('Search packs'), 'fresh');
+    await user.click(screen.getByRole('button', { name: 'Discover' }));
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
+    await user.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
+    await user.click(await screen.findByRole('button', { name: 'Install…' }));
+    await user.click(await screen.findByRole('button', { name: 'Install' }));
+    await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+    await act(async () => release());
+    expect(await screen.findByLabelText('Search packs')).toHaveValue('fresh');
+    expect(within(await screen.findByRole('list', { name: 'Installed packs' })).getByText('Fresh Animations')).toBeInTheDocument();
+  });
+
 });
