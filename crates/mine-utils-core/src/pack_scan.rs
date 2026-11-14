@@ -32,7 +32,8 @@ pub struct PackListing {
 }
 
 /// List only direct children of resourcepacks. A zip or a directory with
-/// pack.mcmeta is a pack. Broken entries become error cards so one bad pack
+/// pack.mcmeta is a pack. Folders missing pack.mcmeta also get error cards.
+/// Broken entries become error cards so one bad pack
 /// never hides the rest.
 pub fn scan_packs(resourcepacks: &Path, icons: &IconCache) -> Result<PackListing, AppError> {
     let started = Instant::now();
@@ -229,6 +230,10 @@ fn error_pack(path: &Path, location: PackLocation, err: PackError, bytes_read: u
         Some(PackIssue {
             code,
             message: err.to_string(),
+            symlink_path: match &err {
+                PackError::Symlink { path } => Some(path.clone()),
+                _ => None,
+            },
         }),
         bytes_read,
     )

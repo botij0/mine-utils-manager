@@ -632,7 +632,6 @@ fn source_location(source: &Path) -> Result<crate::pack::PackLocation, AppError>
         path: source.to_path_buf(),
     })?;
     if canonical.is_dir() {
-        crate::pack_source::reject_symlinks(&canonical)?;
         return Ok(PackLocation::Directory);
     }
     if canonical

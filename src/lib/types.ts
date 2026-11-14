@@ -100,6 +100,7 @@ export type PackIssueCode = 'pack_non_utf8_name' | (string & {});
 export interface PackIssue {
   code: PackIssueCode;
   message: string;
+  symlink_path?: string;
 }
 
 export interface Pack {

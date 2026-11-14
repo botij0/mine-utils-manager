@@ -131,7 +131,9 @@ Drag a pack to a new position, or use its up and down controls. Entries such as 
 2. Choose **Delete pack**.
 3. Confirm with **Move to trash**.
 
-Mine Utils removes the pack's stack references before moving it to the system trash. It does not permanently delete the pack. Symlinked resource packs are not deleted by Mine Utils; remove those links with your file manager.
+Mine Utils removes the pack's stack references before moving it to the system trash. It does not permanently delete the pack. Resource packs whose root is a symlink are not deleted by Mine Utils; remove those links with your file manager.
+
+A real pack folder containing a nested symlink shows the link path in its details. Remove that link in a file manager before enabling the pack. You can still disable an enabled pack or delete it. Deleting moves the whole pack folder to the trash, including the link, without touching its target.
 
 ## Manage world datapacks
 
@@ -181,7 +183,9 @@ This removes the dead entry from `level.dat`. It does not try to enable a missin
 
 Select a datapack and choose **Delete**. Mine Utils disables the pack, moves it to the system trash, then removes its reference from the world. If the pack cannot be moved to the trash, it stays installed but disabled.
 
-For a symlinked datapack, deletion removes only the link. The folder it points to is not touched.
+When the datapack root is a symlink, deletion removes only the link. The folder it points to is not touched.
+
+For a real datapack folder containing a nested symlink, details show the link path. Remove that link in a file manager before enabling the pack. You can still disable an enabled pack. Deleting moves the whole pack folder to the trash, including the link, without touching its target.
 
 ## Discover and install from Modrinth
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Pack } from '../../lib/types';
+import { hasNestedSymlink } from '../../lib/packPath';
 import {
   formatRangeLabel,
   formatVersionLabel,
@@ -47,7 +48,8 @@ export default function PackDetail({
 
   const range = pack.format_range;
   const stackEligible = pack.kind === 'resource' || pack.kind === 'both';
-  const symlinkPack = pack.error?.code === 'pack_symlink';
+  const nestedSymlink = hasNestedSymlink(pack);
+  const symlinkPack = pack.error?.code === 'pack_symlink' && !nestedSymlink;
   const nonUtf8Pack = pack.error?.code === 'pack_non_utf8_name';
   return (
     <aside className="pack-detail" aria-label="Pack details">
@@ -99,12 +101,12 @@ export default function PackDetail({
         </p>
       ) : null}
 
-      {pack.error ? null : stackEligible ? (
+      {pack.error && !nestedSymlink ? null : stackEligible || nestedSymlink ? (
         <label className="stack-toggle pack-stack-toggle">
           <input
             type="checkbox"
             checked={enabledInStack}
-            disabled={busy || writesBlocked}
+            disabled={busy || writesBlocked || (nestedSymlink && !enabledInStack)}
             onChange={(event) => onSetEnabled(event.target.checked)}
           />
           Enabled in the active stack
@@ -116,6 +118,14 @@ export default function PackDetail({
             : 'The pack kind is unknown, so the stack toggle is unavailable.'}
         </p>
       )}
+
+      {nestedSymlink ? (
+        <p className="pack-range-note">
+          Remove the nested link <code>{pack.error?.symlink_path}</code> in a file manager
+          before enabling this pack. You can disable it now. Deleting this pack moves the
+          whole pack folder to the trash, including the link. The link target is never touched.
+        </p>
+      ) : null}
 
       {nonUtf8Pack ? (
         <p className="pack-range-note">Rename this file in a file manager to manage it.</p>

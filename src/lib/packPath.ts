@@ -1,3 +1,5 @@
+import type { Pack } from './types';
+
 /**
  * The on-disk file name of a pack. `file/<filename>` in options.txt is this,
  * never the display name, which strips `.zip`.
@@ -16,4 +18,9 @@ export function packFilename(pack: { path: string }): string {
     return path.split('\\').filter(Boolean).at(-1) ?? path;
   }
   return path;
+}
+
+export function hasNestedSymlink(pack: Pack): boolean {
+  return pack.error?.code === 'pack_symlink' &&
+    pack.error.symlink_path !== undefined && pack.error.symlink_path !== pack.path;
 }

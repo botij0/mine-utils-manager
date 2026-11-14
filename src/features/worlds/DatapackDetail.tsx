@@ -1,4 +1,5 @@
 import type { Pack } from '../../lib/types';
+import { hasNestedSymlink } from '../../lib/packPath';
 import { StatusNote } from '../packs/PackEmptyState';
 import CompatibilityChip from './CompatibilityChip';
 
@@ -43,7 +44,8 @@ export default function DatapackDetail({
     );
   }
   if (pack?.error) {
-    const symlink = pack.error.code === 'pack_symlink';
+    const nestedSymlink = hasNestedSymlink(pack);
+    const symlink = pack.error.code === 'pack_symlink' && !nestedSymlink;
     const nonUtf8 = pack.error.code === 'pack_non_utf8_name';
     return (
       <section className="datapack-detail" aria-label="Datapack details">
@@ -57,13 +59,20 @@ export default function DatapackDetail({
             it points at is never touched.
           </p>
         ) : null}
+        {nestedSymlink ? (
+          <p className="panel-note">
+            Remove the nested link <code>{pack.error.symlink_path}</code> in a file manager
+            before enabling this pack. You can disable it now. Deleting this pack moves the
+            whole pack folder to the trash, including the link. The link target is never touched.
+          </p>
+        ) : null}
         {nonUtf8 ? <p className="panel-note">Rename this file in a file manager to manage it.</p> : null}
         <div className="datapack-detail-actions">
           {!locked && !nonUtf8 ? (
             <button
               type="button"
               className="button"
-              disabled={writesBlocked || busy}
+              disabled={writesBlocked || busy || (nestedSymlink && !enabled)}
               onClick={() => onToggle(filename, !enabled)}
             >
               {enabled ? 'Disable' : 'Enable'}

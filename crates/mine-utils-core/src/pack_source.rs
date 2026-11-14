@@ -1,3 +1,5 @@
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -21,8 +23,19 @@ const CENTRAL_DIR_END_BYTES: u64 = 22;
 /// Folder sources reject every symlink, including links below content roots.
 /// Zip entries remain archive bytes and are never resolved as filesystem links.
 pub(crate) enum PackSource<'a> {
-    Zip(&'a Path),
-    Dir(&'a Path),
+    Zip {
+        path: &'a Path,
+        reader: RefCell<Option<ZipReader>>,
+    },
+    Dir {
+        path: &'a Path,
+        validated: Cell<bool>,
+    },
+}
+
+pub(crate) struct ZipReader {
+    archive: zip::ZipArchive<File>,
+    entries: HashMap<String, String>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -42,16 +55,22 @@ impl<'a> PackSource<'a> {
             });
         }
         Ok(match location {
-            PackLocation::Zip => Self::Zip(path),
-            PackLocation::Directory => Self::Dir(path),
+            PackLocation::Zip => Self::Zip {
+                path,
+                reader: RefCell::new(None),
+            },
+            PackLocation::Directory => Self::Dir {
+                path,
+                validated: Cell::new(false),
+            },
         })
     }
 
     pub(crate) fn entry_names(&self, bytes_read: &mut u64) -> Result<Vec<String>, PackError> {
         match self {
-            Self::Zip(path) => {
-                let archive = open_zip_capped(path, &display_name(path), MAX_ZIP_ENTRIES)?;
-                let names: Vec<_> = archive
+            Self::Zip { path, reader } => with_zip(path, reader, |reader| {
+                let names: Vec<_> = reader
+                    .archive
                     .file_names()
                     .map(|name| normalize_entry_name(name).to_string())
                     .collect();
@@ -61,9 +80,9 @@ impl<'a> PackSource<'a> {
                     .sum::<u64>()
                     + CENTRAL_DIR_END_BYTES;
                 Ok(names)
-            }
-            Self::Dir(path) => {
-                reject_symlinks(path).map_err(|err| pack_error(path, err))?;
+            }),
+            Self::Dir { path, validated } => {
+                validate_folder(path, validated)?;
                 Ok(std::fs::read_dir(path)
                     .map_err(|err| broken(&display_name(path), err))?
                     .filter_map(|entry| entry.ok())
@@ -86,21 +105,19 @@ impl<'a> PackSource<'a> {
         bytes_read: &mut u64,
     ) -> Result<Option<Vec<u8>>, PackError> {
         match self {
-            Self::Zip(path) => {
+            Self::Zip { path, reader } => with_zip(path, reader, |reader| {
                 let pack_name = display_name(path);
-                let mut archive = open_zip_capped(path, &pack_name, MAX_ZIP_ENTRIES)?;
-                let entry = archive
-                    .file_names()
-                    .find(|entry| normalize_entry_name(entry) == name)
-                    .map(str::to_string);
-                let Some(entry) = entry else { return Ok(None) };
-                let file = archive
-                    .by_name(&entry)
+                let Some(entry) = reader.entries.get(name) else {
+                    return Ok(None);
+                };
+                let file = reader
+                    .archive
+                    .by_name(entry)
                     .map_err(|err| broken(&pack_name, err))?;
                 read_limited(file, name, &pack_name, cap, bytes_read).map(Some)
-            }
-            Self::Dir(path) => {
-                reject_symlinks(path).map_err(|err| pack_error(path, err))?;
+            }),
+            Self::Dir { path, validated } => {
+                validate_folder(path, validated)?;
                 let target = path.join(name);
                 let metadata = match std::fs::symlink_metadata(&target) {
                     Ok(metadata) => metadata,
@@ -110,7 +127,8 @@ impl<'a> PackSource<'a> {
                 if !metadata.is_file() {
                     return Ok(None);
                 }
-                let file = File::open(target).map_err(|err| broken(&display_name(path), err))?;
+                let file =
+                    open_folder_file(&target).map_err(|err| broken(&display_name(path), err))?;
                 read_limited(file, name, &display_name(path), cap, bytes_read).map(Some)
             }
         }
@@ -118,11 +136,11 @@ impl<'a> PackSource<'a> {
 
     pub(crate) fn fingerprint(&self) -> Result<Fingerprint, AppError> {
         match self {
-            Self::Zip(path) => {
+            Self::Zip { path, .. } => {
                 let metadata = std::fs::metadata(path)?;
                 Ok(Fingerprint::Zip(metadata.len(), metadata.modified().ok()))
             }
-            Self::Dir(path) => {
+            Self::Dir { path, .. } => {
                 let mut files = Vec::new();
                 collect_files(path, path, &mut files)?;
                 files.sort();
@@ -140,10 +158,51 @@ impl<'a> PackSource<'a> {
 
     pub(crate) fn digest(&self) -> Result<String, AppError> {
         match self {
-            Self::Zip(path) => hash_file(path),
-            Self::Dir(path) => hash_dir(path),
+            Self::Zip { path, .. } => hash_file(path),
+            Self::Dir { path, .. } => hash_dir(path),
         }
     }
+}
+
+fn with_zip<T>(
+    path: &Path,
+    cached: &RefCell<Option<ZipReader>>,
+    read: impl FnOnce(&mut ZipReader) -> Result<T, PackError>,
+) -> Result<T, PackError> {
+    let mut cached = cached.borrow_mut();
+    let reader = match cached.as_mut() {
+        Some(reader) => reader,
+        None => {
+            let archive = open_zip_capped(path, &display_name(path), MAX_ZIP_ENTRIES)?;
+            let mut entries = HashMap::with_capacity(archive.len());
+            for name in archive.file_names() {
+                entries
+                    .entry(normalize_entry_name(name).to_string())
+                    .or_insert_with(|| name.to_string());
+            }
+            cached.insert(ZipReader { archive, entries })
+        }
+    };
+    read(reader)
+}
+
+fn validate_folder(path: &Path, validated: &Cell<bool>) -> Result<(), PackError> {
+    if !validated.get() {
+        reject_symlinks(path).map_err(|err| pack_error(path, err))?;
+        validated.set(true);
+    }
+    Ok(())
+}
+
+fn open_folder_file(path: &Path) -> std::io::Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(path)
 }
 
 fn read_limited(
@@ -154,6 +213,7 @@ fn read_limited(
     bytes_read: &mut u64,
 ) -> Result<Vec<u8>, PackError> {
     let mut bytes = Vec::new();
+    // Cap actual bytes because zip headers can understate the expanded size.
     let read = reader
         .take(cap.saturating_add(1))
         .read_to_end(&mut bytes)
@@ -187,6 +247,7 @@ pub(crate) fn open_zip_capped(
 }
 
 fn normalize_entry_name(name: &str) -> &str {
+    // Lookup and kind detection must see the same root for dotted zip entries.
     name.trim_start_matches("./")
 }
 
@@ -227,7 +288,7 @@ fn hash_dir(root: &Path) -> Result<String, AppError> {
     for relative in files {
         hasher.update(relative.to_string_lossy().as_bytes());
         hasher.update([0u8]);
-        let mut file = File::open(root.join(&relative))?;
+        let mut file = open_folder_file(&root.join(&relative))?;
         feed_hasher(&mut file, &mut hasher)?;
     }
     Ok(hex::encode(hasher.finalize()))
@@ -286,6 +347,30 @@ thread_local! {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_file_open_refuses_a_swapped_leaf_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("pack.mcmeta");
+        std::fs::write(&target, b"original").unwrap();
+        assert!(std::fs::symlink_metadata(&target).unwrap().is_file());
+        std::fs::remove_file(&target).unwrap();
+        std::fs::write(root.path().join("outside"), b"outside").unwrap();
+        std::os::unix::fs::symlink("outside", &target).unwrap();
+        assert_eq!(
+            open_folder_file(&target).unwrap_err().raw_os_error(),
+            Some(libc::ELOOP)
+        );
+        std::fs::remove_file(&target).unwrap();
+        std::fs::write(&target, b"real").unwrap();
+        let mut bytes = String::new();
+        open_folder_file(&target)
+            .unwrap()
+            .read_to_string(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes, "real");
+    }
 
     #[test]
     fn scan_opens_each_archive_and_walks_each_folder_once() {

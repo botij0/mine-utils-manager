@@ -44,7 +44,10 @@ impl TrashService for Services {
     }
 }
 
-fn import(source: &Path, root: &Path) -> String {
+fn import_result(
+    source: &Path,
+    root: &Path,
+) -> Result<data_stack::DatapackImportOutcome, AppError> {
     let world = root.join("game/saves/test");
     std::fs::create_dir_all(world.join("datapacks")).unwrap();
     let data = serde_json::json!({"Data":{"Version":{"Name":"1.21.4"},"DataPacks":{"Enabled":["vanilla"],"Disabled":[]}}});
@@ -63,7 +66,7 @@ fn import(source: &Path, root: &Path) -> String {
             keep: 10,
         },
     );
-    match data_stack::import_datapack_with(
+    data_stack::import_datapack_with(
         &paths,
         source,
         ImportChoice::Default,
@@ -71,7 +74,11 @@ fn import(source: &Path, root: &Path) -> String {
         &HashCache::new(),
         &Services,
         &Services,
-    ) {
+    )
+}
+
+fn import(source: &Path, root: &Path) -> String {
+    match import_result(source, root) {
         Ok(data_stack::DatapackImportOutcome::Imported { .. }) => "imported".into(),
         Ok(other) => format!("{other:?}"),
         Err(err) => err.code().into(),
@@ -191,6 +198,10 @@ fn a_file_named_data_does_not_make_a_datapack() {
     std::fs::write(source.join("pack.mcmeta"), META).unwrap();
     std::fs::write(source.join("data"), b"not a directory").unwrap();
     assert_eq!(import(&source, root.path()), "level_dat");
+    assert!(matches!(
+        import_result(&source, root.path()),
+        Err(AppError::DataStack(mine_utils_core::data_stack::DataStackError::ResourceOnly { name })) if name == "fake"
+    ));
 }
 
 #[cfg(unix)]
@@ -261,6 +272,12 @@ fn symlink_cards_serialize_the_offending_path() {
     std::os::unix::fs::symlink(packs.join("Nested"), &linked).unwrap();
     let cards = scan_packs(&packs, &IconCache::new(&root.path().join("icons"))).unwrap();
     let wire = serde_json::to_value(cards).unwrap();
-    assert_eq!(wire["packs"][0]["error"]["symlink_path"], nested.to_str().unwrap());
-    assert_eq!(wire["packs"][1]["error"]["symlink_path"], linked.to_str().unwrap());
+    assert_eq!(
+        wire["packs"][0]["error"]["symlink_path"],
+        nested.to_str().unwrap()
+    );
+    assert_eq!(
+        wire["packs"][1]["error"]["symlink_path"],
+        linked.to_str().unwrap()
+    );
 }
