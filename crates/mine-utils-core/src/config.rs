@@ -168,7 +168,7 @@ impl ConfigStore {
             .as_deref()
             .ok_or(AppError::NoActiveGameDir)?;
         let path = crate::world::WorldPaths::for_world(game, world)?.world_dir;
-        if !path.is_dir() {
+        if !crate::world::is_level_file(&path.join("level.dat")) {
             return Err(AppError::World {
                 reason: format!("{} is not a world in this game dir", path.display()),
             });
