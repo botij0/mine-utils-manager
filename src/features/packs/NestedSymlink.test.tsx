@@ -1,0 +1,63 @@
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import { pack } from '../../test/fake-packs';
+import PackDetail from './PackDetail';
+import DatapackDetail from '../worlds/DatapackDetail';
+
+const path = '/packs/Linked';
+const error = {
+  code: 'pack_symlink',
+  message: '/packs/Linked/data/link is a symlink; pack sources must be real files and dirs',
+  symlink_path: '/packs/Linked/data/link',
+};
+const nested = pack('Linked', {
+  path, location: 'directory', kind: 'unknown', error,
+});
+
+describe('nested symlink pack details', () => {
+  it('lets an enabled resource folder be disabled and trashed', async () => {
+    const toggle = vi.fn();
+    const remove = vi.fn().mockResolvedValue(undefined);
+    render(<PackDetail pack={nested} busy={false} writesBlocked={false}
+      enabledInStack onSetEnabled={toggle} onDelete={remove} />);
+    expect(screen.getByText(/Remove the nested link/)).toHaveTextContent(error.symlink_path);
+    expect(screen.getByText(/whole pack folder/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Enabled in the active stack' }));
+    expect(toggle).toHaveBeenCalledWith(false);
+    await userEvent.click(screen.getByRole('button', { name: 'Delete pack' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Move to trash' }));
+    expect(remove).toHaveBeenCalledWith(nested);
+  });
+
+  it('does not enable an unreadable resource folder', () => {
+    render(<PackDetail pack={nested} busy={false} writesBlocked={false}
+      enabledInStack={false} onSetEnabled={vi.fn()} onDelete={vi.fn()} />);
+    expect(screen.getByRole('checkbox', { name: 'Enabled in the active stack' })).toBeDisabled();
+  });
+
+  it.each([true, false])('explains datapack folder deletion when enabled is %s', async (enabled) => {
+    const toggle = vi.fn();
+    const remove = vi.fn();
+    render(<DatapackDetail pack={nested} filename="Linked" enabled={enabled}
+      locked={false} missing={false} warning={null} writesBlocked={false} busy={false}
+      onToggle={toggle} onDelete={remove} onRemoveReference={vi.fn()} />);
+    expect(screen.getByText(/Remove the nested link/)).toHaveTextContent(error.symlink_path);
+    expect(screen.getByText(/whole pack folder/)).toBeInTheDocument();
+    if (enabled) {
+      await userEvent.click(screen.getByRole('button', { name: 'Disable' }));
+      expect(toggle).toHaveBeenCalledWith('Linked', false);
+    } else {
+      expect(screen.getByRole('button', { name: 'Enable' })).toBeDisabled();
+    }
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(remove).toHaveBeenCalledWith(path);
+  });
+
+  it('keeps the game guard on nested-folder actions', () => {
+    render(<PackDetail pack={nested} busy={false} writesBlocked
+      enabledInStack onSetEnabled={vi.fn()} onDelete={vi.fn()} />);
+    expect(screen.getByRole('checkbox', { name: 'Enabled in the active stack' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete pack' })).toBeDisabled();
+  });
+});

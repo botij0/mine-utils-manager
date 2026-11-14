@@ -173,6 +173,8 @@ pub(crate) fn open_zip_capped(
     name: &str,
     max_entries: usize,
 ) -> Result<zip::ZipArchive<File>, PackError> {
+    #[cfg(test)]
+    SOURCE_PASSES.with(|counts| counts.borrow_mut().0 += 1);
     let file = File::open(path).map_err(|err| broken(name, err))?;
     let archive = zip::ZipArchive::new(file).map_err(|err| broken(name, err))?;
     if archive.len() > max_entries {
@@ -189,6 +191,8 @@ fn normalize_entry_name(name: &str) -> &str {
 }
 
 pub(crate) fn reject_symlinks(root: &Path) -> Result<(), AppError> {
+    #[cfg(test)]
+    SOURCE_PASSES.with(|counts| counts.borrow_mut().1 += 1);
     collect_files(root, root, &mut Vec::new())
 }
 
@@ -271,4 +275,46 @@ pub(crate) fn display_name(path: &Path) -> String {
         .or_else(|| name.strip_suffix(".ZIP"))
         .unwrap_or(&name)
         .to_string()
+}
+
+#[cfg(test)]
+thread_local! {
+    static SOURCE_PASSES: std::cell::RefCell<(usize, usize)> = const { std::cell::RefCell::new((0, 0)) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn scan_opens_each_archive_and_walks_each_folder_once() {
+        let root = tempfile::tempdir().unwrap();
+        let packs = root.path().join("packs");
+        let folder = packs.join("Dir");
+        std::fs::create_dir_all(folder.join("data/test")).unwrap();
+        let meta = br#"{"pack":{"pack_format":61,"description":"one pass"}}"#;
+        std::fs::write(folder.join("pack.mcmeta"), meta).unwrap();
+        let mut archive = zip::ZipWriter::new(File::create(packs.join("Zip.zip")).unwrap());
+        archive
+            .start_file("./pack.mcmeta", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(meta).unwrap();
+        archive
+            .add_directory("data/", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.finish().unwrap();
+        SOURCE_PASSES.with(|counts| *counts.borrow_mut() = (0, 0));
+        let listing =
+            crate::scan_packs(&packs, &crate::IconCache::new(&root.path().join("icons"))).unwrap();
+        assert_eq!(
+            listing
+                .packs
+                .iter()
+                .map(|p| p.description.as_str())
+                .collect::<Vec<_>>(),
+            vec!["one pass", "one pass"]
+        );
+        SOURCE_PASSES.with(|counts| assert_eq!(*counts.borrow(), (1, 1)));
+    }
 }
