@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ipc, isTauriRuntime, toAppError } from './ipc';
-import { resetMockPacks, resetMockWorlds, setMockGameState, setMockLockedWorld } from './ipc.mock';
+import { resetMockPacks, resetMockWorlds, setMockGameState, setMockLockedWorld, setMockWorldSeed, resetMockStack } from './ipc.mock';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -170,10 +170,88 @@ describe('mock resource import guards', () => {
   });
 
   it('refuses Modrinth resource installs while Minecraft runs', async () => {
+    await ipc.setActiveGameDir('/home/demo/.minecraft');
     const args = { projectId: 'demo-pack-01', versionId: 'demo-pack-01-1.0', filename: 'demo-pack-01-1.0.zip', kind: 'resourcepack' } as const;
     setMockGameState('running');
     await expect(ipc.installModrinthPack(args)).rejects.toMatchObject({ code: 'game_running' });
     setMockGameState('none');
     expect(await ipc.installModrinthPack(args)).toMatchObject({ kind: 'resourcepack', outcome: { status: 'imported', pack: { name: 'demo-pack-01-1.0' } } });
+  });
+});
+
+describe('mock backend alignment', () => {
+  beforeEach(async () => {
+    resetMockPacks();
+    resetMockStack();
+    resetMockWorlds();
+    setMockGameState('none');
+    await ipc.setActiveGameDir('/home/demo/.minecraft');
+  });
+
+  it('rejects a short resource order with resource_stack', async () => {
+    const stack = await ipc.getResourceStack();
+    const expected = { resource: stack.entries.map((entry) => entry.value), incompatible: stack.incompatible };
+    await expect(ipc.reorderResourceStack([], expected)).rejects.toMatchObject({ code: 'resource_stack' });
+  });
+
+  it('rejects reads without an active game directory', async () => {
+    window.localStorage.clear();
+    await expect(ipc.listResourcePacks()).rejects.toMatchObject({ code: 'no_active_game_dir' });
+    await expect(ipc.getResourceStack()).rejects.toMatchObject({ code: 'no_active_game_dir' });
+    await expect(ipc.listWorlds()).rejects.toMatchObject({ code: 'no_active_game_dir' });
+  });
+
+  it('reuses and re-enables a pack on a second Modrinth install, as Rust does', async () => {
+    const args = { projectId: 'demo-pack-01', versionId: 'demo-pack-01-1.0', filename: 'demo-pack-01-1.0.zip', kind: 'resourcepack' } as const;
+    expect(await ipc.installModrinthPack(args)).toMatchObject({ outcome: { status: 'imported' } });
+    await ipc.setResourcePackEnabled('demo-pack-01-1.0.zip', false);
+    expect(await ipc.installModrinthPack(args)).toMatchObject({ outcome: { status: 'imported' } });
+    const entries = (await ipc.getResourceStack()).entries.map((entry) => entry.value);
+    expect(entries.filter((value) => value === 'file/demo-pack-01-1.0.zip')).toHaveLength(1);
+  });
+
+  it('rebases valid orders and rejects invalid stale orders', async () => {
+    const stack = await ipc.getResourceStack();
+    const current = stack.entries.map((entry) => entry.value);
+    const stale = { resource: ['old'], incompatible: [] };
+    expect((await ipc.reorderResourceStack(current, stale)).entries.map((entry) => entry.value)).toEqual(current);
+    await expect(ipc.reorderResourceStack([], stale)).rejects.toMatchObject({ code: 'stale_stack' });
+    const data = await ipc.listDatapacks('Survival 1_17');
+    const enabled = data.stack.enabled.map((entry) => entry.value);
+    expect((await ipc.reorderDatapacks('Survival 1_17', enabled, { enabled: ['old'], disabled: [] })).enabled.map((entry) => entry.value)).toEqual(enabled);
+    await expect(ipc.reorderDatapacks('Survival 1_17', [], { enabled: ['old'], disabled: [] })).rejects.toMatchObject({ code: 'stale_stack' });
+  });
+
+  it('guards deletes and rejects datapack installs without a world', async () => {
+    setMockGameState('running');
+    await expect(ipc.deleteResourcePack('/home/demo/.minecraft/resourcepacks/Re-covered.zip')).rejects.toMatchObject({ code: 'game_running' });
+    setMockGameState('none');
+    await expect(ipc.installModrinthPack({ projectId: 'demo', versionId: '1', filename: 'demo.zip', kind: 'datapack' })).rejects.toMatchObject({ code: 'modrinth_parse' });
+  });
+
+  it('refuses a level backup with a different readable world seed', async () => {
+    setMockWorldSeed('Survival 1_17', 99);
+    await expect(ipc.restoreLevelBackup('Survival 1_17', '20261025T101500.000000000-Survival 1_17-level.dat')).rejects.toMatchObject({ code: 'world_mismatch' });
+    setMockWorldSeed('Survival 1_17', null);
+    expect((await ipc.restoreLevelBackup('Survival 1_17', '20261025T101500.000000000-Survival 1_17-level.dat')).enabled[0].value).toBe('vanilla');
+  });
+
+});
+
+describe('mock install preflight', () => {
+  beforeEach(async () => {
+    resetMockPacks();
+    resetMockWorlds();
+    setMockGameState('none');
+    await ipc.setActiveGameDir('/home/demo/.minecraft');
+  });
+
+  it('checks the game guard before attempting a resource pack download', async () => {
+    setMockGameState('running');
+    await expect(ipc.installModrinthPack({ projectId: 'demo', versionId: '1', filename: 'offline.zip', kind: 'resourcepack' })).rejects.toMatchObject({ code: 'game_running' });
+  });
+
+  it('checks the target world before attempting a datapack download', async () => {
+    await expect(ipc.installModrinthPack({ projectId: 'demo', versionId: '1', filename: 'offline.zip', kind: 'datapack' })).rejects.toMatchObject({ code: 'modrinth_parse' });
   });
 });
