@@ -473,3 +473,71 @@ fn slow_streaming_reader_still_streams() {
     assert!(matches!(err, DownloadError::TooLarge { .. }), "{err}");
     assert!(leftovers(&target).is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn download_sweeps_only_stale_regular_download_temps() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut foreign = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap();
+    let recycled = format!(".foreign.zip.mine-utils-download-{}-1-0.tmp", foreign.id());
+    let stale = ".old.zip.mine-utils-download-4294967295-1-0.tmp";
+    let current = format!(
+        ".active.zip.mine-utils-download-{}-1-0.tmp",
+        std::process::id()
+    );
+    let link = ".link.zip.mine-utils-download-4294967295-1-0.tmp";
+    for name in [
+        stale,
+        &recycled,
+        &current,
+        ".unrelated",
+        ".bad.mine-utils-download-4294967295-x-0.tmp",
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"keep").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200))
+            .unwrap();
+    }
+    symlink(dir.path().join(".unrelated"), dir.path().join(link)).unwrap();
+    let listing = || {
+        let mut names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    };
+    println!("before: {:?}", listing());
+    let bytes = zip_bytes(&[("assets/pack.png", b"png")]);
+    let (client, _) = client_for(bytes.clone());
+    let verified = download_verified(
+        &client,
+        CDN_URL,
+        dir.path(),
+        "fresh.zip",
+        &sha512_hex(&bytes),
+        ZipRoot::Assets,
+    )
+    .unwrap();
+    drop(verified);
+    foreign.kill().unwrap();
+    foreign.wait().unwrap();
+    println!("after: {:?}", listing());
+    let mut expected = vec![
+        current,
+        link.to_string(),
+        ".unrelated".to_string(),
+        ".bad.mine-utils-download-4294967295-x-0.tmp".to_string(),
+    ];
+    expected.sort();
+    assert_eq!(listing(), expected);
+}
