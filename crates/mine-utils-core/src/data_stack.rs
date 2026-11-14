@@ -98,6 +98,18 @@ impl DataStack {
 }
 
 /// Where a world's datapack stack lives and which backup policy applies.
+///
+/// ```compile_fail
+/// use mine_utils_core::DataPaths;
+/// let paths = DataPaths {
+///     game_dir: "/game".into(),
+///     world_dir: "/game/saves/a".into(),
+///     level_dat_path: "/other/level.dat".into(),
+///     datapacks_dir: "/game/saves/a/datapacks".into(),
+///     backups_root: "/backups".into(),
+///     backups: Default::default(),
+/// };
+/// ```
 #[derive(Debug, Clone)]
 pub struct DataPaths {
     pub game_dir: PathBuf,
