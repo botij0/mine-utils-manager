@@ -430,6 +430,22 @@ mod tests {
     }
 
     #[test]
+    fn last_world_is_persisted_and_cleared_when_game_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        let game = root.path().join("game");
+        let world = game.join("saves/creative");
+        std::fs::create_dir_all(&world).unwrap();
+        let mut config = Config::default();
+        config.set_active_game_dir(&game);
+        let mut store = ConfigStore::new(path.clone(), config);
+        store.set_last_world("creative").unwrap();
+        assert_eq!(load_config(&path).unwrap().last_world, Some(world));
+        store.config.set_active_game_dir(&root.path().join("other"));
+        assert_eq!(store.config().last_world, None);
+    }
+
+    #[test]
     fn missing_fields_use_defaults() {
         let config: Config = serde_json::from_str(r#"{"schema":1,"theme":"dark"}"#).unwrap();
 
