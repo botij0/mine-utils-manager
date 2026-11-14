@@ -23,6 +23,7 @@ interface BackupsPanelProps {
   /** Ask the app-level poll to re-check after a `game_running` error. */
   refreshGameRunning?: () => void | Promise<void>;
   onRestored?: (stack: ResourceStack) => void;
+  onLevelRestored?: () => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -42,6 +43,7 @@ export default function BackupsPanel({
   gameGuardChecking = false,
   refreshGameRunning = () => {},
   onRestored,
+  onLevelRestored,
 }: BackupsPanelProps) {
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -139,6 +141,7 @@ export default function BackupsPanel({
       // The backend guards the game and recreates a missing level.dat, so
       // there is no client-side pre-check to block the recovery path.
       await client.restoreLevelBackup(dirName, file);
+      onLevelRestored?.();
       setStatus(`Restored ${file} for ${label}.`);
       const groups = [...levelGroups];
       const group = groups.find((entry) => entry.dirName === dirName);

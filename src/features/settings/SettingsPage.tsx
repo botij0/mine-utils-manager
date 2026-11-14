@@ -19,6 +19,7 @@ interface SettingsPageProps {
   client: IpcClient;
   config: Config;
   onConfigChanged: (config: Config) => void;
+  onBackupRestored?: (file: 'options' | 'level') => void;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning: GameRunning | null | undefined;
   /** No current guard answer: unknown, so writes stay paused. */
@@ -34,6 +35,7 @@ export default function SettingsPage({
   active = true,
   config,
   onConfigChanged,
+  onBackupRestored,
   gameRunning,
   gameGuardUnknown = false,
   gameGuardChecking = false,
@@ -101,6 +103,8 @@ export default function SettingsPage({
         gameGuardUnknown={gameGuardUnknown}
         gameGuardChecking={gameGuardChecking}
         refreshGameRunning={refreshGameRunning}
+        onRestored={() => onBackupRestored?.('options')}
+        onLevelRestored={() => onBackupRestored?.('level')}
       />
     </div>
   );

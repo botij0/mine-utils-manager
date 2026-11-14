@@ -200,6 +200,14 @@ export default function App({ client = ipc }: AppProps) {
     setDataEpoch((epoch) => ({ ...epoch, [page]: epoch[page] + 1 }));
   }, []);
 
+  const backupRestored = useCallback((file: 'options' | 'level') => {
+    setDataEpoch((epoch) =>
+      file === 'options'
+        ? { ...epoch, packs: epoch.packs + 1 }
+        : { ...epoch, worlds: epoch.worlds + 1, discover: epoch.discover + 1 },
+    );
+  }, []);
+
   const activeLabel = config.active_game_dir ?? 'No game dir selected';
   const showOnboarding =
     configReady && !onboarded && !config.active_game_dir && !error;
@@ -320,6 +328,7 @@ export default function App({ client = ipc }: AppProps) {
                 gameGuardChecking={guardPause === 'checking'}
                 refreshGameRunning={refreshGameRunning}
                 onConfigChanged={setConfig}
+                onBackupRestored={backupRestored}
               />
             </div>
           ) : null}
