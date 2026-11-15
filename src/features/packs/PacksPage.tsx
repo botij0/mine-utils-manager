@@ -15,7 +15,7 @@ import type { ImportPrompt } from './ImportSheet';
 import PackDetail from './PackDetail';
 import PackGrid from './PackGrid';
 import { usePacks } from './usePacks';
-import { packFilename } from '../../lib/packPath';
+import { hasNestedSymlink, packFilename } from '../../lib/packPath';
 
 interface PacksPageProps {
   client?: PackClient;
@@ -33,7 +33,7 @@ interface PacksPageProps {
 
 interface ToggleToast {
   message: string;
-  undo: () => void;
+  undo: (() => void) | null;
 }
 
 /** Tauri adds a real path to dropped files; a browser drop has none. */
@@ -110,12 +110,15 @@ export default function PacksPage({
     setActionError(null);
     try {
       await togglePack(filename, enabled);
+      const canUndo = enabled || !packs.some(
+        (pack) => packFilename(pack) === filename && hasNestedSymlink(pack),
+      );
       setToast({
         message: `${filename} ${enabled ? 'enabled' : 'disabled'}`,
-        undo: () => {
+        undo: canUndo ? () => {
           setToast(null);
           void handleToggle(filename, !enabled);
-        },
+        } : null,
       });
     } catch (err) {
       refreshAfterGuard(err);
@@ -443,9 +446,11 @@ export default function PacksPage({
       {toast ? (
         <div className="toast" role="status" aria-label="Toggle result">
           <span>{toast.message}</span>
-          <button type="button" className="button" onClick={toast.undo}>
-            Undo
-          </button>
+          {toast.undo ? (
+            <button type="button" className="button" onClick={toast.undo}>
+              Undo
+            </button>
+          ) : null}
           <button
             type="button"
             className="button button-icon"

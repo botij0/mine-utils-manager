@@ -1,4 +1,5 @@
 import type { Pack } from '../../lib/types';
+import { hasNestedSymlink } from '../../lib/packPath';
 import { StatusNote } from '../packs/PackEmptyState';
 import CompatibilityChip from './CompatibilityChip';
 
@@ -43,7 +44,8 @@ export default function DatapackDetail({
     );
   }
   if (pack?.error) {
-    const symlink = pack.error.code === 'pack_symlink';
+    const nestedSymlink = hasNestedSymlink(pack);
+    const symlink = pack.error.code === 'pack_symlink' && !nestedSymlink;
     const nonUtf8 = pack.error.code === 'pack_non_utf8_name';
     return (
       <section className="datapack-detail" aria-label="Datapack details">
@@ -53,8 +55,15 @@ export default function DatapackDetail({
         </p>
         {symlink ? (
           <p className="panel-note">
-            This entry is a link, not a real pack. Deleting it removes only the link; the folder
-            it points at is never touched.
+            This entry is a link, not a real pack. Mine Utils never deletes links. Remove the link
+            from datapacks in a file manager; the folder it points at is never touched.
+          </p>
+        ) : null}
+        {nestedSymlink ? (
+          <p className="panel-note">
+            Remove the nested link <code>{pack.error.symlink_path}</code> in a file manager
+            before enabling this pack. You can disable it now. Deleting this pack moves the
+            whole pack folder to the trash, including the link. The link target is never touched.
           </p>
         ) : null}
         {nonUtf8 ? <p className="panel-note">Rename this file in a file manager to manage it.</p> : null}
@@ -63,20 +72,22 @@ export default function DatapackDetail({
             <button
               type="button"
               className="button"
-              disabled={writesBlocked || busy}
+              disabled={writesBlocked || busy || (nestedSymlink && !enabled)}
               onClick={() => onToggle(filename, !enabled)}
             >
               {enabled ? 'Disable' : 'Enable'}
             </button>
           ) : null}
-          <button
-            type="button"
-            className="button button-danger"
-            disabled={writesBlocked || busy || nonUtf8}
-            onClick={() => onDelete(pack.path)}
-          >
-            Delete
-          </button>
+          {symlink ? null : (
+            <button
+              type="button"
+              className="button button-danger"
+              disabled={writesBlocked || busy || nonUtf8}
+              onClick={() => onDelete(pack.path)}
+            >
+              Delete
+            </button>
+          )}
         </div>
       </section>
     );

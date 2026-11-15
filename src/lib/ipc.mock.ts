@@ -208,6 +208,17 @@ const INITIAL_PACKS: Pack[] = [
       message: 'BrokenPack.zip is not a readable pack: invalid Zip archive',
     },
   },
+  {
+    ...makePack('NestedLink', 'unknown', formatRange(0, 0), '', '', null),
+    format: null,
+    format_range: null,
+    game_label: null,
+    error: {
+      code: 'pack_symlink',
+      message: '/home/demo/.minecraft/resourcepacks/NestedLink/data/link is a symlink; pack sources must be real files and dirs',
+      symlink_path: '/home/demo/.minecraft/resourcepacks/NestedLink/data/link',
+    },
+  },
 ];
 
 let mockPacks = [...INITIAL_PACKS];
@@ -677,6 +688,7 @@ const INITIAL_STACK: MockArrayState = {
     'fabric',
     'file/VanillaTweaks_r656611_MC1.21.x.zip',
     'file/Re-covered.zip',
+    'file/NestedLink',
   ],
   incompatible: [],
 };

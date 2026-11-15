@@ -421,7 +421,11 @@ describe('WorldsPage', () => {
     render(<WorldsPage client={linkClient} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     await user.click(within(grid).getByRole('button', { name: 'linked.zip, broken' }));
-    expect(await screen.findByText(/removes only the link/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Remove the link from datapacks in a file manager/),
+    ).toBeInTheDocument();
+    const detail = screen.getByRole('region', { name: 'Datapack details' });
+    expect(within(detail).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
   });
 
   it('hides the stale-lock note while writes are paused', async () => {

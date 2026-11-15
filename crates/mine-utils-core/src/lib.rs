@@ -16,6 +16,7 @@ pub mod options_txt;
 pub mod pack;
 pub mod pack_meta;
 pub mod pack_scan;
+mod pack_source;
 pub mod paths;
 pub mod provenance;
 mod read_capped;
