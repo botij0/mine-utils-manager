@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
@@ -7,6 +7,7 @@ import type { GameRunning } from './lib/types';
 import { IpcError } from './lib/types';
 import { datapack, makeFakeClient, gameDir, stack, world } from './test/fake-ipc';
 import type { FakeClient } from './test/fake-ipc';
+import { freshHit, pack as worldPack } from './test/fake-packs';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -298,10 +299,7 @@ describe('App', () => {
     expect(within(list).getByRole('button', { name: 'Remove' })).toBeDisabled();
 
     await user.click(screen.getByRole('button', { name: 'Discover' }));
-    expect(screen.getByText(/^Checking whether Minecraft is running/)).toHaveAttribute(
-      'role',
-      'status',
-    );
+    expect(screen.getByRole('status')).toHaveTextContent(/^Checking whether Minecraft is running/);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
@@ -890,4 +888,209 @@ describe('App', () => {
     expect(window.location.hash).toBe('#packs');
     expect(window.history.length).toBe(entries + 1);
   });
+  it('retains the selected world across navigation', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    client.listWorlds = async () => [world(), world({ dir_name: 'second', level_name: 'Second World' })];
+    render(<App client={client} />);
+    await user.click(await screen.findByRole('button', { name: 'Worlds' }));
+    await user.click(await screen.findByRole('button', { name: /Second World/ }));
+    await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+    await user.click(screen.getByRole('button', { name: 'Worlds' }));
+    expect(await screen.findByRole('button', { name: /Second World/ })).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('retains Discover search and loaded results across navigation', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    client.searchModrinth = async (_query, _kind, _version, _sort, offset = 0) => ({
+      hits: [{ ...freshHit(), project_id: offset === 0 ? 'first' : 'second', title: offset === 0 ? 'First result' : 'Second result' }],
+      has_more: offset === 0,
+    });
+    render(<App client={client} />);
+    await user.click(await screen.findByRole('button', { name: 'Discover' }));
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
+    await user.click(await screen.findByRole('button', { name: 'Load more' }));
+    expect(await screen.findByText('Second result')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await user.click(screen.getByRole('button', { name: 'Discover' }));
+    expect(screen.getByLabelText('Search Modrinth')).toHaveValue('fresh');
+    expect(screen.getByText('First result')).toBeInTheDocument();
+    expect(screen.getByText('Second result')).toBeInTheDocument();
+  });
+
+  it('refreshes Packs after a pending install without losing its filter', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    const install = client.installModrinthPack;
+    const list = client.listResourcePacks;
+    let installed = false;
+    client.listResourcePacks = async () => {
+      const listing = await list();
+      return installed ? { ...listing, packs: [...listing.packs, { ...worldPack('fresh.zip'), name: 'Fresh Animations' }] } : listing;
+    };
+    let release = () => {};
+    client.installModrinthPack = (args) => new Promise((resolve, reject) => {
+      release = () => { installed = true; void install(args).then(resolve, reject); };
+    });
+    render(<App client={client} />);
+    await user.type(await screen.findByLabelText('Search packs'), 'fresh');
+    await user.click(screen.getByRole('button', { name: 'Discover' }));
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
+    await user.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
+    await user.click(await screen.findByRole('button', { name: 'Install…' }));
+    await user.click(await screen.findByRole('button', { name: 'Install' }));
+    await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+    await act(async () => release());
+    expect(await screen.findByLabelText('Search packs')).toHaveValue('fresh');
+    expect(within(await screen.findByRole('list', { name: 'Installed packs' })).getByText('Fresh Animations')).toBeInTheDocument();
+  });
+
+  it('does not reload packs or worlds when returning without changes', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    const listPacks = vi.spyOn(client, 'listResourcePacks');
+    const listWorlds = vi.spyOn(client, 'listWorlds');
+    client.listWorlds = listWorlds.mockResolvedValue([world()]);
+    render(<App client={client} />);
+
+    await screen.findByLabelText('Search packs');
+    await user.click(screen.getByRole('button', { name: 'Worlds' }));
+    expect(await screen.findByRole('button', { name: /Survival 1.17/ })).toBeInTheDocument();
+    const packCalls = listPacks.mock.calls.length;
+    const worldCalls = listWorlds.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+    await user.click(screen.getByRole('button', { name: 'Worlds' }));
+    expect(screen.getByRole('button', { name: /Survival 1.17/ })).toBeInTheDocument();
+    expect(screen.queryByText('Loading worlds…')).not.toBeInTheDocument();
+    expect(listPacks).toHaveBeenCalledTimes(packCalls);
+    expect(listWorlds).toHaveBeenCalledTimes(worldCalls);
+  });
+
+  it('refreshes Discover worlds and targets after switching game directories', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    await client.addGameDir('/dir-b/.minecraft');
+    const worlds = vi.spyOn(client, 'listWorlds').mockImplementation(async () => [world({
+      dir_name: client.config.active_game_dir === '/dir-b/.minecraft' ? 'b' : 'a',
+      level_name: client.config.active_game_dir === '/dir-b/.minecraft' ? 'B world' : 'A world',
+    })]);
+    const targets = vi.spyOn(client, 'modrinthTargets').mockImplementation(async () => ({
+      installed_versions: [client.config.active_game_dir === '/dir-b/.minecraft' ? '1.20' : '1.21.1'],
+      preferred_launcher: client.config.active_game_dir === '/dir-b/.minecraft' ? '1.20' : '1.21.1',
+      world_version: null,
+    }));
+    render(<App client={client} />);
+    await user.click(await screen.findByRole('button', { name: 'Discover' }));
+    await user.click(screen.getByRole('tab', { name: 'Datapacks' }));
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'demo' } });
+    await user.click(await screen.findByRole('button', { name: /^Pure Datapack,/ }));
+    await user.click(await screen.findByRole('button', { name: 'Install…' }));
+    await user.selectOptions(await screen.findByLabelText('Target world'), 'a');
+    const oldWorldCalls = worlds.mock.calls.length;
+    const oldTargetCalls = targets.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: 'Discover' }));
+    expect(await screen.findByRole('option', { name: 'B world (b)' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'A world (a)' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Target world')).toHaveValue('');
+    expect(worlds).toHaveBeenCalledTimes(oldWorldCalls + 1);
+    expect(targets).toHaveBeenCalledTimes(oldTargetCalls + 1);
+    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByLabelText('Game version')).toHaveTextContent('1.20');
+  });
+
+  it('clears old packs and write controls before a new directory load resolves', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    await client.addGameDir('/dir-b/.minecraft');
+    client.listResourcePacks = async () => ({ packs: [worldPack('Alpha')], count: 1, bytes_read: 0, elapsed_ms: 0 });
+    const list = client.listResourcePacks;
+    client.listResourcePacks = () => client.config.active_game_dir === '/dir-b/.minecraft'
+      ? new Promise(() => {}) : list();
+    const getStack = client.getResourceStack;
+    client.getResourceStack = () => client.config.active_game_dir === '/dir-b/.minecraft'
+      ? new Promise(() => {}) : getStack();
+    render(<App client={client} />);
+    const grid = await screen.findByRole('list', { name: 'Installed packs' });
+    await user.click(within(grid).getByRole('button', { name: /Alpha/ }));
+    expect(screen.getByRole('button', { name: 'Delete pack' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+    expect(screen.queryAllByText('Alpha')).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: 'Delete pack' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Import pack' })).toBeDisabled();
+  });
+
+  it('ignores old pack and stack reloads that settle after a directory switch', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    await client.addGameDir('/dir-b/.minecraft');
+    const listing = { packs: [worldPack('Old pack')], count: 1, bytes_read: 0, elapsed_ms: 0 };
+    let releasePacks = () => {};
+    let releaseStack = () => {};
+    client.listResourcePacks = () => client.config.active_game_dir === '/dir-b/.minecraft'
+      ? Promise.resolve({ ...listing, packs: [worldPack('B pack')] })
+      : new Promise((resolve) => { releasePacks = () => resolve(listing); });
+    client.getResourceStack = () => client.config.active_game_dir === '/dir-b/.minecraft'
+      ? Promise.resolve({ ...stackResponse(null), entries: [] })
+      : new Promise((resolve) => { releaseStack = () => resolve(stackResponse(null)); });
+    render(<App client={client} />);
+    await user.click(await screen.findByRole('button', { name: 'Settings' }));
+    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+    expect(await screen.findByText('B pack')).toBeInTheDocument();
+    await act(async () => { releasePacks(); releaseStack(); });
+    expect(screen.getByText('B pack')).toBeInTheDocument();
+    expect(screen.queryByText('Old pack')).not.toBeInTheDocument();
+    expect(screen.queryByText('Alpha.zip')).not.toBeInTheDocument();
+  });
+
+  it('ignores an old world reload and never lists the previous selection in a new directory', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    await client.addGameDir('/dir-b/.minecraft');
+    let release = () => {};
+    client.listWorlds = () => {
+      if (client.config.active_game_dir === '/dir-b/.minecraft') return Promise.resolve([]);
+      return new Promise((resolve) => { release = () => resolve([world({ level_name: 'Late A world' })]); });
+    };
+    const datapacks = vi.spyOn(client, 'listDatapacks');
+    render(<App client={client} />);
+    await user.click(await screen.findByRole('button', { name: 'Worlds' }));
+    expect(within(await screen.findByRole('navigation', { name: 'Worlds' })).getByText('Loading worlds…')).toBeInTheDocument();
+    const oldCalls = datapacks.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: 'Worlds' }));
+    expect(await screen.findByText('No worlds yet. Launch Minecraft once to create one.')).toBeInTheDocument();
+    await act(async () => release());
+    expect(screen.getByText('No worlds yet. Launch Minecraft once to create one.')).toBeInTheDocument();
+    expect(datapacks).toHaveBeenCalledTimes(oldCalls);
+  });
+
+  it('drops the previous world selection before loading a different directory', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    await client.addGameDir('/dir-b/.minecraft');
+    client.listWorlds = async () => client.config.active_game_dir === '/dir-b/.minecraft'
+      ? [world({ dir_name: 'first-b', level_name: 'B first' }), world()]
+      : [world()];
+    const datapacks = vi.spyOn(client, 'listDatapacks');
+    render(<App client={client} />);
+    await user.click(await screen.findByRole('button', { name: 'Worlds' }));
+    expect(await screen.findByRole('button', { name: /Survival 1.17/ })).toHaveAttribute('aria-current', 'true');
+    await screen.findByRole('list', { name: 'Datapack stack' });
+    const oldCalls = datapacks.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: 'Worlds' }));
+    expect(await screen.findByRole('button', { name: /B first/ })).toHaveAttribute('aria-current', 'true');
+    await waitFor(() => expect(datapacks.mock.calls.slice(oldCalls)).toEqual([['first-b']]));
+  });
+
 });

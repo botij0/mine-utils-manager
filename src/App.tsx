@@ -48,6 +48,10 @@ interface AppProps {
 
 export default function App({ client = ipc }: AppProps) {
   const [page, setPage] = useState<PageId>(() => pageFromHash() ?? DEFAULT_PAGE);
+  const [visited, setVisited] = useState<PageId[]>([]);
+  useEffect(() => {
+    setVisited((previous) => previous.includes(page) ? previous : [...previous, page]);
+  }, [page]);
   const [config, setConfig] = useState<Config>(defaultConfig);
   const [error, setError] = useState<AppError | null>(null);
   const [startupWarning, setStartupWarning] = useState<string | null>(null);
@@ -60,8 +64,7 @@ export default function App({ client = ipc }: AppProps) {
   const [configReady, setConfigReady] = useState(false);
   // Dismissed by choosing a dir or skipping; Settings stays open for later.
   const [onboarded, setOnboarded] = useState(false);
-  // Bumped after a Discover install so Packs/Worlds refetch on return.
-  const [refreshEpoch, setRefreshEpoch] = useState(0);
+  const [dataEpoch, setDataEpoch] = useState({ packs: 0, worlds: 0, discover: 0 });
   // At most one get_game_guard is outstanding: a hung call parks a backend
   // thread, so only its real settle frees the slot. A check wanted meanwhile
   // runs once the slot frees. The outstanding answer goes stale when it
@@ -189,6 +192,22 @@ export default function App({ client = ipc }: AppProps) {
     return () => media.removeEventListener('change', onChange);
   }, [config.theme]);
 
+  const worldsChanged = useCallback(() => {
+    setDataEpoch((epoch) => ({ ...epoch, discover: epoch.discover + 1 }));
+  }, []);
+  const installed = useCallback((kind: 'resourcepack' | 'datapack') => {
+    const page = kind === 'resourcepack' ? 'packs' : 'worlds';
+    setDataEpoch((epoch) => ({ ...epoch, [page]: epoch[page] + 1 }));
+  }, []);
+
+  const backupRestored = useCallback((file: 'options' | 'level') => {
+    setDataEpoch((epoch) =>
+      file === 'options'
+        ? { ...epoch, packs: epoch.packs + 1 }
+        : { ...epoch, worlds: epoch.worlds + 1, discover: epoch.discover + 1 },
+    );
+  }, []);
+
   const activeLabel = config.active_game_dir ?? 'No game dir selected';
   const showOnboarding =
     configReady && !onboarded && !config.active_game_dir && !error;
@@ -253,47 +272,65 @@ export default function App({ client = ipc }: AppProps) {
               {error.message}
             </p>
           ) : null}
-          {page === 'packs' ? (
-            <PacksPage
-              key={`packs-${refreshEpoch}`}
-              client={client}
-              gameRunning={gameRunning}
-              gameGuardUnknown={guardPause !== null}
-              gameGuardChecking={guardPause === 'checking'}
-              refreshGameRunning={refreshGameRunning}
-            />
+          {page === 'packs' || visited.includes('packs') ? (
+            <div hidden={page !== 'packs'}>
+              <PacksPage
+                active={page === 'packs'}
+                reloadSignal={`${dataEpoch.packs}`}
+                gameDir={config.active_game_dir}
+                client={client}
+                gameRunning={gameRunning}
+                gameGuardUnknown={guardPause !== null}
+                gameGuardChecking={guardPause === 'checking'}
+                refreshGameRunning={refreshGameRunning}
+              />
+            </div>
           ) : null}
-          {page === 'worlds' ? (
-            <WorldsPage
-              key={`worlds-${refreshEpoch}`}
-              client={client}
-              gameRunning={gameRunning}
-              gameGuardUnknown={guardPause !== null}
-              gameGuardChecking={guardPause === 'checking'}
-              refreshGameRunning={refreshGameRunning}
-            />
+          {page === 'worlds' || visited.includes('worlds') ? (
+            <div hidden={page !== 'worlds'}>
+              <WorldsPage
+                active={page === 'worlds'}
+                onDataChanged={worldsChanged}
+                reloadSignal={`${dataEpoch.worlds}`}
+                gameDir={config.active_game_dir}
+                client={client}
+                gameRunning={gameRunning}
+                gameGuardUnknown={guardPause !== null}
+                gameGuardChecking={guardPause === 'checking'}
+                refreshGameRunning={refreshGameRunning}
+              />
+            </div>
           ) : null}
-          {page === 'discover' ? (
-            <DiscoverPage
-              client={client}
-              gameRunning={gameRunning}
-              gameGuardUnknown={guardPause !== null}
-              gameGuardChecking={guardPause === 'checking'}
-              hasGameDir={config.active_game_dir != null}
-              refreshGameRunning={refreshGameRunning}
-              onInstalled={() => setRefreshEpoch((epoch) => epoch + 1)}
-            />
+          {page === 'discover' || visited.includes('discover') ? (
+            <div hidden={page !== 'discover'}>
+              <DiscoverPage
+                active={page === 'discover'}
+                reloadSignal={`${dataEpoch.discover}`}
+                gameDir={config.active_game_dir}
+                client={client}
+                gameRunning={gameRunning}
+                gameGuardUnknown={guardPause !== null}
+                gameGuardChecking={guardPause === 'checking'}
+                hasGameDir={config.active_game_dir != null}
+                refreshGameRunning={refreshGameRunning}
+                onInstalled={installed}
+              />
+            </div>
           ) : null}
-          {page === 'settings' ? (
-            <SettingsPage
-              client={client}
-              config={config}
-              gameRunning={gameRunning}
-              gameGuardUnknown={guardPause !== null}
-              gameGuardChecking={guardPause === 'checking'}
-              refreshGameRunning={refreshGameRunning}
-              onConfigChanged={setConfig}
-            />
+          {page === 'settings' || visited.includes('settings') ? (
+            <div hidden={page !== 'settings'}>
+              <SettingsPage
+                active={page === 'settings'}
+                client={client}
+                config={config}
+                gameRunning={gameRunning}
+                gameGuardUnknown={guardPause !== null}
+                gameGuardChecking={guardPause === 'checking'}
+                refreshGameRunning={refreshGameRunning}
+                onConfigChanged={setConfig}
+                onBackupRestored={backupRestored}
+              />
+            </div>
           ) : null}
         </main>
       </div>

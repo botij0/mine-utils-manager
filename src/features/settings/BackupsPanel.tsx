@@ -10,6 +10,7 @@ import type {
 } from '../../lib/types';
 
 interface BackupsPanelProps {
+  active?: boolean;
   client: BackupsClient;
   /** Changes here must reload the list; a game-running change must not. */
   activeGameDir?: string | null;
@@ -22,6 +23,7 @@ interface BackupsPanelProps {
   /** Ask the app-level poll to re-check after a `game_running` error. */
   refreshGameRunning?: () => void | Promise<void>;
   onRestored?: (stack: ResourceStack) => void;
+  onLevelRestored?: () => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -34,12 +36,14 @@ function formatBytes(bytes: number): string {
  *  panel only mirrors that state so the button explains itself. */
 export default function BackupsPanel({
   client,
+  active = true,
   activeGameDir,
   gameRunning,
   gameGuardUnknown = false,
   gameGuardChecking = false,
   refreshGameRunning = () => {},
   onRestored,
+  onLevelRestored,
 }: BackupsPanelProps) {
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,6 +69,7 @@ export default function BackupsPanel({
   // A changed game dir replaces the whole table. The five-second running poll
   // object identity is deliberately not a dependency: it would flash the list.
   useEffect(() => {
+    if (!active) return undefined;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -85,13 +90,14 @@ export default function BackupsPanel({
     return () => {
       cancelled = true;
     };
-  }, [client, activeGameDir]);
+  }, [client, activeGameDir, active]);
 
   // The `level.dat` backups of every world in one batch call, grouped by
   // world. Groups come from the backups themselves, so a corrupt `level.dat`
   // (the main restore case) or a deleted one still shows its backups, and a
   // world without `level.dat` is listed by its backups.
   useEffect(() => {
+    if (!active) return undefined;
     let cancelled = false;
     setLevelLoading(true);
     setLevelError(null);
@@ -124,7 +130,7 @@ export default function BackupsPanel({
     return () => {
       cancelled = true;
     };
-  }, [client, activeGameDir]);
+  }, [client, activeGameDir, active]);
 
   const handleLevelRestore = async (dirName: string, label: string, file: string) => {
     const key = `${dirName}/${file}`;
@@ -135,6 +141,7 @@ export default function BackupsPanel({
       // The backend guards the game and recreates a missing level.dat, so
       // there is no client-side pre-check to block the recovery path.
       await client.restoreLevelBackup(dirName, file);
+      onLevelRestored?.();
       setStatus(`Restored ${file} for ${label}.`);
       const groups = [...levelGroups];
       const group = groups.find((entry) => entry.dirName === dirName);

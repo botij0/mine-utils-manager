@@ -15,9 +15,11 @@ const THEMES: { value: Theme; label: string }[] = [
 const pendingWrites = new WeakMap<IpcClient, Promise<void>>();
 
 interface SettingsPageProps {
+  active?: boolean;
   client: IpcClient;
   config: Config;
   onConfigChanged: (config: Config) => void;
+  onBackupRestored?: (file: 'options' | 'level') => void;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning: GameRunning | null | undefined;
   /** No current guard answer: unknown, so writes stay paused. */
@@ -30,8 +32,10 @@ interface SettingsPageProps {
 
 export default function SettingsPage({
   client,
+  active = true,
   config,
   onConfigChanged,
+  onBackupRestored,
   gameRunning,
   gameGuardUnknown = false,
   gameGuardChecking = false,
@@ -92,12 +96,15 @@ export default function SettingsPage({
         onConfigChanged={onConfigChanged}
       />
       <BackupsPanel
+        active={active}
         client={client}
         activeGameDir={config.active_game_dir}
         gameRunning={gameRunning}
         gameGuardUnknown={gameGuardUnknown}
         gameGuardChecking={gameGuardChecking}
         refreshGameRunning={refreshGameRunning}
+        onRestored={() => onBackupRestored?.('options')}
+        onLevelRestored={() => onBackupRestored?.('level')}
       />
     </div>
   );

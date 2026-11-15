@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DiscoverClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import type {
@@ -121,7 +121,12 @@ export interface ModrinthState {
  * Discover state. Nothing fires before the page mounts, and a search fires
  * only for a non-empty query: opening the tab never hits the network.
  */
-export function useModrinth(client: DiscoverClient): ModrinthState {
+export function useModrinth(
+  client: DiscoverClient,
+  active = true,
+  reloadSignal = '',
+  gameDir: string | null = null,
+): ModrinthState {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<ModrinthKind>('resourcepack');
   const [gameVersion, setGameVersion] = useState('');
@@ -149,6 +154,16 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
   const mounted = useRef(true);
   const loadingMore = useRef(false);
   const [retryNonce, setRetryNonce] = useState(0);
+  const loadedTargets = useRef<string | null>(null);
+  const versionChoice = useRef<{ manual: boolean; target: string | null }>({ manual: false, target: null });
+
+  useLayoutEffect(() => {
+    loadedTargets.current = null;
+    setWorld(null);
+    setTargets(null);
+    setInstallResult(null);
+    setInstallError(null);
+  }, [gameDir]);
 
   useEffect(() => {
     mounted.current = true;
@@ -171,11 +186,17 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
   }, [query]);
 
   useEffect(() => {
+    const key = JSON.stringify([reloadSignal, world]);
+    if (!active || loadedTargets.current === key) return;
     let cancelled = false;
+    setTargets(null);
     client
       .modrinthTargets(world)
       .then((loaded) => {
-        if (!cancelled && mounted.current) setTargets(loaded);
+        if (!cancelled && mounted.current) {
+          loadedTargets.current = key;
+          setTargets(loaded);
+        }
       })
       .catch(() => {
         if (!cancelled && mounted.current) setTargets(null);
@@ -183,12 +204,25 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
     return () => {
       cancelled = true;
     };
-  }, [client, world]);
+  }, [client, world, active, reloadSignal, gameDir]);
 
   const targetVersion =
     kind === 'datapack'
       ? (targets?.world_version ?? null)
       : (targets?.preferred_launcher ?? null);
+
+  useEffect(() => {
+    if (!targetVersion) return;
+    const targetChanged = versionChoice.current.target !== targetVersion;
+    versionChoice.current.target = targetVersion;
+    setSelectedVersionId((current) => {
+      const picked = versions.find((version) => version.id === current);
+      if (versionChoice.current.manual && picked &&
+          (!targetChanged || picked.game_versions.includes(targetVersion))) return current;
+      versionChoice.current.manual = false;
+      return preferModrinthVersion(versions, targetVersion)?.id ?? null;
+    });
+  }, [versions, targetVersion]);
 
   useEffect(() => {
     if (!debouncedQuery) {
@@ -302,6 +336,7 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
     async (hit: ModrinthSearchHit | null) => {
       const token = selectToken.current + 1;
       selectToken.current = token;
+      versionChoice.current = { manual: false, target: targetVersion };
       setSelected(hit);
       setProject(null);
       setVersions([]);
@@ -332,7 +367,7 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
         if (mounted.current && selectToken.current === token) setDetailLoading(false);
       }
     },
-    [client, kind, targets],
+    [client, kind, targets, targetVersion],
   );
 
   const setKindAndClear = useCallback((next: ModrinthKind) => {
@@ -353,23 +388,10 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
     setInstallError(null);
   }, [resetSearchResults]);
 
-  // When the datapack target world changes, re-run the version preference:
-  // a version picked for the old world's game version may not support the
-  // new one. A compatible manual pick is left alone; an incompatible one is
-  // reset to the compatible-first (or newest) version.
-  const worldTarget = targets?.world_version ?? null;
-  useEffect(() => {
-    if (kind !== 'datapack' || versions.length === 0) return;
-    setSelectedVersionId((current) => {
-      const picked = versions.find((version) => version.id === current) ?? null;
-      if (picked && (!worldTarget || picked.game_versions.includes(worldTarget))) {
-        return current;
-      }
-      return preferModrinthVersion(versions, worldTarget)?.id ?? current;
-    });
-    // Runs only on target-world changes, not on every versions load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, worldTarget]);
+  const chooseVersion = useCallback((id: string) => {
+    versionChoice.current.manual = true;
+    setSelectedVersionId(id);
+  }, []);
 
   const retry = useCallback(() => {
     setOffline(false);
@@ -457,7 +479,7 @@ export function useModrinth(client: DiscoverClient): ModrinthState {
     detailLoading,
     detailError,
     selectedVersionId,
-    setSelectedVersionId,
+    setSelectedVersionId: chooseVersion,
     installBusy,
     installResult,
     installError,

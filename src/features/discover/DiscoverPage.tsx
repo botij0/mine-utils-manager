@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ipc } from '../../lib/ipc';
 import type { IpcClient } from '../../lib/ipc';
-import type { GameRunning, World } from '../../lib/types';
+import type { GameRunning, ModrinthKind, World } from '../../lib/types';
 import GameRunningBanner from '../packs/GameRunningBanner';
 import InstallSheet from './InstallSheet';
 import ProjectDetail from './ProjectDetail';
@@ -10,6 +10,9 @@ import SearchBar from './SearchBar';
 import { useModrinth } from './useModrinth';
 
 interface DiscoverPageProps {
+  active?: boolean;
+  reloadSignal?: string;
+  gameDir?: string | null;
   client?: IpcClient;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
@@ -22,11 +25,14 @@ interface DiscoverPageProps {
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
   /** Fires after a successful install so the app refreshes Packs/Worlds. */
-  onInstalled?: () => void;
+  onInstalled?: (kind: ModrinthKind) => void;
 }
 
 export default function DiscoverPage({
   client = ipc,
+  active = true,
+  reloadSignal = '',
+  gameDir = null,
   gameRunning,
   gameGuardUnknown = false,
   gameGuardChecking = false,
@@ -34,17 +40,27 @@ export default function DiscoverPage({
   refreshGameRunning = () => {},
   onInstalled = () => {},
 }: DiscoverPageProps) {
-  const discover = useModrinth(client);
-  const [worlds, setWorlds] = useState<World[]>([]);
+  const discover = useModrinth(client, active, reloadSignal, gameDir);
+  const [worlds, setWorlds] = useState<World[] | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
+
+  const loadedWorlds = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    loadedWorlds.current = null;
+    setWorlds(null);
+  }, [gameDir]);
 
   useEffect(() => {
     let cancelled = false;
-    if (discover.kind !== 'datapack') return () => {};
+    if (!active || discover.kind !== 'datapack' || loadedWorlds.current === reloadSignal) return;
     client
       .listWorlds()
       .then((loaded) => {
-        if (!cancelled) setWorlds(loaded.filter((world) => !world.issue));
+        if (!cancelled) {
+          loadedWorlds.current = reloadSignal;
+          setWorlds(loaded.filter((world) => !world.issue));
+        }
       })
       .catch(() => {
         if (!cancelled) setWorlds([]);
@@ -52,12 +68,17 @@ export default function DiscoverPage({
     return () => {
       cancelled = true;
     };
-  }, [client, discover.kind]);
+  }, [client, discover.kind, active, reloadSignal, gameDir]);
+
+  const { world: targetWorld, setWorld } = discover;
+  useEffect(() => {
+    if (targetWorld && worlds && !worlds.some((world) => world.dir_name === targetWorld)) setWorld(null);
+  }, [worlds, targetWorld, setWorld]);
 
   // Unknown (before the first check, or a failed check) blocks installs: the
   // UI must never offer a write it cannot guard.
   const writesBlocked =
-    gameRunning === undefined || gameRunning !== null || gameGuardUnknown || !hasGameDir;
+    gameRunning === undefined || gameRunning !== null || gameGuardUnknown || !hasGameDir || discover.targets === null;
   const blockedReason = !hasGameDir
     ? 'No game dir is active. Pick a game dir in Settings first, then install.'
     : gameRunning != null
@@ -66,7 +87,9 @@ export default function DiscoverPage({
         ? 'Mine Utils could not check whether Minecraft is running; installs are paused until a check succeeds.'
         : gameGuardUnknown || gameRunning === undefined
           ? 'Checking whether Minecraft is running; installs are paused until the check lands.'
-          : null;
+          : discover.targets === null
+            ? 'Install targets are unavailable. Return to Discover to retry.'
+            : null;
 
   const selectedVersion =
     discover.versions.find((version) => version.id === discover.selectedVersionId) ?? null;
@@ -89,7 +112,7 @@ export default function DiscoverPage({
   const onInstall = async () => {
     const outcome = await discover.install();
     if (outcome?.outcome.status === 'imported' || outcome?.outcome.status === 'locked') {
-      onInstalled();
+      onInstalled(outcome.kind);
     }
   };
 
@@ -179,7 +202,7 @@ export default function DiscoverPage({
       ) : null}
       {/* One dialog at a time: the install sheet replaces the detail sheet
           instead of stacking on top of it. */}
-      {installOpen && discover.selected ? (
+      {active && (installOpen && discover.selected ? (
         <InstallSheet
           open
           kind={discover.kind}
@@ -191,7 +214,8 @@ export default function DiscoverPage({
             ''
           }
           filename={selectedFile?.filename ?? ''}
-          worlds={worlds}
+          worlds={worlds ?? []}
+          worldsLoading={worlds === null}
           world={discover.world}
           onWorldChange={discover.setWorld}
           busy={discover.installBusy}
@@ -217,7 +241,7 @@ export default function DiscoverPage({
           onInstall={openInstall}
           onClose={discover.closeDetail}
         />
-      ) : null}
+      ) : null)}
     </section>
   );
 }

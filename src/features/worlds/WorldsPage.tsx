@@ -12,7 +12,11 @@ import WorldRail from './WorldRail';
 import { compatibilityWarning, useWorlds } from './useWorlds';
 
 interface WorldsPageProps {
+  active?: boolean;
+  reloadSignal?: string;
+  gameDir?: string | null;
   client?: WorldsClient;
+  onDataChanged?: () => void;
   /** From the app-level game guard poll. Undefined until the first check. */
   gameRunning?: GameRunning | null;
   /** No current guard answer is unknown, so writes stay paused. */
@@ -25,6 +29,10 @@ interface WorldsPageProps {
 
 export default function WorldsPage({
   client = ipc,
+  active = true,
+  reloadSignal = '',
+  gameDir = null,
+  onDataChanged,
   gameRunning,
   gameGuardUnknown = false,
   gameGuardChecking = false,
@@ -52,7 +60,7 @@ export default function WorldsPage({
     deleteDatapack,
     removeDatapackReference,
     clearActionError,
-  } = useWorlds(client);
+  } = useWorlds(client, active, reloadSignal, gameDir);
   const [selectedFilename, setSelectedFilename] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importPrompt, setImportPrompt] = useState<
@@ -72,7 +80,8 @@ export default function WorldsPage({
     void refreshGameRunning();
     await refreshListing();
     await reload();
-  }, [refreshGameRunning, refreshListing, reload]);
+    onDataChanged?.();
+  }, [refreshGameRunning, refreshListing, reload, onDataChanged]);
 
   const worldFormat = selected?.version?.data_format ?? null;
   const worldLabel = selected?.version?.name ?? selected?.level_name ?? null;
@@ -222,11 +231,14 @@ export default function WorldsPage({
       const outcome = await importDatapack(world, path, choice);
       // A switch mid-import leaves this outcome addressing the old world.
       if (selectedDirRef.current !== world) return outcome;
+      if (outcome.status === 'imported' || outcome.status === 'locked') {
+        onDataChanged?.();
+        void refreshGameRunning();
+      }
       if (outcome.status === 'imported') {
         setSelectedFilename(outcome.filename);
         setImportPrompt(null);
         setImportPath(null);
-        void refreshAfterGuard();
       } else if (outcome.status === 'locked') {
         setLockedNotice(
           `Copied ${outcome.filename} but left it disabled: ${outcome.detail}. Enable it after the lock releases.`,
@@ -234,7 +246,6 @@ export default function WorldsPage({
         setSelectedFilename(outcome.filename);
         setImportPrompt(null);
         setImportPath(null);
-        void refreshAfterGuard();
       } else if (outcome.status === 'skipped') {
         setImportPrompt(null);
         setImportPath(null);
@@ -261,7 +272,10 @@ export default function WorldsPage({
     <section className="worlds-page">
       {error && !noGameDir ? (
         <p className="error" role="alert">
-          {error.message}
+          {error.message}{' '}
+          <button type="button" className="button" onClick={() => void reload()}>
+            Retry
+          </button>
         </p>
       ) : null}
       {noGameDir ? (
