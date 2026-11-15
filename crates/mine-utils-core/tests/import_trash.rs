@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
-use mine_utils_core::{pack_scan, HashCache, IconCache, ImportChoice, ImportOutcome};
+use mine_utils_core::{pack_import, HashCache, IconCache, ImportChoice, ImportOutcome};
 
 fn zip_pack(path: &Path) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -52,7 +52,7 @@ fn system_trash_fixture() {
     std::fs::copy(&old, &source).unwrap();
     let data_home = root.join("xdg-data");
     std::fs::create_dir_all(data_home.join("Trash/files")).unwrap();
-    let result = pack_scan::import_pack(
+    let result = pack_import::import_pack(
         &source,
         &packs,
         &IconCache::new(&root.join("cache")),

@@ -297,7 +297,7 @@ impl FileHashes {
 }
 
 /// Hash an installed file with both digests the install commit needs.
-/// Stays separate from `pack_scan`'s single-SHA-256 loop: one pass must feed
+/// Stays separate from `pack_import`'s single-SHA-256 loop: one pass must feed
 /// both hashes, so sharing would cost a second read or a threaded signal.
 fn hash_file(path: &Path) -> Result<FileHashes, AppError> {
     let mut file = std::fs::File::open(path).map_err(AppError::from)?;
@@ -502,7 +502,7 @@ fn import_resource(
 ) -> Result<ImportOutcome, AppError> {
     // `dest` is a direct child of `resourcepacks`, so a fresh commit imports
     // as a no-op returning the pack; duplicates/collisions surface here.
-    crate::pack_scan::import_pack(
+    crate::pack_import::import_pack(
         dest,
         &stack_paths.game_dir().join("resourcepacks"),
         icons,
