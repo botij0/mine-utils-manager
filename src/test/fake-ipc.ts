@@ -173,6 +173,7 @@ export function makeFakeClient(
       config = withActiveGameDir(config, entries, path);
       return state();
     },
+    async setLastWorld(path: string) { config = { ...config, last_world: path }; },
     async getConfig() {
       return config;
     },
@@ -359,6 +360,8 @@ export function worldsClient(
 ): WorldsClient {
   return {
     listWorlds: async () => [world()],
+    getConfig: async () => defaultConfig(),
+    setLastWorld: async () => {},
     listDatapacks: async () => ({
       packs: { packs: [datapack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
       stack: stack(),

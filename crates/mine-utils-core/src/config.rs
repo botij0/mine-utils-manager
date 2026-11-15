@@ -86,6 +86,9 @@ impl Config {
     /// Mark a dir active. The caller validates that the path is known, since
     /// detection spans more than the dirs stored here.
     pub fn set_active_game_dir(&mut self, path: &Path) {
+        if self.active_game_dir.as_deref() != Some(path) {
+            self.last_world = None;
+        }
         self.active_game_dir = Some(path.to_path_buf());
     }
 
@@ -155,6 +158,24 @@ impl ConfigStore {
         }
         let mut next = self.config.clone();
         next.set_active_game_dir(path);
+        self.commit(next)
+    }
+
+    pub fn set_last_world(&mut self, world: &str) -> Result<(), AppError> {
+        let game = self
+            .config
+            .active_game_dir
+            .as_deref()
+            .ok_or(AppError::NoActiveGameDir)?;
+        let world = crate::world::WorldPaths::for_world(game, world)?;
+        let path = world.world_dir().to_path_buf();
+        if !crate::world::is_level_file(&world.level_dat_path()) {
+            return Err(AppError::World {
+                reason: format!("{} is not a world in this game dir", path.display()),
+            });
+        }
+        let mut next = self.config.clone();
+        next.last_world = Some(path);
         self.commit(next)
     }
 
@@ -427,6 +448,38 @@ mod tests {
             "unknown_game_dir"
         );
         assert_eq!(store.config().active_game_dir, None);
+    }
+
+    #[test]
+    fn last_world_is_persisted_and_cleared_when_game_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        let game = root.path().join("game");
+        let world = game.join("saves/creative");
+        std::fs::create_dir_all(&world).unwrap();
+        std::fs::write(world.join("level.dat"), b"level").unwrap();
+        let mut config = Config::default();
+        config.set_active_game_dir(&game);
+        let mut store = ConfigStore::new(path.clone(), config);
+        store.set_last_world("creative").unwrap();
+        assert_eq!(load_config(&path).unwrap().last_world, Some(world));
+        store.config.set_active_game_dir(&root.path().join("other"));
+        assert_eq!(store.config().last_world, None);
+    }
+
+    #[test]
+    fn last_world_refuses_a_saves_folder_without_level_dat() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        let game = root.path().join("game");
+        std::fs::create_dir_all(game.join("saves/plain")).unwrap();
+        let mut config = Config::default();
+        config.set_active_game_dir(&game);
+        let mut store = ConfigStore::new(path.clone(), config);
+        let err = store.set_last_world("plain").unwrap_err();
+        assert_eq!(err.code(), "world");
+        assert_eq!(store.config().last_world, None);
+        assert!(!path.exists());
     }
 
     #[test]

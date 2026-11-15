@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorldsClient } from '../../lib/ipc';
+import { defaultConfig } from '../../lib/types';
 import type { DatapackListing, DataStack } from '../../lib/types';
 import { worldsClient } from '../../test/fake-ipc';
 import { datapack, datapackListing, stack, world } from '../../test/fake-packs';
@@ -15,6 +16,30 @@ describe('useWorlds', () => {
     expect(result.current.selected?.dir_name).toBe('Survival 1_17');
     expect(result.current.packs).toHaveLength(1);
     expect(result.current.stack?.enabled).toHaveLength(3);
+  });
+
+  it('restores the remembered world and falls back when it is missing', async () => {
+    const second = world({ dir_name: 'Creative Flat', path: '/saves/Creative Flat' });
+    let remembered: string | null = null;
+    let available = [world(), second];
+    const client = worldsClient({
+      listWorlds: async () => available,
+      getConfig: async () => ({ ...defaultConfig(), last_world: remembered }),
+      setLastWorld: async (path: string) => { remembered = path; },
+    });
+    const first = renderHook(() => useWorlds(client));
+    await act(async () => {});
+    expect(first.result.current.selected?.dir_name).toBe('Survival 1_17');
+    await act(async () => { first.result.current.select('Creative Flat'); });
+    first.unmount();
+    const restored = renderHook(() => useWorlds(client));
+    await act(async () => {});
+    expect(restored.result.current.selected?.dir_name).toBe('Creative Flat');
+    restored.unmount();
+    available = [world()];
+    const next = renderHook(() => useWorlds(client));
+    await act(async () => {});
+    expect(next.result.current.selected?.dir_name).toBe('Survival 1_17');
   });
 
   it('shows compatibility chips for 1.17 packs on a 1.21.10 world', async () => {

@@ -186,6 +186,39 @@ pub async fn add_game_dir(
 }
 
 #[tauri::command]
+pub async fn set_last_world(state: State<'_, AppState>, path: String) -> Result<(), AppError> {
+    state.note_first_ipc();
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = PathBuf::from(&path);
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| AppError::World {
+                reason: "invalid world path".into(),
+            })?;
+        state
+            .update(|store| {
+                let game = store
+                    .config()
+                    .active_game_dir
+                    .as_deref()
+                    .ok_or(AppError::NoActiveGameDir)?;
+                if path != game.join("saves").join(&name) {
+                    return Err(AppError::World {
+                        reason: "world is not in the active game dir".into(),
+                    });
+                }
+                store.set_last_world(&name)
+            })
+            .map(|_| ())
+    })
+    .await
+    .map_err(join_error)?
+}
+
+#[tauri::command]
 pub async fn remove_game_dir(
     state: State<'_, AppState>,
     path: String,
@@ -345,5 +378,52 @@ mod tests {
         );
         assert!(state.update(|store| store.set_theme(Theme::Dark)).is_err());
         assert_eq!(state.config().theme, Theme::System);
+    }
+}
+
+#[cfg(test)]
+mod last_world_tests {
+    use super::*;
+    use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+
+    #[test]
+    fn command_persists_world_to_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let world = game.join("saves/creative");
+        std::fs::create_dir_all(&world).unwrap();
+        std::fs::write(world.join("level.dat"), b"level").unwrap();
+        let path = root.path().join("config.json");
+        let mut config = Config::default();
+        config.set_active_game_dir(&game);
+        let app = mock_builder()
+            .manage(AppState::new(
+                ConfigStore::new(path.clone(), config),
+                None,
+                root.path().to_path_buf(),
+            ))
+            .invoke_handler(tauri::generate_handler![set_last_world])
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let result = get_ipc_response(
+            &window,
+            tauri::webview::InvokeRequest {
+                cmd: "set_last_world".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "tauri://localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(serde_json::json!({"path": world})),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.into(),
+            },
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            mine_utils_core::load_config(&path).unwrap().last_world,
+            Some(world)
+        );
     }
 }

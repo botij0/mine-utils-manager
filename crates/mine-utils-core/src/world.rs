@@ -138,7 +138,7 @@ fn is_real_dir(path: &Path) -> bool {
 
 /// A real `level.dat` file. A symlink is never followed: it could point
 /// outside the game dir.
-fn is_level_file(path: &Path) -> bool {
+pub(crate) fn is_level_file(path: &Path) -> bool {
     match std::fs::symlink_metadata(path) {
         Ok(meta) => meta.file_type().is_file() && !meta.file_type().is_symlink(),
         Err(_) => false,
