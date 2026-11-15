@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
@@ -21,6 +21,26 @@ function Harness({ client }: { client: FakeClient }) {
 }
 
 describe('SettingsPage', () => {
+  it('keeps the latest theme when an earlier directory reply arrives late', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient([]);
+    const add = client.addGameDir;
+    let release!: () => void;
+    const delayed = new Promise<void>((resolve) => { release = resolve; });
+    client.addGameDir = async (path) => {
+      const result = await add(path);
+      await delayed;
+      return result;
+    };
+    render(<Harness client={client} />);
+    await user.type(screen.getByLabelText('Game dir path'), '/tmp/saves/one');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+    await user.click(screen.getByRole('radio', { name: 'Dark' }));
+    release();
+    await screen.findByText('/tmp/saves/one');
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked());
+  });
+
   it('keeps an added dir when the theme changes', async () => {
     const user = userEvent.setup();
     const client = makeFakeClient([

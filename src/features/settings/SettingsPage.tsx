@@ -1,7 +1,7 @@
 import type { Config, GameRunning, Theme } from '../../lib/types';
 import type { IpcClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { AppError } from '../../lib/types';
 import GameDirSettings from '../game-dirs/GameDirSettings';
 import BackupsPanel from './BackupsPanel';
@@ -11,6 +11,8 @@ const THEMES: { value: Theme; label: string }[] = [
   { value: 'light', label: 'Light' },
   { value: 'dark', label: 'Dark' },
 ];
+
+const pendingWrites = new WeakMap<IpcClient, Promise<void>>();
 
 interface SettingsPageProps {
   client: IpcClient;
@@ -36,10 +38,24 @@ export default function SettingsPage({
   refreshGameRunning = () => {},
 }: SettingsPageProps) {
   const [error, setError] = useState<AppError | null>(null);
+  const orderedClient = useMemo(() => {
+    function enqueue<T>(action: () => Promise<T>): Promise<T> {
+      const result = (pendingWrites.get(client) ?? Promise.resolve()).then(action);
+      pendingWrites.set(client, result.then(() => {}, () => {}));
+      return result;
+    }
+    return {
+      ...client,
+      addGameDir: (path: string) => enqueue(() => client.addGameDir(path)),
+      removeGameDir: (path: string) => enqueue(() => client.removeGameDir(path)),
+      setActiveGameDir: (path: string) => enqueue(() => client.setActiveGameDir(path)),
+      setTheme: (theme: Theme) => enqueue(() => client.setTheme(theme)),
+    };
+  }, [client]);
 
   async function handleTheme(theme: Theme) {
     try {
-      onConfigChanged(await client.setTheme(theme));
+      onConfigChanged(await orderedClient.setTheme(theme));
       setError(null);
     } catch (err) {
       setError(toAppError(err));
@@ -71,7 +87,7 @@ export default function SettingsPage({
         ) : null}
       </section>
       <GameDirSettings
-        client={client}
+        client={orderedClient}
         activePath={config.active_game_dir}
         onConfigChanged={onConfigChanged}
       />
