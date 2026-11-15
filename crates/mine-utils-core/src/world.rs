@@ -58,11 +58,25 @@ pub struct World {
 /// so a crafted name can never escape the game dir.
 #[derive(Debug, Clone)]
 pub struct WorldPaths {
-    pub game_dir: PathBuf,
-    pub world_dir: PathBuf,
+    game_dir: PathBuf,
+    world_dir: PathBuf,
+    name: String,
 }
 
 impl WorldPaths {
+    pub fn game_dir(&self) -> &Path {
+        &self.game_dir
+    }
+    pub fn world_dir(&self) -> &Path {
+        &self.world_dir
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn level_dat_path(&self) -> PathBuf {
+        level_dat_in(&self.world_dir)
+    }
+
     pub fn for_world(game_dir: &Path, world: &str) -> Result<WorldPaths, crate::error::AppError> {
         if world.is_empty()
             || world == "."
@@ -80,6 +94,7 @@ impl WorldPaths {
         Ok(WorldPaths {
             game_dir: game_dir.to_path_buf(),
             world_dir: resolved,
+            name: world.to_string(),
         })
     }
 }
@@ -140,6 +155,11 @@ fn issue(err: &level_dat::LevelDatError) -> WorldIssue {
 /// List every world in `saves`, sorted by directory name. A missing `saves`
 /// directory means no worlds, not an error. Symlinked entries are skipped:
 /// following one could read or write outside the game dir.
+/// The one place a world's `level.dat` path is derived.
+pub(crate) fn level_dat_in(world_dir: &Path) -> PathBuf {
+    world_dir.join("level.dat")
+}
+
 pub fn scan_worlds(game_dir: &Path, icons: &IconCache) -> Vec<World> {
     let saves = game_dir.join("saves");
     let mut dirs: Vec<PathBuf> = match std::fs::read_dir(&saves) {
@@ -172,7 +192,7 @@ fn read_world(dir: &Path, icons: &IconCache, status: &game_lock::GameStatus) -> 
         // A symlinked `saves` entry is never a world the app opens.
         return None;
     }
-    if !is_level_file(&dir.join("level.dat")) {
+    if !is_level_file(&level_dat_in(dir)) {
         // Not a world the app can open; skip it silently.
         return None;
     }
@@ -192,7 +212,7 @@ fn read_world(dir: &Path, icons: &IconCache, status: &game_lock::GameStatus) -> 
         detection_supported: status.supported,
         issue: None,
     };
-    match read_capped(&dir.join("level.dat"), level_dat::MAX_LEVEL_DAT_BYTES) {
+    match read_capped(&level_dat_in(dir), level_dat::MAX_LEVEL_DAT_BYTES) {
         Ok(bytes) => match level_dat::parse(&bytes) {
             Ok(view) => {
                 if let Some(name) = view.level_name {

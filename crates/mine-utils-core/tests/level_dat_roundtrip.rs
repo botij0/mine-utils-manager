@@ -16,17 +16,14 @@ fn toggle_on_disk(bytes: &[u8], filename: &str, enabled: bool) -> Vec<u8> {
     let world = game.join("saves").join("world");
     std::fs::create_dir_all(&world).unwrap();
     std::fs::write(world.join("level.dat"), bytes).unwrap();
-    let paths = mine_utils_core::DataPaths {
-        game_dir: game.clone(),
-        world_dir: world.clone(),
-        level_dat_path: world.join("level.dat"),
-        datapacks_dir: world.join("datapacks"),
-        backups_root: dir.path().join("backups"),
-        backups: mine_utils_core::BackupsConfig {
+    let paths = mine_utils_core::DataPaths::for_world(
+        &mine_utils_core::WorldPaths::for_world(&game, "world").unwrap(),
+        dir.path(),
+        mine_utils_core::BackupsConfig {
             enabled: false,
             keep: 5,
         },
-    };
+    );
     mine_utils_core::data_stack::set_enabled(&paths, filename, enabled)
         .expect("production toggle must succeed");
     std::fs::read(world.join("level.dat")).unwrap()

@@ -108,7 +108,7 @@ fn run() -> Result<String, String> {
         }
         Some("list-backups") => {
             let paths = stack_paths(game_dir(args.next())?)?;
-            let backups = backup::list(&paths.backups_root).map_err(|err| err.to_string())?;
+            let backups = backup::list(paths.backups_root()).map_err(|err| err.to_string())?;
             serde_json::to_string_pretty(&serde_json::json!({ "backups": backups }))
                 .map_err(|err| err.to_string())
         }
@@ -171,7 +171,7 @@ fn run() -> Result<String, String> {
                 return Err(format!("list-level-backups needs a world\n{USAGE}"));
             }
             let paths = data_paths(game_dir(game)?, &world_name)?;
-            let backups = level_backup::list(&paths.backups_root, &paths.world_name())
+            let backups = level_backup::list(paths.backups_root(), paths.world_name())
                 .map_err(|err| err.to_string())?;
             serde_json::to_string_pretty(&serde_json::json!({ "backups": backups }))
                 .map_err(|err| err.to_string())
@@ -285,8 +285,7 @@ fn run() -> Result<String, String> {
                     let resolved =
                         WorldPaths::for_world(&game_dir, name).map_err(|err| err.to_string())?;
                     Some(DataPaths::for_world(
-                        &game_dir,
-                        &resolved.world_dir,
+                        &resolved,
                         &paths.data_dir,
                         config.backups,
                     ))
@@ -415,15 +414,14 @@ fn data_paths(game_dir: PathBuf, world_name: &str) -> Result<DataPaths, String> 
     let paths = AppPaths::resolve().map_err(|err| err.to_string())?;
     let config = mine_utils_core::load_config(&paths.config_file()).unwrap_or_default();
     Ok(DataPaths::for_world(
-        &game_dir,
-        &resolved.world_dir,
+        &resolved,
         &paths.data_dir,
         config.backups,
     ))
 }
 
 fn world_format_name(paths: &DataPaths) -> Option<String> {
-    let bytes = std::fs::read(&paths.level_dat_path).ok()?;
+    let bytes = std::fs::read(paths.level_dat_path()).ok()?;
     let view = mine_utils_core::level_dat::parse(&bytes).ok()?;
     mine_utils_core::data_format_for_version(&view.version_name).map(|format| format.label())
 }

@@ -297,9 +297,12 @@ fn mask_datapack_lists(value: &mut Value) -> Result<(), LevelDatError> {
 /// counter, so a crashed write plus pid reuse can never wedge a later write:
 /// a leftover temp never collides with a fresh name, and `create_new`
 /// collisions are retried with a fresh stamp.
-pub fn write_level_dat(world_dir: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+pub fn write_level_dat(target: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let world_dir = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     let mut last_err: Option<std::io::Error> = None;
-    let target = world_dir.join("level.dat");
     for _ in 0..64 {
         let tmp = unique_tmp(world_dir);
         let written = (|| -> std::io::Result<()> {
@@ -310,7 +313,7 @@ pub fn write_level_dat(world_dir: &Path, bytes: &[u8]) -> Result<(), std::io::Er
             file.write_all(bytes)?;
             file.sync_all()?;
             drop(file);
-            std::fs::rename(&tmp, &target)?;
+            std::fs::rename(&tmp, target)?;
             Ok(())
         })();
         match written {
@@ -490,6 +493,15 @@ mod tests {
     }
 
     #[test]
+    fn write_uses_the_supplied_target_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("chosen.dat");
+        write_level_dat(&target, b"chosen bytes").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"chosen bytes");
+        assert!(!dir.path().join("level.dat").exists());
+    }
+
+    #[test]
     fn write_is_atomic_and_leaves_old_temp_files_alone() {
         let dir = tempfile::tempdir().unwrap();
         let world = dir.path().join("world");
@@ -502,14 +514,14 @@ mod tests {
         .unwrap();
         std::fs::write(world.join("level.dat_old"), b"old stays").unwrap();
         let first = fixture_lists(&["vanilla"], &[]);
-        write_level_dat(&world, &first).unwrap();
+        write_level_dat(&world.join("level.dat"), &first).unwrap();
         assert_eq!(std::fs::read(world.join("level.dat")).unwrap(), first);
         assert_eq!(
             std::fs::read(world.join("level.dat_old")).unwrap(),
             b"old stays"
         );
         let second = fixture_lists(&["vanilla", "file/a.zip"], &["x"]);
-        write_level_dat(&world, &second).unwrap();
+        write_level_dat(&world.join("level.dat"), &second).unwrap();
         assert_eq!(std::fs::read(world.join("level.dat")).unwrap(), second);
         assert_eq!(
             std::fs::read(world.join("level.dat_old")).unwrap(),

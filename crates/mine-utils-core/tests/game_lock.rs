@@ -657,7 +657,7 @@ fn a_guard_failure_after_the_backup_keeps_the_old_bytes_and_the_backup() {
     let game_dir = game_dir_with_world(dir.path());
     let paths = stack_paths(&game_dir, &dir.path().join("data"));
     let original = b"resourcePacks:[\"vanilla\"]\n";
-    std::fs::write(&paths.options_path, original).unwrap();
+    std::fs::write(paths.options_path(), original).unwrap();
 
     // First check passes; the re-check after the backup fails.
     let guard = ScriptedGuard::failing_at(2);
@@ -666,14 +666,14 @@ fn a_guard_failure_after_the_backup_keeps_the_old_bytes_and_the_backup() {
     assert_eq!(err.code(), "game_running");
     assert_eq!(guard.calls(), 2, "the post-backup guard ran");
     assert_eq!(
-        std::fs::read(&paths.options_path).unwrap(),
+        std::fs::read(paths.options_path()).unwrap(),
         original,
         "the old bytes survive a guard failure before the replace"
     );
-    let backups = backup::list(&paths.backups_root).unwrap();
+    let backups = backup::list(paths.backups_root()).unwrap();
     assert_eq!(backups.len(), 1, "the previous bytes became a backup");
     assert_eq!(
-        std::fs::read(paths.backups_root.join(&backups[0].file_name)).unwrap(),
+        std::fs::read(paths.backups_root().join(&backups[0].file_name)).unwrap(),
         original
     );
 }
@@ -684,7 +684,7 @@ fn a_guard_failure_before_the_trash_cleans_references_but_keeps_the_pack() {
     let game_dir = game_dir_with_world(dir.path());
     let paths = stack_paths(&game_dir, &dir.path().join("data"));
     let original = b"resourcePacks:[\"vanilla\",\"file/Gone.zip\"]\n";
-    std::fs::write(&paths.options_path, original).unwrap();
+    std::fs::write(paths.options_path(), original).unwrap();
     let pack = game_dir.join("resourcepacks/Gone.zip");
     std::fs::write(&pack, b"zip").unwrap();
 
@@ -700,14 +700,14 @@ fn a_guard_failure_before_the_trash_cleans_references_but_keeps_the_pack() {
     assert_eq!(guard.calls(), 2, "the pre-trash guard ran");
     assert!(pack.is_file(), "the pack is untouched");
     assert!(trash.calls().is_empty(), "nothing was trashed");
-    let text = std::fs::read_to_string(&paths.options_path).unwrap();
+    let text = std::fs::read_to_string(paths.options_path()).unwrap();
     assert!(
         !text.contains("file/Gone.zip"),
         "the references were cleaned before the final check: {text}"
     );
     assert!(text.contains("vanilla"));
     assert_eq!(
-        backup::list(&paths.backups_root).unwrap().len(),
+        backup::list(paths.backups_root()).unwrap().len(),
         1,
         "the cleanup write left a backup"
     );
@@ -722,7 +722,7 @@ fn a_held_lock_blocks_set_enabled_and_leaves_options_and_backups() {
     let game_dir = game_dir_with_world(dir.path());
     let paths = stack_paths(&game_dir, &dir.path().join("data"));
     let original = b"resourcePacks:[\"vanilla\"]\n";
-    std::fs::write(&paths.options_path, original).unwrap();
+    std::fs::write(paths.options_path(), original).unwrap();
     let lock_path = game_dir.join("saves/world/session.lock");
     std::fs::write(&lock_path, b"\x00").unwrap();
 
@@ -734,8 +734,8 @@ fn a_held_lock_blocks_set_enabled_and_leaves_options_and_backups() {
 
     assert!(running.is_some(), "the helper really holds the lock");
     assert_eq!(err.code(), "game_running");
-    assert_eq!(std::fs::read(&paths.options_path).unwrap(), original);
-    assert!(backup::list(&paths.backups_root).unwrap().is_empty());
+    assert_eq!(std::fs::read(paths.options_path()).unwrap(), original);
+    assert!(backup::list(paths.backups_root()).unwrap().is_empty());
 }
 
 #[test]
@@ -747,11 +747,11 @@ fn a_held_lock_blocks_restore_and_leaves_options_and_backups() {
     let game_dir = game_dir_with_world(dir.path());
     let paths = stack_paths(&game_dir, &dir.path().join("data"));
     let current = b"resourcePacks:[\"current\"]\n";
-    std::fs::write(&paths.options_path, current).unwrap();
+    std::fs::write(paths.options_path(), current).unwrap();
     let created = backup::create(
-        &paths.backups_root,
+        paths.backups_root(),
         b"resourcePacks:[\"old\"]\n",
-        &paths.backups,
+        paths.backups(),
     )
     .unwrap()
     .created
@@ -767,9 +767,9 @@ fn a_held_lock_blocks_restore_and_leaves_options_and_backups() {
 
     assert!(running.is_some());
     assert_eq!(err.code(), "game_running");
-    assert_eq!(std::fs::read(&paths.options_path).unwrap(), current);
+    assert_eq!(std::fs::read(paths.options_path()).unwrap(), current);
     assert_eq!(
-        backup::list(&paths.backups_root).unwrap().len(),
+        backup::list(paths.backups_root()).unwrap().len(),
         1,
         "no pre-restore backup was written"
     );
@@ -784,7 +784,7 @@ fn a_held_lock_blocks_the_guarded_delete() {
     let game_dir = game_dir_with_world(dir.path());
     let paths = stack_paths(&game_dir, &dir.path().join("data"));
     let original = b"resourcePacks:[\"vanilla\",\"file/Gone.zip\"]\n";
-    std::fs::write(&paths.options_path, original).unwrap();
+    std::fs::write(paths.options_path(), original).unwrap();
     let pack = game_dir.join("resourcepacks/Gone.zip");
     std::fs::write(&pack, b"zip").unwrap();
     let lock_path = game_dir.join("saves/world/session.lock");
@@ -800,6 +800,6 @@ fn a_held_lock_blocks_the_guarded_delete() {
     assert!(running.is_some());
     assert_eq!(err.code(), "game_running");
     assert!(pack.is_file(), "the pack is untouched");
-    assert_eq!(std::fs::read(&paths.options_path).unwrap(), original);
+    assert_eq!(std::fs::read(paths.options_path()).unwrap(), original);
     assert!(trash.calls().is_empty(), "nothing was trashed");
 }

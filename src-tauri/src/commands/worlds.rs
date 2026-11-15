@@ -37,7 +37,7 @@ pub async fn list_datapacks(
     let paths = state.world_data_paths(&world)?;
     let icons = packs.icons();
     tauri::async_runtime::spawn_blocking(move || {
-        let packs = data_stack::scan_datapacks(&paths.datapacks_dir, &icons)?;
+        let packs = data_stack::scan_datapacks(paths.datapacks_dir(), &icons)?;
         let stack = data_stack::load(&paths)?;
         Ok(DatapackListing { packs, stack })
     })
@@ -67,7 +67,7 @@ pub async fn import_datapack(
     let paths = state.world_data_paths(&world)?;
     let icons = packs.icons();
     let hashes = packs.hashes();
-    let guard = stack.lock_for(&paths.game_dir);
+    let guard = stack.lock_for(paths.game_dir());
     tauri::async_runtime::spawn_blocking(move || {
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         data_stack::import_datapack(
@@ -94,7 +94,7 @@ pub async fn set_datapack_enabled(
 ) -> Result<DataStack, AppError> {
     state.note_ipc();
     let paths = state.world_data_paths(&world)?;
-    let guard = stack.lock_for(&paths.game_dir);
+    let guard = stack.lock_for(paths.game_dir());
     tauri::async_runtime::spawn_blocking(move || {
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         data_stack::set_enabled(&paths, &filename, enabled)
@@ -116,7 +116,7 @@ pub async fn reorder_datapacks(
 ) -> Result<DataStack, AppError> {
     state.note_ipc();
     let paths = state.world_data_paths(&world)?;
-    let guard = stack.lock_for(&paths.game_dir);
+    let guard = stack.lock_for(paths.game_dir());
     tauri::async_runtime::spawn_blocking(move || {
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         data_stack::reorder_stack(&paths, &order, &expected)
@@ -136,7 +136,7 @@ pub async fn delete_datapack(
 ) -> Result<DatapackDeleteOutcome, AppError> {
     state.note_ipc();
     let paths = state.world_data_paths(&world)?;
-    let guard = stack.lock_for(&paths.game_dir);
+    let guard = stack.lock_for(paths.game_dir());
     tauri::async_runtime::spawn_blocking(move || {
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         let outcome = data_stack::delete_datapack_safely(&paths, Path::new(&path), &SystemTrash)?;
@@ -166,7 +166,7 @@ pub async fn list_level_backups(
     state.note_ipc();
     let paths = state.world_data_paths(&world)?;
     tauri::async_runtime::spawn_blocking(move || {
-        level_backup::list(&paths.backups_root, &paths.world_name())
+        level_backup::list(paths.backups_root(), paths.world_name())
     })
     .await
     .map_err(join_error)?
@@ -198,7 +198,7 @@ pub async fn remove_datapack_reference(
 ) -> Result<DataStack, AppError> {
     state.note_ipc();
     let paths = state.world_data_paths(&world)?;
-    let guard = stack.lock_for(&paths.game_dir);
+    let guard = stack.lock_for(paths.game_dir());
     tauri::async_runtime::spawn_blocking(move || {
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         data_stack::remove_references(&paths, &filename)?;
@@ -218,7 +218,7 @@ pub async fn restore_level_backup(
 ) -> Result<DataStack, AppError> {
     state.note_ipc();
     let paths = state.world_data_paths(&world)?;
-    let guard = stack.lock_for(&paths.game_dir);
+    let guard = stack.lock_for(paths.game_dir());
     tauri::async_runtime::spawn_blocking(move || {
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         data_stack::restore_backup(&paths, &backup)

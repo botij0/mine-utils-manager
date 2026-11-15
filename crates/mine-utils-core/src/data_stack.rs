@@ -98,39 +98,66 @@ impl DataStack {
 }
 
 /// Where a world's datapack stack lives and which backup policy applies.
+///
+/// ```compile_fail
+/// use mine_utils_core::DataPaths;
+/// let paths = DataPaths {
+///     game_dir: "/game".into(),
+///     world_dir: "/game/saves/a".into(),
+///     level_dat_path: "/other/level.dat".into(),
+///     datapacks_dir: "/game/saves/a/datapacks".into(),
+///     backups_root: "/backups".into(),
+///     backups: Default::default(),
+///     world_name: "a".into(),
+/// };
+/// ```
 #[derive(Debug, Clone)]
 pub struct DataPaths {
-    pub game_dir: PathBuf,
-    pub world_dir: PathBuf,
-    pub level_dat_path: PathBuf,
-    pub datapacks_dir: PathBuf,
-    pub backups_root: PathBuf,
-    pub backups: crate::config::BackupsConfig,
+    game_dir: PathBuf,
+    world_dir: PathBuf,
+    level_dat_path: PathBuf,
+    datapacks_dir: PathBuf,
+    backups_root: PathBuf,
+    backups: crate::config::BackupsConfig,
+    world_name: String,
 }
 
 impl DataPaths {
     pub fn for_world(
-        game_dir: &Path,
-        world_dir: &Path,
+        world: &crate::world::WorldPaths,
         data_dir: &Path,
         backups: crate::config::BackupsConfig,
     ) -> DataPaths {
         DataPaths {
-            game_dir: game_dir.to_path_buf(),
-            world_dir: world_dir.to_path_buf(),
-            level_dat_path: world_dir.join("level.dat"),
-            datapacks_dir: world_dir.join("datapacks"),
-            backups_root: level_backup::root_for(data_dir, game_dir),
+            game_dir: world.game_dir().to_path_buf(),
+            world_dir: world.world_dir().to_path_buf(),
+            level_dat_path: world.level_dat_path(),
+            datapacks_dir: world.world_dir().join("datapacks"),
+            backups_root: level_backup::root_for(data_dir, world.game_dir()),
             backups,
+            world_name: world.name().to_string(),
         }
     }
-
-    pub fn world_name(&self) -> String {
-        self.world_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("world")
-            .to_string()
+    pub fn game_dir(&self) -> &Path {
+        &self.game_dir
+    }
+    pub fn world_dir(&self) -> &Path {
+        &self.world_dir
+    }
+    pub fn level_dat_path(&self) -> &Path {
+        &self.level_dat_path
+    }
+    pub fn datapacks_dir(&self) -> &Path {
+        &self.datapacks_dir
+    }
+    pub fn backups_root(&self) -> &Path {
+        &self.backups_root
+    }
+    pub fn backups(&self) -> &crate::config::BackupsConfig {
+        &self.backups
+    }
+    pub fn world_name(&self) -> &str {
+        &self.world_name
     }
 }
 
@@ -249,7 +276,10 @@ fn writable(game_dir: &Path, world_dir: &Path, guard: &dyn WriteGuard) -> Result
 /// of the world. Missing targets are fine; only links are refused. Install
 /// prepare calls it too, so the refusal lands before any download.
 pub(crate) fn reject_link_targets(world_dir: &Path) -> Result<(), AppError> {
-    for target in [world_dir.join("level.dat"), world_dir.join("datapacks")] {
+    for target in [
+        crate::world::level_dat_in(world_dir),
+        world_dir.join("datapacks"),
+    ] {
         if let Ok(meta) = std::fs::symlink_metadata(&target) {
             if meta.file_type().is_symlink() {
                 return Err(crate::error::AppError::World {
@@ -264,7 +294,7 @@ pub(crate) fn reject_link_targets(world_dir: &Path) -> Result<(), AppError> {
 /// Read the stack. Reads never block, even while the game runs.
 pub fn load(paths: &DataPaths) -> Result<DataStack, AppError> {
     reject_link_targets(&paths.world_dir)?;
-    let bytes = std::fs::read(&paths.level_dat_path)?;
+    let bytes = std::fs::read(paths.level_dat_path())?;
     let view = level_dat::parse(&bytes)?;
     Ok(stack_of(&view, paths))
 }
@@ -344,7 +374,7 @@ pub fn remove_references(paths: &DataPaths, filename: &str) -> Result<bool, AppE
             &paths.datapacks_dir,
         )?;
     }
-    if !paths.level_dat_path.exists() {
+    if !paths.level_dat_path().exists() {
         return Ok(false);
     }
     let change = stack_core::Change::Remove {
@@ -370,8 +400,8 @@ pub fn restore_backup_with_guard(
     reject_link_targets(&paths.world_dir)?;
     level_backup::restore_guarded(
         &paths.backups_root,
-        &paths.world_name(),
-        &paths.level_dat_path,
+        paths.world_name(),
+        paths.level_dat_path(),
         file_name,
         &paths.backups,
         || writable(&paths.game_dir, &paths.world_dir, guard),
@@ -422,7 +452,7 @@ pub fn delete_datapack_safely_with_guard(
         })?;
     validate_filename(&filename).map_err(AppError::from)?;
     let mut after_trash = paths.clone();
-    if paths.level_dat_path.exists() {
+    if paths.level_dat_path().exists() {
         let disable = stack_core::Change::Toggle {
             filename: filename.clone(),
             enabled: false,
@@ -777,7 +807,7 @@ impl stack_core::StackFile for DataFile<'_> {
     }
 
     fn read(&self) -> Result<(Vec<u8>, stack_core::Lists), AppError> {
-        let previous = std::fs::read(&self.paths.level_dat_path)?;
+        let previous = std::fs::read(self.paths.level_dat_path())?;
         let view = level_dat::parse(&previous)?;
         let lists = stack_core::Lists {
             primary: view.enabled,
@@ -799,14 +829,14 @@ impl stack_core::StackFile for DataFile<'_> {
     }
 
     fn write(&self, rendered: Vec<u8>) -> Result<(), AppError> {
-        level_dat::write_level_dat(&self.paths.world_dir, &rendered)?;
+        level_dat::write_level_dat(self.paths.level_dat_path(), &rendered)?;
         Ok(())
     }
 
     fn backup(&self, previous: &[u8]) -> Result<LevelBackupOutcome, AppError> {
         level_backup::create(
             &self.paths.backups_root,
-            &self.paths.world_name(),
+            self.paths.world_name(),
             previous,
             &self.paths.backups,
         )
@@ -820,7 +850,7 @@ impl stack_core::StackFile for DataFile<'_> {
     }
 
     fn unchanged(&self, previous: &[u8]) -> Result<bool, AppError> {
-        Ok(std::fs::read(&self.paths.level_dat_path).ok().as_deref() == Some(previous))
+        Ok(std::fs::read(self.paths.level_dat_path()).ok().as_deref() == Some(previous))
     }
 
     fn reject(&self, err: stack_core::EntryError) -> AppError {

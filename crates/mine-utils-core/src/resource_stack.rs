@@ -378,13 +378,26 @@ impl ResourceStack {
 /// Where a stack lives and which backup policy applies to its writes.
 #[derive(Debug, Clone)]
 pub struct StackPaths {
-    pub game_dir: PathBuf,
-    pub options_path: PathBuf,
-    pub backups_root: PathBuf,
-    pub backups: BackupsConfig,
+    game_dir: PathBuf,
+    options_path: PathBuf,
+    backups_root: PathBuf,
+    backups: BackupsConfig,
 }
 
 impl StackPaths {
+    pub fn game_dir(&self) -> &Path {
+        &self.game_dir
+    }
+    pub fn options_path(&self) -> &Path {
+        &self.options_path
+    }
+    pub fn backups_root(&self) -> &Path {
+        &self.backups_root
+    }
+    pub fn backups(&self) -> &BackupsConfig {
+        &self.backups
+    }
+
     pub fn for_game_dir(game_dir: &Path, data_dir: &Path, backups: BackupsConfig) -> StackPaths {
         StackPaths {
             game_dir: game_dir.to_path_buf(),
