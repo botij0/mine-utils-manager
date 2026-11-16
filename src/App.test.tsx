@@ -929,6 +929,28 @@ describe('App', () => {
     expect(screen.getByText('Second result')).toBeInTheDocument();
   });
 
+  it('cancels a browser mock install from the sheet and keeps it uninstalled', async () => {
+    const { mockClient, resetMockPacks, resetMockStack } = await import('./lib/ipc.mock');
+    resetMockPacks();
+    resetMockStack();
+    const user = userEvent.setup();
+    const client = await shellClient();
+    client.installModrinthPack = mockClient.installModrinthPack;
+    client.cancelModrinthInstall = mockClient.cancelModrinthInstall;
+    render(<App client={client} />);
+    await user.click(await screen.findByRole('button', { name: 'Discover' }));
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
+    await user.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
+    await user.click(await screen.findByRole('button', { name: 'Install…' }));
+    await user.click(await screen.findByRole('button', { name: 'Install' }));
+    const sheet = screen.getByRole('dialog', { name: 'Install Fresh Animations' });
+    expect(within(sheet).getByRole('button', { name: 'Installing…' })).toBeDisabled();
+    await user.click(within(sheet).getByRole('button', { name: 'Cancel' }));
+    expect(await within(sheet).findByText('Install cancelled.')).toBeInTheDocument();
+    expect(within(sheet).queryByText(/Installed .* and enabled/)).not.toBeInTheDocument();
+    expect((await mockClient.getResourceStack()).entries.map((entry) => entry.value)).not.toContain('file/fresh-animations.zip');
+  });
+
   it('refreshes Packs after a pending install without losing its filter', async () => {
     const user = userEvent.setup();
     const client = await shellClient();
