@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import {
   DndContext,
   KeyboardSensor,
@@ -80,26 +80,39 @@ export default function ActiveStack({
   const blocked = busy || running !== null || guardUnknown;
 
   const indexOfId = (id: UniqueIdentifier) => ids.indexOf(String(id));
+  const draggedLabel = useRef('');
   const labelOf = (id: UniqueIdentifier) => {
     const entry = uiEntries[indexOfId(id)];
+    if (!entry) return draggedLabel.current;
     return entry.kind === 'file'
       ? (byFilename.get(entry.filename)?.name ?? entry.filename)
       : entry.value;
   };
+  const inStack = (id: UniqueIdentifier) => indexOfId(id) >= 0;
   const positionOf = (id: UniqueIdentifier) =>
     `position ${indexOfId(id) + 1} of ${uiEntries.length}`;
+  const gone = (id: UniqueIdentifier) => `${labelOf(id)} is no longer in the stack.`;
   const announcements: Announcements = {
-    onDragStart: ({ active }) => `Picked up ${labelOf(active.id)}, ${positionOf(active.id)}.`,
-    onDragOver: ({ active, over }) =>
-      over
+    onDragStart: ({ active }) => {
+      draggedLabel.current = labelOf(active.id);
+      return `Picked up ${labelOf(active.id)}, ${positionOf(active.id)}.`;
+    },
+    onDragOver: ({ active, over }) => {
+      if (!inStack(active.id)) return gone(active.id);
+      return over && inStack(over.id)
         ? `${labelOf(active.id)} is over ${positionOf(over.id)}.`
-        : `${labelOf(active.id)} is not over a position.`,
-    onDragEnd: ({ active, over }) =>
-      over
+        : `${labelOf(active.id)} is not over a position.`;
+    },
+    onDragEnd: ({ active, over }) => {
+      if (!inStack(active.id)) return `Dropped. ${gone(active.id)}`;
+      return over && inStack(over.id)
         ? `Dropped ${labelOf(active.id)} at ${positionOf(over.id)}.`
-        : `Dropped ${labelOf(active.id)} outside the stack. Its position did not change.`,
+        : `Dropped ${labelOf(active.id)} outside the stack. Its position did not change.`;
+    },
     onDragCancel: ({ active }) =>
-      `Cancelled. ${labelOf(active.id)} stays at ${positionOf(active.id)}.`,
+      inStack(active.id)
+        ? `Cancelled. ${labelOf(active.id)} stays at ${positionOf(active.id)}.`
+        : `Cancelled. ${gone(active.id)}`,
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
