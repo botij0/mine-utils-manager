@@ -26,6 +26,7 @@ interface InstallSheetProps {
   error: IpcError | null;
   onClose: () => void;
   onInstall: () => void;
+  onCancel: () => void;
 }
 
 function resultText(result: ModrinthInstallOutcome): string {
@@ -63,6 +64,7 @@ export default function InstallSheet({
   error,
   onClose,
   onInstall,
+  onCancel,
 }: InstallSheetProps) {
   if (!open) return null;
   const installDisabled =
@@ -115,6 +117,7 @@ export default function InstallSheet({
         </StatusNote>
       ) : null}
       {blockedReason ? <StatusNote role="status">{blockedReason}</StatusNote> : null}
+      {busy ? <StatusNote role="status">Downloading. Cancel is available until installation starts. Leaving this tab keeps the install running; return here for its result.</StatusNote> : null}
       {error ? (
         <p className="error" role="alert">
           {error.message}
@@ -125,7 +128,7 @@ export default function InstallSheet({
         <StatusNote role="status">Warning: {result.provenance_warning}</StatusNote>
       ) : null}
       <div className="pack-confirm-actions">
-        <button type="button" className="button" onClick={onClose} disabled={busy}>
+        <button type="button" className="button" onClick={busy ? onCancel : onClose}>
           {result ? 'Close' : 'Cancel'}
         </button>
         {result ? null : (

@@ -76,6 +76,7 @@ const sheetProps = {
   error: null,
   onClose: () => {},
   onInstall: () => {},
+  onCancel: () => {},
 };
 
 describe('discover dialogs', () => {
@@ -204,12 +205,15 @@ describe('discover dialogs', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the busy install sheet open on Escape and disables Cancel', async () => {
+  it('keeps the busy install sheet open on Escape and offers Cancel', async () => {
     const onClose = vi.fn();
-    render(<InstallSheet {...sheetProps} busy onClose={onClose} />);
+    const onCancel = vi.fn();
+    render(<InstallSheet {...sheetProps} busy onClose={onClose} onCancel={onCancel} />);
     await userEvent.setup().keyboard('{Escape}');
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('does not refresh after a duplicate outcome', async () => {

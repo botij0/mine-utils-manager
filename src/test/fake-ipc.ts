@@ -325,6 +325,7 @@ export function makeFakeClient(
     async modrinthTargets(): Promise<ModrinthTargets> {
       return modrinthTargets();
     },
+    async cancelModrinthInstall() { return false; },
     async installModrinthPack(args: ModrinthInstallArgs): Promise<ModrinthInstallOutcome> {
       assertDownloadHash(args.filename);
       if (args.kind === 'datapack') {

@@ -127,6 +127,22 @@ function demoVersion(hit: ModrinthSearchHit): ModrinthVersion {
   };
 }
 
+const pendingInstalls = new Map<string, () => void>();
+
+function waitForInstall(installId: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingInstalls.delete(installId);
+      resolve();
+    }, 1000);
+    pendingInstalls.set(installId, () => {
+      clearTimeout(timer);
+      pendingInstalls.delete(installId);
+      reject(new IpcError('download_cancelled', 'Install cancelled.'));
+    });
+  });
+}
+
 function delay(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, LATENCY_MS));
 }
@@ -631,8 +647,14 @@ export const mockClient: IpcClient = {
     await delay();
     return modrinthTargets(world ? '1.21.1' : null);
   },
+  async cancelModrinthInstall(installId: string) {
+    const cancel = pendingInstalls.get(installId);
+    if (!cancel) return false;
+    cancel();
+    return true;
+  },
   async installModrinthPack(args: ModrinthInstallArgs) {
-    await delay();
+    await waitForInstall(args.installId ?? crypto.randomUUID());
     assertActiveGameDir();
     if (args.kind === 'datapack') {
       if (!args.world) {
@@ -647,6 +669,9 @@ export const mockClient: IpcClient = {
     }
     const lower = args.filename.toLowerCase();
     assertDownloadHash(args.filename);
+    if (lower.includes('timeout')) {
+      throw new IpcError('download_timeout', 'Download exceeded its total deadline. Try again.');
+    }
     if (lower.includes('offline')) {
       throw new IpcError('modrinth_offline', 'Modrinth is unreachable (simulated offline); check the network');
     }

@@ -80,6 +80,7 @@ export interface DiscoverClient {
   getModrinthProject(projectId: string): Promise<ModrinthProject>;
   listModrinthVersions(projectId: string): Promise<ModrinthVersion[]>;
   modrinthTargets(world?: string | null): Promise<ModrinthTargets>;
+  cancelModrinthInstall(installId: string): Promise<boolean>;
   installModrinthPack(args: ModrinthInstallArgs): Promise<ModrinthInstallOutcome>;
 }
 
@@ -171,6 +172,8 @@ export function outcomeWithIconUrl(outcome: WireImportOutcome): ImportOutcome {
     : outcome;
 }
 
+const installRegistrations = new Map<string, Promise<void>>();
+
 const tauriClient: IpcClient = {
   listGameDirs: () => call<GameDirEntry[]>('list_game_dirs'),
   addGameDir: (path) => call<GameDirState>('add_game_dir', { path }),
@@ -251,23 +254,38 @@ const tauriClient: IpcClient = {
     call<ModrinthVersion[]>('list_modrinth_versions', { projectId }),
   modrinthTargets: (world) =>
     call<ModrinthTargets>('modrinth_targets', { world: world ?? null }),
+  cancelModrinthInstall: async (installId) => {
+    const registration = installRegistrations.get(installId);
+    if (!registration) return false;
+    await registration;
+    return call<boolean>('cancel_modrinth_install', { installId });
+  },
   installModrinthPack: async (args) => {
-    const outcome = await call<ModrinthInstallOutcome>('install_modrinth_pack', {
-      projectId: args.projectId,
-      versionId: args.versionId,
-      filename: args.filename,
-      kind: args.kind,
-      world: args.world ?? null,
-    });
-    // The resource outcome carries a server-side icon path; convert it to a
-    // URL exactly like a manual Packs import. The wire kind is `resourcepack`.
-    if (outcome.kind === 'resourcepack') {
-      return {
-        ...outcome,
-        outcome: outcomeWithIconUrl(outcome.outcome as WireImportOutcome),
-      };
+    const installId = args.installId ?? crypto.randomUUID();
+    const registration = call<void>('begin_modrinth_install', { installId });
+    installRegistrations.set(installId, registration);
+    try {
+      await registration;
+      const outcome = await call<ModrinthInstallOutcome>('install_modrinth_pack', {
+        installId,
+        projectId: args.projectId,
+        versionId: args.versionId,
+        filename: args.filename,
+        kind: args.kind,
+        world: args.world ?? null,
+      });
+      // The resource outcome carries a server-side icon path; convert it to a
+      // URL exactly like a manual Packs import. The wire kind is `resourcepack`.
+      if (outcome.kind === 'resourcepack') {
+        return {
+          ...outcome,
+          outcome: outcomeWithIconUrl(outcome.outcome as WireImportOutcome),
+        };
+      }
+      return outcome;
+    } finally {
+      installRegistrations.delete(installId);
     }
-    return outcome;
   },
 };
 
@@ -313,6 +331,7 @@ export const ipc: IpcClient = {
   getModrinthProject: (projectId) => pick().getModrinthProject(projectId),
   listModrinthVersions: (projectId) => pick().listModrinthVersions(projectId),
   modrinthTargets: (world) => pick().modrinthTargets(world),
+  cancelModrinthInstall: (installId) => pick().cancelModrinthInstall(installId),
   installModrinthPack: (args) => pick().installModrinthPack(args),
 };
 

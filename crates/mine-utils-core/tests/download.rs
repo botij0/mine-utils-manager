@@ -556,13 +556,27 @@ fn cancel_mid_stream_removes_the_temp() {
     }
     impl Transport for CancellingCdn {
         fn request(&self, _: &str) -> Result<RawResponse, ModrinthError> {
-            Ok(RawResponse { status: 200, headers: vec![], body: Box::new(CancellingReader(self.0.clone())) })
+            Ok(RawResponse {
+                status: 200,
+                headers: vec![],
+                body: Box::new(CancellingReader(self.0.clone())),
+            })
         }
     }
     let dir = tempfile::tempdir().unwrap();
     let control = InstallControl::default();
     let client = ModrinthClient::without_sleep(CancellingCdn(control.clone()));
-    let err = download_verified_controlled(&client, CDN_URL, dir.path(), "pack.zip", "unused", ZipRoot::Assets, MAX_BYTES, &control).unwrap_err();
+    let err = download_verified_controlled(
+        &client,
+        CDN_URL,
+        dir.path(),
+        "pack.zip",
+        "unused",
+        ZipRoot::Assets,
+        MAX_BYTES,
+        &control,
+    )
+    .unwrap_err();
     assert_eq!(err.code(), "download_cancelled");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
@@ -583,14 +597,62 @@ fn total_deadline_stops_a_trickle_and_cleans_the_temp() {
     }
     impl Transport for SlowCdn {
         fn request(&self, _: &str) -> Result<RawResponse, ModrinthError> {
-            Ok(RawResponse { status: 200, headers: vec![], body: Box::new(Trickle) })
+            Ok(RawResponse {
+                status: 200,
+                headers: vec![],
+                body: Box::new(Trickle),
+            })
         }
     }
     let dir = tempfile::tempdir().unwrap();
     let control = InstallControl::with_timeout(std::time::Duration::from_millis(40));
     let client = ModrinthClient::without_sleep(SlowCdn);
     let started = std::time::Instant::now();
-    let err = download_verified_controlled(&client, CDN_URL, dir.path(), "pack.zip", "unused", ZipRoot::Assets, MAX_BYTES, &control).unwrap_err();
+    let err = download_verified_controlled(
+        &client,
+        CDN_URL,
+        dir.path(),
+        "pack.zip",
+        "unused",
+        ZipRoot::Assets,
+        MAX_BYTES,
+        &control,
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "download_timeout");
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn total_deadline_does_not_wait_for_blocked_response_headers() {
+    use mine_utils_core::download::{download_verified_controlled, InstallControl};
+    struct BlockedCdn;
+    impl Transport for BlockedCdn {
+        fn request(&self, _: &str) -> Result<RawResponse, ModrinthError> {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            Ok(RawResponse {
+                status: 200,
+                headers: vec![],
+                body: Box::new(Cursor::new(Vec::new())),
+            })
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let control = InstallControl::with_timeout(std::time::Duration::from_millis(30));
+    let client = ModrinthClient::without_sleep(BlockedCdn);
+    let started = std::time::Instant::now();
+    let err = download_verified_controlled(
+        &client,
+        CDN_URL,
+        dir.path(),
+        "pack.zip",
+        "unused",
+        ZipRoot::Assets,
+        MAX_BYTES,
+        &control,
+    )
+    .unwrap_err();
     assert_eq!(err.code(), "download_timeout");
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);

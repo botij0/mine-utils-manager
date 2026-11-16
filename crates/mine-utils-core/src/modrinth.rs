@@ -29,7 +29,8 @@ pub const REQUEST_TIMEOUT_SECS: u64 = 15;
 /// Connect timeout for downloads; the total budget is much larger so a
 /// 500 MB pack can stream without a 15 s total timeout aborting it.
 pub const DOWNLOAD_CONNECT_TIMEOUT_SECS: u64 = 15;
-/// Total budget for one pack download.
+/// Total install preparation budget, enforced by `InstallControl`.
+/// The blocking transport timeout alone resets on each body read.
 pub const DOWNLOAD_TIMEOUT_SECS: u64 = 900;
 
 /// ` Fn(seconds) ` run before each retry. Production sleeps; tests pass a
@@ -716,14 +717,23 @@ pub struct ModrinthVersion {
 
 /// The client. One shared instance lives in Tauri state.
 pub struct ModrinthClient<T: Transport> {
-    transport: T,
+    transport: Arc<T>,
     sleep: SleepFn,
+}
+
+impl<T: Transport> Clone for ModrinthClient<T> {
+    fn clone(&self) -> Self {
+        Self {
+            transport: Arc::clone(&self.transport),
+            sleep: Arc::clone(&self.sleep),
+        }
+    }
 }
 
 impl<T: Transport> ModrinthClient<T> {
     pub fn new(transport: T) -> Self {
         ModrinthClient {
-            transport,
+            transport: Arc::new(transport),
             sleep: Arc::new(|secs| std::thread::sleep(std::time::Duration::from_secs(secs))),
         }
     }
@@ -731,7 +741,7 @@ impl<T: Transport> ModrinthClient<T> {
     /// No sleeping between retries. Tests use this and count attempts.
     pub fn without_sleep(transport: T) -> Self {
         ModrinthClient {
-            transport,
+            transport: Arc::new(transport),
             sleep: Arc::new(|_| {}),
         }
     }

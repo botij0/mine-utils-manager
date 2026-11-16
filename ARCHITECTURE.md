@@ -274,6 +274,10 @@ The install has two phases:
 1. **Prepare** validates the target, checks guards, fetches metadata, and downloads or reuses verified bytes. It holds no stack write lock during network work.
 2. **Finish** rechecks the source and target, rechecks the game guard for resource packs (a game started during the download refuses before anything is committed), commits the file, routes it through normal import behavior, and records provenance.
 
+Cancellation shares one install ID between the frontend and the Tauri registry. The core checks an `InstallControl` before consuming each chunk and after validation. A bounded channel separates blocking network reads from the caller that owns the temporary file, so a blocked read cannot delay caller cancellation or the total preparation deadline. The network worker owns no file and exits when its current transport operation returns or its next channel send detects the dropped receiver.
+
+The commit point is the atomic transition from downloading to committing at the start of Finish, under the game-directory write lock. Cancellation before that transition deletes the verified temp. Cancellation after it returns false and Finish completes without further cancellation checks. Unmounting Discover or changing game folders requests cancellation; switching tabs retains the mounted page and its visible outcome.
+
 Transport and validation rules include:
 
 - Only Discover initiates requests. Local pages do not share this code path.

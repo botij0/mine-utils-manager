@@ -109,6 +109,7 @@ export interface ModrinthState {
   detailError: IpcError | null;
   selectedVersionId: string | null;
   setSelectedVersionId: (id: string) => void;
+  cancelInstall: () => Promise<void>;
   installBusy: boolean;
   installResult: ModrinthInstallOutcome | null;
   installError: IpcError | null;
@@ -149,6 +150,7 @@ export function useModrinth(
   const [installBusy, setInstallBusy] = useState(false);
   const [installResult, setInstallResult] = useState<ModrinthInstallOutcome | null>(null);
   const [installError, setInstallError] = useState<IpcError | null>(null);
+  const installId = useRef<string | null>(null);
   const requestId = useRef(0);
   const selectToken = useRef(0);
   const mounted = useRef(true);
@@ -169,8 +171,10 @@ export function useModrinth(
     mounted.current = true;
     return () => {
       mounted.current = false;
+      selectToken.current += 1;
+      if (installId.current) void client.cancelModrinthInstall(installId.current).catch(() => {});
     };
-  }, []);
+  }, [client, gameDir]);
 
   const resetSearchResults = useCallback(() => {
     loadingMore.current = false;
@@ -400,7 +404,7 @@ export function useModrinth(
   }, []);
 
   const install = useCallback(async (): Promise<ModrinthInstallOutcome | null> => {
-    if (!selected) return null;
+    if (!selected || installId.current) return null;
     const version = versions.find((item) => item.id === selectedVersionId) ?? null;
     const file = version?.files.find((item) => item.primary) ?? version?.files[0] ?? null;
     if (!version || !file) {
@@ -408,10 +412,13 @@ export function useModrinth(
       return null;
     }
     const token = selectToken.current;
+    const id = crypto.randomUUID();
+    installId.current = id;
     setInstallBusy(true);
     setInstallError(null);
     try {
       const outcome = await client.installModrinthPack({
+        installId: id,
         projectId: selected.project_id,
         versionId: version.id,
         filename: file.filename,
@@ -425,9 +432,19 @@ export function useModrinth(
       if (mounted.current && selectToken.current === token) setInstallError(toAppError(err));
       return null;
     } finally {
+      installId.current = null;
       if (mounted.current) setInstallBusy(false);
     }
   }, [client, kind, selected, selectedVersionId, versions, world]);
+
+  const cancelInstall = useCallback(async () => {
+    if (!installId.current) return;
+    try {
+      await client.cancelModrinthInstall(installId.current);
+    } catch (err) {
+      if (mounted.current) setInstallError(toAppError(err));
+    }
+  }, [client]);
 
   const clearInstall = useCallback(() => {
     setInstallResult(null);
@@ -480,6 +497,7 @@ export function useModrinth(
     detailError,
     selectedVersionId,
     setSelectedVersionId: chooseVersion,
+    cancelInstall,
     installBusy,
     installResult,
     installError,

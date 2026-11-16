@@ -226,6 +226,7 @@ export default function DiscoverPage({
           error={discover.installError}
           onClose={closeInstall}
           onInstall={() => void onInstall()}
+          onCancel={() => void discover.cancelInstall()}
         />
       ) : discover.selected ? (
         <ProjectDetail

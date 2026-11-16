@@ -96,6 +96,8 @@ pub fn run() {
             commands::discover::list_modrinth_versions,
             commands::discover::modrinth_targets,
             commands::discover::install_modrinth_pack,
+            commands::discover::cancel_modrinth_install,
+            commands::discover::begin_modrinth_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

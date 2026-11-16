@@ -3,13 +3,16 @@
 //! `https://cdn.modrinth.com`, and every write goes through the existing
 //! pack/datapack import paths so duplicates, locks, and guards behave as one.
 
-use std::sync::Arc;
+use mine_utils_core::download::InstallControl;
+use mine_utils_core::install::prepare_modrinth_install_controlled;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use mine_utils_core::{
     finish_modrinth_install, installed_game_versions, parse_install_kind,
-    preferred_launcher_version, prepare_modrinth_install, world, AppError, CoreInstallOutcome,
-    DatapackImportOutcome, ImportOutcome, ModrinthClient, ModrinthError, ModrinthProject,
-    ModrinthVersion, ReqwestTransport, SearchHit, SearchQuery, SearchSort,
+    preferred_launcher_version, world, AppError, CoreInstallOutcome, DatapackImportOutcome,
+    ImportOutcome, ModrinthClient, ModrinthError, ModrinthProject, ModrinthVersion,
+    ReqwestTransport, SearchHit, SearchQuery, SearchSort,
 };
 use tauri::State;
 
@@ -22,12 +25,14 @@ use super::resource_stack::StackState;
 /// thread without rebuilding connection pools.
 pub struct ModrinthState {
     client: Arc<ModrinthClient<ReqwestTransport>>,
+    installs: Arc<Mutex<HashMap<String, RegisteredInstall>>>,
 }
 
 impl ModrinthState {
     pub fn new() -> Self {
         ModrinthState {
             client: Arc::new(ModrinthClient::new(ReqwestTransport::default())),
+            installs: Arc::default(),
         }
     }
 }
@@ -36,6 +41,61 @@ impl Default for ModrinthState {
     fn default() -> Self {
         ModrinthState::new()
     }
+}
+
+enum RegisteredInstall {
+    Ready(InstallControl),
+    Running(InstallControl),
+}
+
+impl RegisteredInstall {
+    fn control(&self) -> &InstallControl {
+        match self {
+            Self::Ready(control) | Self::Running(control) => control,
+        }
+    }
+}
+
+#[tauri::command]
+pub fn begin_modrinth_install(
+    mods: State<'_, ModrinthState>,
+    install_id: String,
+) -> Result<(), AppError> {
+    let mut installs = mods.installs.lock().unwrap_or_else(|err| err.into_inner());
+    if installs.contains_key(&install_id) {
+        return Err(ModrinthError::Parse {
+            reason: "install id is already active".to_string(),
+        }
+        .into());
+    }
+    installs.insert(
+        install_id,
+        RegisteredInstall::Ready(InstallControl::default()),
+    );
+    Ok(())
+}
+
+struct InstallRegistration {
+    id: String,
+    installs: Arc<Mutex<HashMap<String, RegisteredInstall>>>,
+}
+
+impl Drop for InstallRegistration {
+    fn drop(&mut self) {
+        self.installs
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&self.id);
+    }
+}
+
+#[tauri::command]
+pub fn cancel_modrinth_install(mods: State<'_, ModrinthState>, install_id: String) -> bool {
+    mods.installs
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(&install_id)
+        .is_some_and(|entry| entry.control().cancel())
 }
 
 fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
@@ -238,6 +298,7 @@ pub async fn install_modrinth_pack(
     packs: State<'_, PackState>,
     stack: State<'_, StackState>,
     mods: State<'_, ModrinthState>,
+    install_id: String,
     project_id: String,
     version_id: String,
     filename: String,
@@ -245,6 +306,26 @@ pub async fn install_modrinth_pack(
     world: Option<String>,
 ) -> Result<ModrinthInstallOutcome, AppError> {
     state.note_ipc();
+    let control = {
+        let mut installs = mods.installs.lock().unwrap_or_else(|err| err.into_inner());
+        match installs.get_mut(&install_id) {
+            Some(entry @ RegisteredInstall::Ready(_)) => {
+                let control = entry.control().clone();
+                *entry = RegisteredInstall::Running(control.clone());
+                control
+            }
+            _ => {
+                return Err(ModrinthError::Parse {
+                    reason: "install id is not ready".to_string(),
+                }
+                .into())
+            }
+        }
+    };
+    let registration = InstallRegistration {
+        id: install_id,
+        installs: Arc::clone(&mods.installs),
+    };
     // One snapshot: the game dir, stack paths, and backup policy are read
     // once, not three times across the install.
     let snapshot = state.snapshot()?;
@@ -259,7 +340,8 @@ pub async fn install_modrinth_pack(
     let hashes = packs.hashes();
     let client = Arc::clone(&mods.client);
     tauri::async_runtime::spawn_blocking(move || {
-        let prepared = prepare_modrinth_install(
+        let _registration = registration;
+        let prepared = prepare_modrinth_install_controlled(
             &client,
             &snapshot.game_dir,
             world.as_deref(),
@@ -267,6 +349,7 @@ pub async fn install_modrinth_pack(
             &version_id,
             &filename,
             &kind,
+            &control,
         )?;
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         finish_modrinth_install(

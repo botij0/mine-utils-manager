@@ -933,6 +933,7 @@ describe('App', () => {
     const { mockClient, resetMockPacks, resetMockStack } = await import('./lib/ipc.mock');
     resetMockPacks();
     resetMockStack();
+    await mockClient.setActiveGameDir('/home/demo/.minecraft');
     const user = userEvent.setup();
     const client = await shellClient();
     client.installModrinthPack = mockClient.installModrinthPack;
@@ -948,7 +949,7 @@ describe('App', () => {
     await user.click(within(sheet).getByRole('button', { name: 'Cancel' }));
     expect(await within(sheet).findByText('Install cancelled.')).toBeInTheDocument();
     expect(within(sheet).queryByText(/Installed .* and enabled/)).not.toBeInTheDocument();
-    expect((await mockClient.getResourceStack()).entries.map((entry) => entry.value)).not.toContain('file/fresh-animations.zip');
+    expect((await mockClient.getResourceStack()).entries.map((entry) => entry.value)).not.toContain('file/fresh-1.9.zip');
   });
 
   it('refreshes Packs after a pending install without losing its filter', async () => {

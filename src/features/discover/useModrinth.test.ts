@@ -130,6 +130,19 @@ describe('useModrinth', () => {
     }
   });
 
+  it('requests backend cancellation when unmounted during an install', async () => {
+    const client = makeFakeClient([]);
+    const cancel = vi.spyOn(client, 'cancelModrinthInstall').mockResolvedValue(true);
+    const install = vi.spyOn(client, 'installModrinthPack').mockReturnValue(new Promise(() => {}));
+    const { result, unmount } = renderHook(() => useModrinth(client));
+    await act(async () => { await result.current.select(freshHit()); });
+    act(() => { void result.current.install(); });
+    const id = install.mock.calls[0][0].installId;
+    expect(id).toEqual(expect.any(String));
+    unmount();
+    expect(cancel.mock.calls).toEqual([[id]]);
+  });
+
   it('drops an install outcome after selecting another project', async () => {
     const client = makeFakeClient([]);
     let release!: (outcome: ModrinthInstallOutcome) => void;

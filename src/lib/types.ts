@@ -337,6 +337,7 @@ export interface ModrinthProvenanceEntry {
 }
 
 export interface ModrinthInstallArgs {
+  installId?: string;
   projectId: string;
   versionId: string;
   filename: string;
