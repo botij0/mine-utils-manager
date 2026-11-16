@@ -83,7 +83,7 @@ describe('App', () => {
     render(<App client={client} />);
     expect(await screen.findByText(/Minecraft process detection is unavailable/)).toHaveTextContent('writes are allowed');
     const list = await screen.findByRole('list', { name: 'Stack order' });
-    expect(within(list).getByRole('button', { name: 'Remove' })).toBeEnabled();
+    expect(within(list).getByRole('button', { name: 'Remove Alpha.zip' })).toBeEnabled();
   });
 
   it('shows the startup warning and the shell', async () => {
