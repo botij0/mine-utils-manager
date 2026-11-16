@@ -71,6 +71,12 @@ pub fn discover_game_dirs(home: &Path) -> Vec<GameDir> {
     add_candidate(
         &mut found,
         &mut seen,
+        home.join(".var/app/com.mojang.Minecraft/.minecraft"),
+        DiscoverySource::Flatpak,
+    );
+    add_candidate(
+        &mut found,
+        &mut seen,
         home.join(".var/app/com.mojang.Minecraft/data/minecraft"),
         DiscoverySource::Flatpak,
     );
@@ -80,13 +86,26 @@ pub fn discover_game_dirs(home: &Path) -> Vec<GameDir> {
             DiscoverySource::PrismLauncher,
         ),
         (
+            home.join(".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances"),
+            DiscoverySource::PrismLauncher,
+        ),
+        (
             home.join(".local/share/multimc/instances"),
             DiscoverySource::MultiMc,
         ),
     ];
     for (instances, source) in launchers {
         for instance in instance_dirs(&instances) {
-            add_candidate(&mut found, &mut seen, instance.join(".minecraft"), source);
+            let minecraft = instance.join("minecraft");
+            let legacy = instance.join(".minecraft");
+            let path = if source == DiscoverySource::PrismLauncher
+                && (minecraft.exists() || !legacy.exists())
+            {
+                minecraft
+            } else {
+                legacy
+            };
+            add_candidate(&mut found, &mut seen, path, source);
         }
     }
     found
