@@ -111,8 +111,8 @@ pnpm wire:check
 env -u APPIMAGE cargo run --locked -p mine-utils-core --features wire-types --bin generate-wire-types -- --check
 ```
 
-CI runs the Cargo check and fails if `src/lib/generated/wire.ts` differs from
-Rust. Generation uses optional `ts-rs` derives in the core crate and needs no
+CI runs clippy with `--features wire-types` and the Cargo freshness check. It
+fails if `src/lib/generated/wire.ts` differs from Rust. Generation uses optional `ts-rs` derives in the core crate and needs no
 Tauri runtime or GTK libraries. JSON integer fields remain TypeScript numbers.
 
 `src/lib/types.ts` re-exports the generated types and the derived client types
@@ -125,9 +125,11 @@ Run the destructive acceptance probes on a clean working tree:
 pnpm wire:test
 ```
 
-The probes temporarily rename a Rust error code, regenerate, and require
-`pnpm typecheck` to fail. They also corrupt the generated file and require the
-freshness check to fail. A `finally` block restores both files.
+The probes temporarily rename `game_running`, `no_active_game_dir`,
+`download_offline`, `stale_stack`, and `world_mismatch`, regenerate, and require
+`pnpm typecheck` to reject their unchanged consumers. `download_offline` tests a
+comparison against a code the mock never constructs. The probes also corrupt
+the generated file and require the freshness check to fail. A `finally` block restores both files.
 
 ## Core probe CLI
 

@@ -9,6 +9,9 @@ macro_rules! error_codes {
         }
 
         impl ErrorCode {
+            #[cfg(feature = "wire-types")]
+            pub const ALL: &'static [Self] = &[$(Self::$variant),*];
+
             pub const fn as_str(self) -> &'static str {
                 match self { $(Self::$variant => $code),* }
             }

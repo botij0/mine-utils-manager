@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 
-/// Where a game dir came from. The frontend mirrors these names exactly.
+/// Where a game dir came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]

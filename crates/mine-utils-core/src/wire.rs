@@ -81,11 +81,13 @@ pub enum ModrinthInstallOutcome {
     ResourcePack {
         outcome: ImportOutcome,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "wire-types", ts(optional))]
         provenance_warning: Option<String>,
     },
     Datapack {
         outcome: DatapackImportOutcome,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "wire-types", ts(optional))]
         provenance_warning: Option<String>,
     },
 }

@@ -50,7 +50,7 @@ export type ImportOutcome = { "status": "imported", pack: Pack, } | { "status": 
 export type LevelBackupInfo = { file_name: string, world: string, bytes: number, display: string, };
 export type ModrinthFile = { url: string, filename: string, size: number, primary: boolean, hashes: ModrinthHashes, };
 export type ModrinthHashes = { sha512: string, sha1: string, };
-export type ModrinthInstallOutcome = { "kind": "resourcepack", outcome: ImportOutcome, provenance_warning?: string | null, } | { "kind": "datapack", outcome: DatapackImportOutcome, provenance_warning?: string | null, };
+export type ModrinthInstallOutcome = { "kind": "resourcepack", outcome: ImportOutcome, provenance_warning?: string, } | { "kind": "datapack", outcome: DatapackImportOutcome, provenance_warning?: string, };
 export type ModrinthKind = "resourcepack" | "datapack";
 export type ModrinthProject = { id: string, slug: string, title: string, description: string, body: string, icon_url: string | null, downloads: number, follows: number, project_type: string | null, game_versions: Array<string>, versions: Array<string>, };
 export type ModrinthProvenanceEntry = { project_id: string, version_id: string, file_name: string, };
@@ -61,7 +61,7 @@ export type ModrinthTargets = { installed_versions: Array<string>, preferred_lau
 export type ModrinthVersion = { id: string, project_id: string, name: string, version_number: string, game_versions: Array<string>, loaders: Array<string>, files: Array<ModrinthFile>, };
 export type Pack = { id: string, name: string, path: string, location: PackLocation, kind: PackKind, description: string, meta: PackMeta, format: FormatVersion | null, format_range: FormatRange | null, game_label: string | null, icon: PackIcon | null, error: PackIssue | null, bytes_read: number, };
 export type PackIcon = { sha256: string, path: string, };
-export type PackIssue = { code: string, message: string, symlink_path?: string | null, };
+export type PackIssue = { code: string, message: string, symlink_path?: string, };
 export type PackKind = "resource" | "data" | "both" | "unknown";
 export type PackListing = { packs: Array<Pack>, count: number,
 /**
@@ -98,3 +98,5 @@ export type Theme = "system" | "light" | "dark";
 export type World = { dir_name: string, path: string, level_name: string, version: WorldVersion | null, icon: PackIcon | null, running: GameRunning | null, world_locked: GameRunning | null, stale_lock: boolean, detection_supported: boolean, issue: WorldIssue | null, };
 export type WorldIssue = { code: string, message: string, };
 export type WorldVersion = { name: string, data_format: FormatVersion | null, newest_known_version: string | null, };
+
+export const ERROR_CODES: readonly ErrorCode[] = ["backup","config","download_cancelled","download_exists","download_filename","download_hash_mismatch","download_host","download_io","download_not_zip","download_offline","download_status","download_timeout","download_too_large","download_wrong_root","game_running","invalid_game_dir","io","level_backup","level_dat","modrinth_body","modrinth_offline","modrinth_parse","modrinth_redirect","modrinth_status","modrinth_url","no_active_game_dir","options_txt","pack_broken_archive","pack_duplicate","pack_missing_meta","pack_name_collision","pack_non_utf8_name","pack_not_found","pack_outside_root","pack_symlink","pack_trash","pack_unknown_kind","provenance_corrupt","provenance_io","resource_stack","stale_stack","unknown_game_dir","world","world_mismatch"];

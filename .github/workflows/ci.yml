@@ -29,7 +29,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - run: cargo clippy -p mine-utils-core --all-targets -- -D warnings
+      - run: cargo clippy -p mine-utils-core --all-targets --features wire-types -- -D warnings
       # MINE_UTILS_REAL_OPTIONS stays unset so the real-file roundtrip test skips.
       # Core tests run here without the webkit deps; the Tauri crate's own tests
       # run in the tauri job, which already installs them.

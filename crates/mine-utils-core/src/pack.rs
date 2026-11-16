@@ -202,6 +202,7 @@ pub struct PackIssue {
     pub code: String,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "wire-types", ts(optional))]
     pub symlink_path: Option<PathBuf>,
 }
 

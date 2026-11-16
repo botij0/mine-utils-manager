@@ -75,6 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for declaration in declarations.types.values() {
         generated.push_str(declaration);
     }
+    generated.push_str(&format!(
+        "\nexport const ERROR_CODES: readonly ErrorCode[] = {};\n",
+        serde_json::to_string(error_code::ErrorCode::ALL)?
+    ));
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/lib/generated/wire.ts");
     if check {
         if std::fs::read_to_string(&path).ok().as_deref() != Some(&generated) {

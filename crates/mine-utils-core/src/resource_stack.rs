@@ -30,8 +30,7 @@ pub(crate) mod stack_core {
 
     use crate::error::AppError;
 
-    /// One `file/<filename>` entry. The wire tags each entry with `kind`, and
-    /// the frontend mirrors this shape in `src/lib/types.ts`.
+    /// One `file/<filename>` entry, tagged with `kind` on the wire.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(tag = "kind", rename_all = "snake_case")]
     #[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]

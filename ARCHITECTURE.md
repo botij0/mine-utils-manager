@@ -67,10 +67,13 @@ flowchart LR
 | `src/features/onboarding/` | First-run folder selection |
 | `src/lib/ipc.ts` | `IpcClient`, Tauri commands, runtime selection, and wire conversions |
 | `src/lib/ipc.mock.ts` | Offline browser implementation with synthetic data |
-| `src/lib/types.ts` | TypeScript counterparts of the Rust request and response shapes |
+| `src/lib/types.ts` | Re-export of the client types |
+| `src/lib/clientTypes.ts` | UI icon URL types derived from wire DTOs, closed client error codes, and client-only arguments |
+| `src/lib/generated/wire.ts` | Generated Rust wire DTOs, `ErrorCode`, and runtime error-code list |
 | `src-tauri/src/lib.rs` | Desktop setup, plugins, managed state, and command registration |
 | `src-tauri/src/commands/` | Tauri adapters for game folders, the game guard, packs, stacks, worlds, and Discover |
 | `crates/mine-utils-core/src/` | Filesystem, Minecraft formats, backups, locking, Modrinth, and install logic |
+| `crates/mine-utils-core/src/bin/generate-wire-types.rs` | Optional `ts-rs` generator and freshness check |
 | `crates/mine-utils-core/src/bin/mine-utils-probe.rs` | CLI access to selected core operations |
 | `assets/` | Project artwork |
 | `.github/workflows/` | CI and release automation |
@@ -182,6 +185,8 @@ The `mine-utils-core` crate does not depend on Tauri. This keeps filesystem and 
 | `install.rs` | Coordinate verified Modrinth downloads with import, enable, and provenance steps |
 | `provenance.rs` | Record the Modrinth project and version associated with installed content |
 | `error.rs` | Shared serializable application errors |
+| `error_code.rs` | Single Rust error-code list for serialization and TypeScript generation |
+| `wire.rs` | Shared request and response DTOs used by the Tauri shell and type generator |
 
 ## Resource pack data flow
 
@@ -314,7 +319,7 @@ Config commits write the new file before updating the in-memory `ConfigStore`. A
 
 Tauri commands accept frontend-friendly arguments, resolve the active paths, and delegate to `spawn_blocking`. Filesystem scans, NBT parsing, and blocking HTTP therefore do not occupy the WebView's UI thread.
 
-Errors cross IPC as structured `AppError` values. The frontend normalizes them to `IpcError` and uses stable codes for behavior such as:
+Errors cross IPC as structured `AppError` values. The frontend normalizes them to `IpcError`, whose `code` is the generated `ErrorCode` union plus `unknown`. Unrecognized transport codes become `unknown`, with the original string in `rawCode`. Consumer comparisons therefore fail typechecking when a Rust code is renamed. The frontend uses stable codes for behavior such as:
 
 - `game_running` to refresh the guard
 - `stale_stack` to reload changed stack state
@@ -330,7 +335,7 @@ UI request tokens handle stale asynchronous responses. Backend snapshots, path v
 | React and TypeScript | Vitest, jsdom, Testing Library | Formatting, hooks, IPC behavior, dialogs, pack and world actions, onboarding, and settings |
 | Rust core | Unit and integration tests | Minecraft format round trips, locking, backups, pack imports, downloads, and Modrinth installs |
 | Tauri crate | Rust tests and build checks | Desktop command and shell compilation |
-| CI | Separate frontend, Rust, and Tauri jobs | Lint, typecheck, tests, formatting, clippy, and a no-bundle Tauri build |
+| CI | Separate frontend, Rust, and Tauri jobs | Lint, typecheck, tests, formatting, clippy including `wire-types`, generated wire-type freshness, and a no-bundle Tauri build |
 | Release | Tag-driven Linux workflow | AppImage, RPM, checksums, and GitHub release assets |
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the exact commands and release process.

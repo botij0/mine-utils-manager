@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { mockClient } from './ipc.mock';
 import { IpcError } from './types';
+import { ERROR_CODES } from './generated/wire';
 import type * as Wire from './generated/wire';
 import type {
   BackupInfo,
@@ -101,9 +102,11 @@ export function isTauriRuntime(win: Window = window): boolean {
 }
 
 export function toAppError(err: unknown): IpcError {
+  if (err instanceof IpcError) return err;
   if (typeof err === 'object' && err !== null && 'code' in err && 'message' in err) {
     if (typeof err.code === 'string' && typeof err.message === 'string') {
-      return Object.assign(new IpcError('unknown', err.message), { code: err.code });
+      const code = ERROR_CODES.find((code) => code === err.code) ?? 'unknown';
+      return new IpcError(code, err.message, code === 'unknown' ? err.code : undefined);
     }
   }
   if (err instanceof Error) return new IpcError('unknown', err.message);

@@ -16,16 +16,20 @@ export type DataStackEntry = Wire.StackEntry;
 export type StackGuard = Pick<Wire.GameGuard, 'running' | 'stale_locks' | 'detection_supported'>;
 export type PackIssueCode = Wire.PackIssue['code'];
 
-// Transport failures can carry codes outside the Rust application contract.
-export type ClientError = Omit<Wire.AppError, 'code'> & { code: string };
+export type ClientErrorCode = Wire.ErrorCode | 'unknown';
+export type ClientError = Omit<Wire.AppError, 'code'> & {
+  code: ClientErrorCode;
+  rawCode?: string;
+};
 
 export class IpcError extends Error implements ClientError {
-  code: string;
-
-  constructor(code: Wire.ErrorCode | 'unknown', message: string) {
+  constructor(
+    readonly code: ClientErrorCode,
+    message: string,
+    readonly rawCode?: string,
+  ) {
     super(message);
     this.name = 'IpcError';
-    this.code = code;
   }
 }
 
