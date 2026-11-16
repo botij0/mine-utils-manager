@@ -5,14 +5,17 @@
 
 use mine_utils_core::download::InstallControl;
 use mine_utils_core::install::prepare_modrinth_install_controlled;
+pub use mine_utils_core::wire::ModrinthInstallOutcome;
+pub use mine_utils_core::wire::ModrinthTargets;
+pub use mine_utils_core::wire::SearchPage;
+use mine_utils_core::wire::SEARCH_PAGE_SIZE;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use mine_utils_core::{
     finish_modrinth_install, installed_game_versions, parse_install_kind,
-    preferred_launcher_version, world, AppError, CoreInstallOutcome, DatapackImportOutcome,
-    ImportOutcome, ModrinthClient, ModrinthError, ModrinthProject, ModrinthVersion,
-    ReqwestTransport, SearchHit, SearchQuery, SearchSort,
+    preferred_launcher_version, world, AppError, ModrinthClient, ModrinthError, ModrinthProject,
+    ModrinthVersion, ReqwestTransport, SearchQuery, SearchSort,
 };
 use tauri::State;
 
@@ -131,25 +134,6 @@ fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
     }
 }
 
-const SEARCH_PAGE_SIZE: u8 = 20;
-
-/// One Discover search page. `has_more` keeps the 20-hit page size in the
-/// backend, so the frontend does not mirror it.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SearchPage {
-    pub hits: Vec<SearchHit>,
-    pub has_more: bool,
-}
-
-impl SearchPage {
-    fn new(hits: Vec<SearchHit>) -> Self {
-        SearchPage {
-            has_more: hits.len() == usize::from(SEARCH_PAGE_SIZE),
-            hits,
-        }
-    }
-}
-
 fn build_search_query(
     text: String,
     kind: String,
@@ -222,16 +206,6 @@ pub async fn list_modrinth_versions(
     .map_err(join_error)?
 }
 
-/// What the Discover install sheet offers as defaults: the installed game
-/// versions, the launcher's selected version, and the world's version for
-/// datapacks. Nothing here is a filter; the picker lists every version.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ModrinthTargets {
-    pub installed_versions: Vec<String>,
-    pub preferred_launcher: Option<String>,
-    pub world_version: Option<String>,
-}
-
 #[tauri::command]
 pub async fn modrinth_targets(
     state: State<'_, AppState>,
@@ -260,50 +234,6 @@ pub async fn modrinth_targets(
     })
     .await
     .map_err(join_error)?
-}
-
-/// What an install did. Resource outcomes match the Packs page; datapack
-/// outcomes match the Worlds page, including `locked` when a running game
-/// or a locked world keeps the pack disabled. The wire kind is `resourcepack`
-/// (one word, matching the Modrinth project type and the TS union), not the
-/// default `resource_pack` snake_case. `provenance_warning` is set when the
-/// file installed fine but the provenance record write failed; it never
-/// fails the install.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ModrinthInstallOutcome {
-    #[serde(rename = "resourcepack")]
-    ResourcePack {
-        outcome: ImportOutcome,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        provenance_warning: Option<String>,
-    },
-    Datapack {
-        outcome: DatapackImportOutcome,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        provenance_warning: Option<String>,
-    },
-}
-
-impl From<CoreInstallOutcome> for ModrinthInstallOutcome {
-    fn from(outcome: CoreInstallOutcome) -> Self {
-        match outcome {
-            CoreInstallOutcome::ResourcePack {
-                outcome,
-                provenance_warning,
-            } => ModrinthInstallOutcome::ResourcePack {
-                outcome,
-                provenance_warning,
-            },
-            CoreInstallOutcome::Datapack {
-                outcome,
-                provenance_warning,
-            } => ModrinthInstallOutcome::Datapack {
-                outcome,
-                provenance_warning,
-            },
-        }
-    }
 }
 
 /// Download a version file from the CDN, verify it, commit it under the API
@@ -390,6 +320,7 @@ pub async fn install_modrinth_pack(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mine_utils_core::{DatapackImportOutcome, ImportOutcome, SearchHit};
 
     use tauri::test::{mock_builder, mock_context, noop_assets};
     use tauri::Manager;

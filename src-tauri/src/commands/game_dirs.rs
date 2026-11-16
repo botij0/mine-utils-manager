@@ -1,3 +1,4 @@
+pub use mine_utils_core::wire::GameDirState;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Once};
@@ -9,7 +10,6 @@ use mine_utils_core::{
     AppError, BackupsConfig, Config, ConfigStore, DataPaths, GameDirEntry, StackPaths, Theme,
     WorldPaths,
 };
-use serde::Serialize;
 use tauri::State;
 
 #[derive(Clone)]
@@ -129,12 +129,6 @@ impl GameDirSnapshot {
             self.backups.clone(),
         ))
     }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct GameDirState {
-    pub config: Config,
-    pub entries: Vec<GameDirEntry>,
 }
 
 fn listing(config: &Config) -> Result<Vec<GameDirEntry>, AppError> {

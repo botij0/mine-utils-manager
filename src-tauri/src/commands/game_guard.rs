@@ -1,35 +1,10 @@
-use std::path::PathBuf;
+pub use mine_utils_core::wire::GameGuard;
 
-use mine_utils_core::{game_lock, AppError, GameRunning, GameStatus};
-use serde::Serialize;
+use mine_utils_core::{game_lock, AppError};
 use tauri::State;
 
 use super::game_dirs::AppState;
 use super::join_error;
-
-/// The game-running guard on its own, in the same wire shape the resource and
-/// datapack stacks carry. It never reads `options.txt`, so a missing or
-/// malformed file cannot hide whether the game is running.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct GameGuard {
-    pub running: Option<GameRunning>,
-    /// Stale `session.lock` files. They never block a write.
-    pub stale_locks: Vec<PathBuf>,
-    /// False where POSIX lock probing is unsupported.
-    pub detection_supported: bool,
-    pub process_probe_available: bool,
-}
-
-impl From<GameStatus> for GameGuard {
-    fn from(status: GameStatus) -> Self {
-        GameGuard {
-            running: status.running,
-            stale_locks: status.stale_locks,
-            detection_supported: status.supported,
-            process_probe_available: status.process_probe_available,
-        }
-    }
-}
 
 async fn game_guard(state: &AppState) -> Result<GameGuard, AppError> {
     let game_dir = state.active_game_dir().ok_or(AppError::NoActiveGameDir)?;
@@ -47,7 +22,7 @@ pub async fn get_game_guard(state: State<'_, AppState>) -> Result<GameGuard, App
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use mine_utils_core::{resource_stack, Config, ConfigStore};
 
