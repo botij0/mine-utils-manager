@@ -952,6 +952,31 @@ describe('App', () => {
     expect((await mockClient.getResourceStack()).entries.map((entry) => entry.value)).not.toContain('file/fresh-1.9.zip');
   });
 
+  it('explains a refused late cancellation and disables Cancel until finish', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    const install = client.installModrinthPack;
+    let finish = () => {};
+    client.installModrinthPack = (args) => new Promise((resolve, reject) => {
+      finish = () => { void install(args).then(resolve, reject); };
+    });
+    client.cancelModrinthInstall = async () => false;
+    render(<App client={client} />);
+    await user.click(await screen.findByRole('button', { name: 'Discover' }));
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
+    await user.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
+    await user.click(await screen.findByRole('button', { name: 'Install…' }));
+    await user.click(await screen.findByRole('button', { name: 'Install' }));
+    const sheet = screen.getByRole('dialog', { name: 'Install Fresh Animations' });
+    await user.click(within(sheet).getByRole('button', { name: 'Cancel' }));
+    expect(await within(sheet).findByText('Installation has started and will finish. Cancel is no longer available.')).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(within(sheet).queryByText(/Downloading\./)).not.toBeInTheDocument();
+    finish();
+    expect(await within(sheet).findByText(/Installed .* and enabled it/)).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Close' })).toBeEnabled();
+  });
+
   it('refreshes Packs after a pending install without losing its filter', async () => {
     const user = userEvent.setup();
     const client = await shellClient();

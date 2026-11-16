@@ -370,6 +370,74 @@ pub async fn install_modrinth_pack(
 mod tests {
     use super::*;
 
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::Manager;
+
+    #[test]
+    fn unused_registrations_are_released_on_cancel() {
+        let app = mock_builder()
+            .manage(ModrinthState::new())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        for _ in 0..100 {
+            begin_modrinth_install(app.state(), "unused".into()).unwrap();
+            assert!(cancel_modrinth_install(app.state(), "unused".into()));
+            let count = app.state::<ModrinthState>().installs.lock().unwrap().len();
+            assert_eq!(count, 0, "cancel must release a Ready registration");
+        }
+        begin_modrinth_install(app.state(), "unused".into()).unwrap();
+        assert_eq!(
+            app.state::<ModrinthState>().installs.lock().unwrap().len(),
+            1
+        );
+        println!(
+            "registry replay: 100 register/cancel pairs left 0 entries; same id registers again"
+        );
+    }
+
+    #[test]
+    fn expired_ready_registration_can_be_registered_again() {
+        let app = mock_builder()
+            .manage(ModrinthState::new())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        app.state::<ModrinthState>()
+            .installs
+            .lock()
+            .unwrap()
+            .insert(
+                "expired".into(),
+                RegisteredInstall::Ready(InstallControl::with_timeout(std::time::Duration::ZERO)),
+            );
+        begin_modrinth_install(app.state(), "expired".into()).unwrap();
+        assert_eq!(
+            app.state::<ModrinthState>().installs.lock().unwrap().len(),
+            1
+        );
+        assert!(cancel_modrinth_install(app.state(), "expired".into()));
+    }
+
+    #[test]
+    fn unused_registrations_have_a_capacity_limit() {
+        let app = mock_builder()
+            .manage(ModrinthState::new())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let accepted = (0..100)
+            .filter(|id| begin_modrinth_install(app.state(), format!("unused-{id}")).is_ok())
+            .count();
+        assert_eq!(accepted, 64);
+        assert_eq!(
+            app.state::<ModrinthState>().installs.lock().unwrap().len(),
+            64
+        );
+        assert!(cancel_modrinth_install(app.state(), "unused-0".into()));
+        begin_modrinth_install(app.state(), "replacement".into()).unwrap();
+        println!(
+            "registry replay: 100 abandoned registrations retained 64; cancellation freed a slot"
+        );
+    }
+
     fn hit() -> SearchHit {
         serde_json::from_value(serde_json::json!({ "project_id": "p" })).expect("hit")
     }

@@ -1569,11 +1569,13 @@ mod cancellation {
     struct LocalCdn {
         metadata: Vec<u8>,
         url: String,
+        metadata_delay: Duration,
     }
 
     impl Transport for LocalCdn {
         fn request(&self, url: &str) -> Result<RawResponse, ModrinthError> {
             if url == versions_url() {
+                std::thread::sleep(self.metadata_delay);
                 return Ok(RawResponse {
                     status: 200,
                     headers: vec![],
@@ -1595,7 +1597,7 @@ mod cancellation {
         }
     }
 
-    fn local_http_replay(cancel: bool) {
+    fn local_http_replay(cancel: bool, metadata_delay: Duration) {
         let fx = fixture();
         let bytes = resource_zip();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1645,7 +1647,11 @@ mod cancellation {
         } else {
             None
         };
-        let client = ModrinthClient::without_sleep(LocalCdn { metadata, url });
+        let client = ModrinthClient::without_sleep(LocalCdn {
+            metadata,
+            url,
+            metadata_delay,
+        });
         let started = Instant::now();
         let result = prepare_modrinth_install_controlled(
             &client,
@@ -1693,12 +1699,17 @@ mod cancellation {
 
     #[test]
     fn local_http_cancel_mid_download() {
-        local_http_replay(true);
+        local_http_replay(true, Duration::ZERO);
     }
 
     #[test]
     fn local_http_total_deadline() {
-        local_http_replay(false);
+        local_http_replay(false, Duration::ZERO);
+    }
+
+    #[test]
+    fn local_http_deadline_before_cdn_connect_does_not_hang() {
+        local_http_replay(false, Duration::from_millis(150));
     }
 
     #[test]
