@@ -146,6 +146,27 @@ describe('ActiveStack', () => {
     expect(await screen.findByText('Dropped Alpha at position 1 of 4.')).toBeInTheDocument();
   });
 
+  it('keeps announcing when the dragged pack leaves the stack mid-drag', async () => {
+    const user = userEvent.setup();
+    const props = {
+      packs: PACKS,
+      busy: false,
+      running: null,
+      onToggle: () => {},
+      onReorder: () => {},
+      onRecheck: () => {},
+    };
+    const { rerender } = render(<ActiveStack {...props} stack={resourceStack([...FILES])} />);
+    const handle = within(card('Beta')).getByRole('button', { name: 'Drag Beta' });
+    handle.focus();
+    await user.keyboard('[Space]');
+    expect(await screen.findByText('Beta is over position 1 of 4.')).toBeInTheDocument();
+
+    rerender(<ActiveStack {...props} stack={resourceStack(['vanilla', 'fabric', 'file/Alpha.zip'])} />);
+    await user.keyboard('[Escape]');
+    expect(await screen.findByText('Cancelled. Beta is no longer in the stack.')).toBeInTheDocument();
+  });
+
   it('blocks every write and names the lock while the game runs', async () => {
     const user = userEvent.setup();
     const client = stackClient({
