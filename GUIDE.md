@@ -55,11 +55,11 @@ Mine Utils looks in these places:
 | Source | Location scanned |
 | --- | --- |
 | Standard launcher | `~/.minecraft` |
-| Flatpak launcher | `~/.var/app/com.mojang.Minecraft/data/minecraft` |
-| Prism Launcher | Instances under `~/.local/share/PrismLauncher/instances` |
+| Flatpak launcher | `~/.var/app/com.mojang.Minecraft/.minecraft` (the wrapper's `data/minecraft` link points to it) |
+| Prism Launcher | Instances under `~/.local/share/PrismLauncher/instances` and, for the Flatpak, `~/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances` |
 | MultiMC | Instances under `~/.local/share/multimc/instances` |
 
-A valid game folder contains at least one of `versions`, `saves`, or `resourcepacks`. Prism Launcher and MultiMC instances use their inner `.minecraft` folder.
+A valid game folder contains at least one of `versions`, `saves`, or `resourcepacks`. Prism Launcher instances use their inner `minecraft` folder, or `.minecraft` when only that one exists. MultiMC instances use their inner `.minecraft` folder.
 
 ### Change or remove a folder
 
@@ -283,7 +283,7 @@ Reads remain available, but writes pause. Mine Utils detects a running game thro
 
 | Problem | What to do |
 | --- | --- |
-| **No game folders found** | Add the full path manually. Check that it contains `versions`, `saves`, or `resourcepacks`. For Prism Launcher or MultiMC, use the instance's inner `.minecraft` folder. |
+| **No game folders found** | Add the full path manually. Check that it contains `versions`, `saves`, or `resourcepacks`. For Prism Launcher, use the instance's inner `minecraft` folder (`.minecraft` on older instances). For MultiMC, use the inner `.minecraft` folder. |
 | **`options.txt` is missing** | Launch Minecraft once with that game folder, close it, then retry. To recover an older file, use an existing backup in Settings. |
 | **Writes are paused** | Close every Minecraft process using the active folder and choose **Recheck**. If the guard is unavailable, wait for a successful check rather than editing files concurrently. |
 | **A datapack installs as Locked** | The file was copied safely but left disabled. Close the world or game, recheck, then enable the datapack. |

@@ -12,7 +12,7 @@ read the operator's own game data.
 - Build fixtures in the test body with `tempfile` in Rust or a temp dir in the
   frontend tests. Delete them with the temp dir.
 - File names in a fixture use the launcher layout the code scans, for example
-  `.local/share/PrismLauncher/instances/one/.minecraft`.
+  `.local/share/PrismLauncher/instances/one/minecraft`.
 - If a test needs a symlink, create it in the temp dir and point it at another
   temp dir.
 
