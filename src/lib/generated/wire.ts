@@ -5,29 +5,29 @@ export type BackupInfo = { file_name: string, bytes: number, display: string, };
 export type BackupsConfig = { enabled: boolean, keep: number, };
 export type Config = { schema: number, game_dirs: Array<GameDir>, active_game_dir: string | null, last_world: string | null, theme: Theme, backups: BackupsConfig, };
 export type DataSnapshot = { enabled: Array<string>, disabled: Array<string>, };
-export type DataStack = { 
+export type DataStack = {
 /**
  * Load order, low to high. The UI shows the reverse, so the top card is
  * the highest priority and loads last.
  */
-enabled: Array<StackEntry>, 
+enabled: Array<StackEntry>,
 /**
  * Disabled packs, in file order. Only `file/` entries are actionable.
  */
-disabled: Array<StackEntry>, 
+disabled: Array<StackEntry>,
 /**
  * The running-game state for the game dir. Writes are blocked while set.
  */
-running: GameRunning | null, 
+running: GameRunning | null,
 /**
  * The lock on this world's own `session.lock`, when held. Names the
  * world in the banner.
  */
-world_locked: GameRunning | null, 
+world_locked: GameRunning | null,
 /**
  * Stale `session.lock` files. They never block a write.
  */
-stale_locks: Array<string>, 
+stale_locks: Array<string>,
 /**
  * False where POSIX lock probing is unsupported.
  */
@@ -63,31 +63,31 @@ export type Pack = { id: string, name: string, path: string, location: PackLocat
 export type PackIcon = { sha256: string, path: string, };
 export type PackIssue = { code: string, message: string, symlink_path?: string | null, };
 export type PackKind = "resource" | "data" | "both" | "unknown";
-export type PackListing = { packs: Array<Pack>, count: number, 
+export type PackListing = { packs: Array<Pack>, count: number,
 /**
  * Total bytes read across the listing. Each pack carries its own delta.
  */
 bytes_read: number, elapsed_ms: number, };
 export type PackLocation = "zip" | "directory";
 export type PackMeta = { pack_format: FormatVersion | null, min_format: FormatVersion | null, max_format: FormatVersion | null, supported_formats: FormatRange | null, description: string, };
-export type ResourceStack = { 
+export type ResourceStack = {
 /**
  * Load order, low to high. The UI shows the reverse, so the top card is
  * the highest priority and loads last.
  */
-entries: Array<StackEntry>, 
+entries: Array<StackEntry>,
 /**
  * The `incompatibleResourcePacks` set as written.
  */
-incompatible: Array<string>, 
+incompatible: Array<string>,
 /**
  * The running-game state. Writes are blocked while this is set.
  */
-running: GameRunning | null, 
+running: GameRunning | null,
 /**
  * Stale `session.lock` files. They never block a write.
  */
-stale_locks: Array<string>, 
+stale_locks: Array<string>,
 /**
  * False where POSIX lock probing is unsupported.
  */

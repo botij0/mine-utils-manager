@@ -23,8 +23,12 @@ impl TypeVisitor for Declarations {
         if self.types.contains_key(&name) {
             return;
         }
-        self.types
-            .insert(name, format!("export {}\n", T::decl(&self.config)));
+        let declaration = T::decl(&self.config)
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.types.insert(name, format!("export {declaration}\n"));
         T::visit_dependencies(self);
     }
 }
