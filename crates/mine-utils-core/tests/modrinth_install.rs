@@ -1609,8 +1609,24 @@ mod cancellation {
             &["1.21.10"],
         );
         let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        listener.set_nonblocking(true).unwrap();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        if stop_rx.try_recv().is_ok() {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("local CDN accept failed: {err}"),
+                }
+            };
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
@@ -1629,13 +1645,13 @@ mod cancellation {
                 if index == 0 {
                     started_tx.send(()).unwrap();
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                std::thread::sleep(Duration::from_millis(50));
             }
         });
         let control = InstallControl::with_timeout(if cancel {
             Duration::from_secs(2)
         } else {
-            Duration::from_millis(70)
+            Duration::from_millis(500)
         });
         let canceller = if cancel {
             let control = control.clone();
@@ -1683,6 +1699,7 @@ mod cancellation {
             .collect();
         let options = std::fs::read_to_string(fx.game_dir.join("options.txt")).unwrap();
         println!("local HTTP cancel={cancel} result={result:?} elapsed={elapsed:?} files={files:?} options={options:?}");
+        let _ = stop_tx.send(());
         server.join().unwrap();
         assert_eq!(
             result.unwrap_err().code(),
@@ -1709,7 +1726,7 @@ mod cancellation {
 
     #[test]
     fn local_http_deadline_before_cdn_connect_does_not_hang() {
-        local_http_replay(false, Duration::from_millis(150));
+        local_http_replay(false, Duration::from_millis(650));
     }
 
     #[test]

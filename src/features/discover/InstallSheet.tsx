@@ -18,6 +18,7 @@ interface InstallSheetProps {
   world: string | null;
   onWorldChange: (world: string | null) => void;
   busy: boolean;
+  committing?: boolean;
   writesBlocked: boolean;
   blockedReason: string | null;
   /** False when no game dir is active: installs have nowhere to go. */
@@ -57,6 +58,7 @@ export default function InstallSheet({
   world,
   onWorldChange,
   busy,
+  committing = false,
   writesBlocked,
   blockedReason,
   hasGameDir,
@@ -117,9 +119,18 @@ export default function InstallSheet({
         </StatusNote>
       ) : null}
       {blockedReason ? <StatusNote role="status">{blockedReason}</StatusNote> : null}
-      {busy ? <StatusNote role="status">Downloading. Cancel is available until installation starts. Leaving this tab keeps the install running; return here for its result.</StatusNote> : null}
+      {busy ? (
+        <StatusNote role="status">
+          {committing
+            ? 'Installation has started and will finish. Cancel is no longer available.'
+            : 'Downloading. Cancel is available until installation starts. Leaving this tab keeps the install running; return here for its result.'}
+        </StatusNote>
+      ) : null}
       {error ? (
-        <p className="error" role="alert">
+        <p
+          className={error.code === 'download_cancelled' ? undefined : 'error'}
+          role={error.code === 'download_cancelled' ? 'status' : 'alert'}
+        >
           {error.message}
         </p>
       ) : null}
@@ -128,7 +139,12 @@ export default function InstallSheet({
         <StatusNote role="status">Warning: {result.provenance_warning}</StatusNote>
       ) : null}
       <div className="pack-confirm-actions">
-        <button type="button" className="button" onClick={busy ? onCancel : onClose}>
+        <button
+          type="button"
+          className="button"
+          disabled={busy && committing}
+          onClick={busy ? onCancel : onClose}
+        >
           {result ? 'Close' : 'Cancel'}
         </button>
         {result ? null : (

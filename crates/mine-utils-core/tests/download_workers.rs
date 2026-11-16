@@ -67,6 +67,17 @@ fn sequential_cancels_bound_live_blocked_readers() {
         canceller.join().unwrap();
         assert_eq!(result.unwrap_err().code(), "download_cancelled");
     }
+    let timeout = download_verified_controlled(
+        &client,
+        "https://cdn.modrinth.com/pack.zip",
+        target.path(),
+        "timeout.zip",
+        "unused",
+        ZipRoot::Assets,
+        1024,
+        &InstallControl::with_timeout(Duration::from_millis(30)),
+    );
+    assert_eq!(timeout.unwrap_err().code(), "download_timeout");
     let (lock, wake) = &*readers;
     let mut state = lock.lock().unwrap();
     let peak = state.peak;
@@ -86,5 +97,17 @@ fn sequential_cancels_bound_live_blocked_readers() {
         peak <= 8,
         "at most 8 network reader workers, observed {peak}"
     );
+    drop(state);
+    let recovered = download_verified_controlled(
+        &client,
+        "https://cdn.modrinth.com/pack.zip",
+        target.path(),
+        "recovered.zip",
+        "unused",
+        ZipRoot::Assets,
+        1024,
+        &InstallControl::with_timeout(Duration::from_secs(2)),
+    );
+    assert_eq!(recovered.unwrap_err().code(), "download_hash_mismatch");
     assert_eq!(std::fs::read_dir(target.path()).unwrap().count(), 0);
 }

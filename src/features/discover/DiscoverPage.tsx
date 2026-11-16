@@ -219,6 +219,7 @@ export default function DiscoverPage({
           world={discover.world}
           onWorldChange={discover.setWorld}
           busy={discover.installBusy}
+          committing={discover.installCommitting}
           writesBlocked={writesBlocked}
           blockedReason={blockedReason}
           hasGameDir={hasGameDir}

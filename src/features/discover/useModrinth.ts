@@ -111,6 +111,7 @@ export interface ModrinthState {
   setSelectedVersionId: (id: string) => void;
   cancelInstall: () => Promise<void>;
   installBusy: boolean;
+  installCommitting: boolean;
   installResult: ModrinthInstallOutcome | null;
   installError: IpcError | null;
   install: () => Promise<ModrinthInstallOutcome | null>;
@@ -147,7 +148,7 @@ export function useModrinth(
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<IpcError | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
-  const [installBusy, setInstallBusy] = useState(false);
+  const [installPhase, setInstallPhase] = useState<'idle' | 'downloading' | 'committing'>('idle');
   const [installResult, setInstallResult] = useState<ModrinthInstallOutcome | null>(null);
   const [installError, setInstallError] = useState<IpcError | null>(null);
   const installId = useRef<string | null>(null);
@@ -414,7 +415,7 @@ export function useModrinth(
     const token = selectToken.current;
     const id = crypto.randomUUID();
     installId.current = id;
-    setInstallBusy(true);
+    setInstallPhase('downloading');
     setInstallError(null);
     try {
       const outcome = await client.installModrinthPack({
@@ -433,14 +434,18 @@ export function useModrinth(
       return null;
     } finally {
       installId.current = null;
-      if (mounted.current) setInstallBusy(false);
+      if (mounted.current) setInstallPhase('idle');
     }
   }, [client, kind, selected, selectedVersionId, versions, world]);
 
   const cancelInstall = useCallback(async () => {
-    if (!installId.current) return;
+    const id = installId.current;
+    if (!id) return;
     try {
-      await client.cancelModrinthInstall(installId.current);
+      const cancelled = await client.cancelModrinthInstall(id);
+      if (!cancelled && mounted.current && installId.current === id) {
+        setInstallPhase('committing');
+      }
     } catch (err) {
       if (mounted.current) setInstallError(toAppError(err));
     }
@@ -498,7 +503,8 @@ export function useModrinth(
     selectedVersionId,
     setSelectedVersionId: chooseVersion,
     cancelInstall,
-    installBusy,
+    installBusy: installPhase !== 'idle',
+    installCommitting: installPhase === 'committing',
     installResult,
     installError,
     install,

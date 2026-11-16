@@ -8,7 +8,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
 use sha2::{Digest, Sha256, Sha512};
 use std::sync::{mpsc, Arc};
@@ -18,6 +18,34 @@ use crate::fs_commit::atomic_no_replace;
 use crate::modrinth::{ModrinthClient, Transport, MAX_DOWNLOAD_BYTES};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+const MAX_READER_WORKERS: usize = 8;
+static READER_WORKERS: AtomicUsize = AtomicUsize::new(0);
+
+struct ReaderPermit;
+
+impl ReaderPermit {
+    fn acquire(control: &InstallControl) -> Result<Self, DownloadError> {
+        loop {
+            control.check()?;
+            let live = READER_WORKERS.load(Ordering::SeqCst);
+            if live < MAX_READER_WORKERS
+                && READER_WORKERS
+                    .compare_exchange(live, live + 1, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            {
+                return Ok(Self);
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
+impl Drop for ReaderPermit {
+    fn drop(&mut self) {
+        READER_WORKERS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 const DOWNLOADING: u8 = 0;
 const CANCELLED: u8 = 1;
@@ -563,6 +591,7 @@ fn download_into<T: Transport + 'static>(
     max_bytes: u64,
     control: &InstallControl,
 ) -> Result<(String, u64), DownloadError> {
+    let permit = ReaderPermit::acquire(control)?;
     let (tx, rx) = mpsc::sync_channel(1);
     let client = client.clone();
     let url = url.to_string();
@@ -570,38 +599,44 @@ fn download_into<T: Transport + 'static>(
     let worker_control = control.clone();
     // The worker owns only network bytes. The caller alone owns the temp,
     // so cancellation can delete it even while a socket read is blocked.
-    std::thread::spawn(move || {
-        let stream = (|| {
-            worker_control.check()?;
-            Ok(client.file_stream(&stream_url)?.body.take(max_bytes + 1))
-        })();
-        let mut reader = match stream {
-            Ok(reader) => reader,
-            Err(err) => {
-                let _ = tx.send(Err(err));
-                return;
+    std::thread::Builder::new()
+        .name("modrinth-reader".into())
+        .spawn(move || {
+            let _permit = permit;
+            let stream = (|| {
+                worker_control.check()?;
+                Ok(client.file_stream(&stream_url)?.body.take(max_bytes + 1))
+            })();
+            let mut reader = match stream {
+                Ok(reader) => reader,
+                Err(err) => {
+                    let _ = tx.send(Err(err));
+                    return;
+                }
+            };
+            loop {
+                if worker_control.check().is_err() {
+                    return;
+                }
+                let mut chunk = vec![0u8; 64 * 1024];
+                let result = reader
+                    .read(&mut chunk)
+                    .map(|n| {
+                        chunk.truncate(n);
+                        chunk
+                    })
+                    .map_err(|err| DownloadError::Io {
+                        reason: format!("download interrupted: {err}"),
+                    });
+                let done = result.as_ref().map_or(true, |bytes| bytes.is_empty());
+                if tx.send(result).is_err() || done {
+                    return;
+                }
             }
-        };
-        loop {
-            if worker_control.check().is_err() {
-                return;
-            }
-            let mut chunk = vec![0u8; 64 * 1024];
-            let result = reader
-                .read(&mut chunk)
-                .map(|n| {
-                    chunk.truncate(n);
-                    chunk
-                })
-                .map_err(|err| DownloadError::Io {
-                    reason: format!("download interrupted: {err}"),
-                });
-            let done = result.as_ref().map_or(true, |bytes| bytes.is_empty());
-            if tx.send(result).is_err() || done {
-                return;
-            }
-        }
-    });
+        })
+        .map_err(|err| DownloadError::Io {
+            reason: format!("cannot start download worker: {err}"),
+        })?;
     let mut sha512 = Sha512::new();
     let mut sha256 = Sha256::new();
     let mut bytes: u64 = 0;

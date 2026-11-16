@@ -56,12 +56,28 @@ impl RegisteredInstall {
     }
 }
 
+const MAX_REGISTERED_INSTALLS: usize = 64;
+
+fn expire_ready(installs: &mut HashMap<String, RegisteredInstall>) {
+    installs.retain(|_, entry| match entry {
+        RegisteredInstall::Ready(control) => control.check().is_ok(),
+        RegisteredInstall::Running(_) => true,
+    });
+}
+
 #[tauri::command]
 pub fn begin_modrinth_install(
     mods: State<'_, ModrinthState>,
     install_id: String,
 ) -> Result<(), AppError> {
     let mut installs = mods.installs.lock().unwrap_or_else(|err| err.into_inner());
+    expire_ready(&mut installs);
+    if installs.len() >= MAX_REGISTERED_INSTALLS {
+        return Err(ModrinthError::Parse {
+            reason: "too many active installs; cancel an install or wait for it to finish".into(),
+        }
+        .into());
+    }
     if installs.contains_key(&install_id) {
         return Err(ModrinthError::Parse {
             reason: "install id is already active".to_string(),
@@ -91,11 +107,15 @@ impl Drop for InstallRegistration {
 
 #[tauri::command]
 pub fn cancel_modrinth_install(mods: State<'_, ModrinthState>, install_id: String) -> bool {
-    mods.installs
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
+    let mut installs = mods.installs.lock().unwrap_or_else(|err| err.into_inner());
+    let cancelled = installs
         .get(&install_id)
-        .is_some_and(|entry| entry.control().cancel())
+        .is_some_and(|entry| entry.control().cancel());
+    if matches!(installs.get(&install_id), Some(RegisteredInstall::Ready(_))) {
+        installs.remove(&install_id);
+    }
+    expire_ready(&mut installs);
+    cancelled
 }
 
 fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
@@ -314,7 +334,8 @@ pub async fn install_modrinth_pack(
                 *entry = RegisteredInstall::Running(control.clone());
                 control
             }
-            _ => {
+            None => return Err(mine_utils_core::download::DownloadError::Cancelled.into()),
+            Some(RegisteredInstall::Running(_)) => {
                 return Err(ModrinthError::Parse {
                     reason: "install id is not ready".to_string(),
                 }
