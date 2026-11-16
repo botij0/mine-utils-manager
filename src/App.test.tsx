@@ -76,6 +76,16 @@ function stackResponse(running: GameRunning | null) {
 }
 
 describe('App', () => {
+  it('reports unavailable process detection without pausing writes', async () => {
+    const client = await shellClient();
+    client.getResourceStack = async () => stackResponse(null);
+    client.getGameGuard = async () => ({ running: null, stale_locks: [], detection_supported: true, process_probe_available: false });
+    render(<App client={client} />);
+    expect(await screen.findByText(/Minecraft process detection is unavailable/)).toHaveTextContent('writes are allowed');
+    const list = await screen.findByRole('list', { name: 'Stack order' });
+    expect(within(list).getByRole('button', { name: 'Remove' })).toBeEnabled();
+  });
+
   it('shows the startup warning and the shell', async () => {
     const client = await shellClient();
     const withWarning: IpcClient = {

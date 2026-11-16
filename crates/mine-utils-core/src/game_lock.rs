@@ -280,18 +280,15 @@ fn session_lock_check(_game_dir: &Path, _stale: &mut Vec<PathBuf>) -> Option<Gam
 /// launchers that set the process directory instead of passing `--gameDir`.
 fn process_check(game_dir: &Path, proc_root: &Path) -> std::io::Result<Option<GameRunning>> {
     let canonical_game_dir = std::fs::canonicalize(game_dir).ok();
-    let mut pids: Vec<PathBuf> = match std::fs::read_dir(proc_root) {
-        Ok(entries) => entries
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.chars().all(|c| c.is_ascii_digit()))
-            })
-            .collect(),
-        Err(err) => return Err(err),
-    };
+    let mut pids: Vec<PathBuf> = std::fs::read_dir(proc_root)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.chars().all(|c| c.is_ascii_digit()))
+        })
+        .collect();
     pids.sort();
 
     for proc_dir in pids {
