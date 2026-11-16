@@ -47,6 +47,7 @@ pub struct GameStatus {
     /// False when the platform cannot probe POSIX locks. The fallback reports
     /// unsupported instead of pretending the game is closed.
     pub supported: bool,
+    pub process_probe_available: bool,
 }
 
 impl GameStatus {
@@ -55,6 +56,7 @@ impl GameStatus {
             running: None,
             stale_locks: Vec::new(),
             supported,
+            process_probe_available: false,
         }
     }
 }
@@ -80,8 +82,12 @@ pub fn check_in(game_dir: &Path, proc_root: &Path) -> GameStatus {
         status.running = Some(running);
         return status;
     }
-    if let Some(running) = process_check(game_dir, proc_root) {
-        status.running = Some(running);
+    match process_check(game_dir, proc_root) {
+        Ok(running) => {
+            status.process_probe_available = true;
+            status.running = running;
+        }
+        Err(_) => status.process_probe_available = false,
     }
     status
 }
@@ -272,7 +278,7 @@ fn session_lock_check(_game_dir: &Path, _stale: &mut Vec<PathBuf>) -> Option<Gam
 /// known client main class, a `--gameDir` pointing at the active game dir, or a
 /// working directory equal to the active game dir. The cwd check covers
 /// launchers that set the process directory instead of passing `--gameDir`.
-fn process_check(game_dir: &Path, proc_root: &Path) -> Option<GameRunning> {
+fn process_check(game_dir: &Path, proc_root: &Path) -> std::io::Result<Option<GameRunning>> {
     let canonical_game_dir = std::fs::canonicalize(game_dir).ok();
     let mut pids: Vec<PathBuf> = match std::fs::read_dir(proc_root) {
         Ok(entries) => entries
@@ -284,7 +290,7 @@ fn process_check(game_dir: &Path, proc_root: &Path) -> Option<GameRunning> {
                     .is_some_and(|name| name.chars().all(|c| c.is_ascii_digit()))
             })
             .collect(),
-        Err(_) => return None,
+        Err(err) => return Err(err),
     };
     pids.sort();
 
@@ -334,7 +340,7 @@ fn process_check(game_dir: &Path, proc_root: &Path) -> Option<GameRunning> {
             .file_name()
             .and_then(|name| name.to_str())
             .and_then(|name| name.parse::<i32>().ok());
-        return Some(GameRunning {
+        return Ok(Some(GameRunning {
             kind: GameRunningKind::Process,
             detail: match pid {
                 Some(pid) => format!("pid {pid} runs {program}"),
@@ -343,9 +349,9 @@ fn process_check(game_dir: &Path, proc_root: &Path) -> Option<GameRunning> {
             lock_path: None,
             pid,
             command: Some(command),
-        });
+        }));
     }
-    None
+    Ok(None)
 }
 
 /// A short display form for the banner. Guard decisions must inspect `args`

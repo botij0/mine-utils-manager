@@ -737,7 +737,7 @@ let mockGameState: MockGameState = 'none';
  * with a banner naming the session lock. `stale-lock` keeps a session.lock
  * nobody holds, which never blocks and is shown as an informational note.
  */
-export type MockGameState = 'none' | 'running' | 'stale-lock';
+export type MockGameState = 'none' | 'running' | 'stale-lock' | 'process-unavailable';
 
 export function setMockGameState(state: MockGameState) {
   mockGameState = state;
@@ -1143,6 +1143,7 @@ function mockGameGuard(): GameGuard {
         ? ['/home/demo/.minecraft/saves/world/session.lock']
         : [],
     detection_supported: true,
+    process_probe_available: mockGameState !== 'process-unavailable' && localStorage.getItem('mock-process-unavailable') !== 'true',
   };
 }
 

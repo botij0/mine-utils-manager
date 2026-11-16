@@ -46,7 +46,7 @@ function holdGuardCalls(client: FakeClient) {
     return new Promise((resolve) =>
       calls.push({
         dir,
-        answer: (running) => resolve({ running, stale_locks: [], detection_supported: true }),
+        answer: (running) => resolve({ running, stale_locks: [], detection_supported: true, process_probe_available: true }),
       }),
     );
   };
@@ -71,7 +71,7 @@ function stackResponse(running: GameRunning | null) {
     incompatible: [],
     running,
     stale_locks: [],
-    detection_supported: true,
+    detection_supported: true, process_probe_available: true,
   };
 }
 
@@ -107,7 +107,7 @@ describe('App', () => {
     client.getResourceStack = async () => stackResponse(null);
     client.getGameGuard = async () => {
       if (fail) throw new IpcError('io', 'guard read failed');
-      return { running, stale_locks: [], detection_supported: true };
+      return { running, stale_locks: [], detection_supported: true, process_probe_available: true };
     };
 
     render(<App client={client} />);
@@ -245,7 +245,7 @@ describe('App', () => {
       return new Promise((resolve) =>
         held.push({
           dir,
-          answer: () => resolve({ running: null, stale_locks: [], detection_supported: true }),
+          answer: () => resolve({ running: null, stale_locks: [], detection_supported: true, process_probe_available: true }),
         }),
       );
     };
@@ -357,7 +357,7 @@ describe('App', () => {
       const dir = client.config.active_game_dir;
       checkedDirs.push(dir);
       if (dir === null) return noFolderGuard();
-      return { running: RUNNING, stale_locks: [], detection_supported: true };
+      return { running: RUNNING, stale_locks: [], detection_supported: true, process_probe_available: true };
     };
     render(<App client={client} />);
 
@@ -572,7 +572,7 @@ describe('App', () => {
       checkedDirs.push(client.config.active_game_dir);
       if (checkedDirs.length !== 2) return guard();
       return new Promise((resolve) => {
-        settleHung = () => resolve({ running: null, stale_locks: [], detection_supported: true });
+        settleHung = () => resolve({ running: null, stale_locks: [], detection_supported: true, process_probe_available: true });
       });
     };
     render(<App client={client} />);
