@@ -82,6 +82,27 @@ describe('GameDirSettings', () => {
     );
   });
 
+  it('names each folder row Use and Remove after its path', async () => {
+    const client = makeFakeClient([
+      DETECTED,
+      gameDir('/tmp/saves/two', true, true),
+    ]);
+    render(
+      <GameDirSettings
+        client={client}
+        activePath={null}
+        onConfigChanged={() => {}}
+      />,
+    );
+
+    const added = (await screen.findByText('/tmp/saves/two')).closest('li');
+    expect(added).not.toBeNull();
+    expect(within(added!).getByRole('button', { name: 'Use /tmp/saves/two' })).toBeEnabled();
+    expect(within(added!).getByRole('button', { name: 'Remove /tmp/saves/two' })).toBeEnabled();
+    const detected = screen.getByText('/home/demo/.minecraft').closest('li');
+    expect(within(detected!).getByRole('button', { name: 'Use /home/demo/.minecraft' })).toBeEnabled();
+  });
+
   it('shows an inline error and keeps the list when the path is not a game dir', async () => {
     const user = userEvent.setup();
     const client = makeFakeClient([DETECTED]);

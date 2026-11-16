@@ -337,6 +337,64 @@ describe('WorldsPage', () => {
     expect(within(grid).getByText('broken.zip is not readable')).toBeInTheDocument();
   });
 
+  it('keeps broken datapack errors out of the alert role and sums them up once', async () => {
+    const otherBroken = {
+      ...BROKEN_DATAPACK,
+      id: '/saves/Survival/other.zip',
+      name: 'other',
+      path: '/saves/Survival/datapacks/other.zip',
+      error: { code: 'pack_broken_archive', message: 'other.zip is not readable' },
+    };
+    const brokenClient = pageClient({
+      listDatapacks: async () => ({
+        packs: { packs: [BROKEN_DATAPACK, otherBroken], count: 2, bytes_read: 16, elapsed_ms: 1 },
+        stack: stack({
+          enabled: [
+            { kind: 'file', value: 'file/broken.zip', filename: 'broken.zip' },
+            { kind: 'file', value: 'file/other.zip', filename: 'other.zip' },
+          ],
+          disabled: [],
+        }),
+      }),
+    });
+    render(<WorldsPage client={brokenClient} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    const cards = within(grid).getAllByRole('listitem');
+    expect(cards).toHaveLength(2);
+    for (const card of cards) {
+      expect(within(card).queryByRole('alert')).not.toBeInTheDocument();
+    }
+    expect(within(grid).getByRole('button', { name: 'Disable broken.zip' })).toBeEnabled();
+    const summaries = screen
+      .getAllByRole('status')
+      .filter((node) => node.textContent === '2 broken datapacks');
+    expect(summaries).toHaveLength(1);
+  });
+
+  it('names each datapack toggle after its file', async () => {
+    const client = pageClient({
+      listDatapacks: async () => ({
+        packs: {
+          packs: [
+            datapack('a.zip', 7, 7, { id: '/saves/Survival/a.zip', name: 'a', path: '/saves/Survival/datapacks/a.zip' }),
+            datapack('b.zip', 7, 7, { id: '/saves/Survival/b.zip', name: 'b', path: '/saves/Survival/datapacks/b.zip' }),
+          ],
+          count: 2,
+          bytes_read: 256,
+          elapsed_ms: 1,
+        },
+        stack: stack({
+          enabled: [{ kind: 'file', value: 'file/a.zip', filename: 'a.zip' }],
+          disabled: [{ kind: 'file', value: 'file/b.zip', filename: 'b.zip' }],
+        }),
+      }),
+    });
+    render(<WorldsPage client={client} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    expect(within(grid).getByRole('button', { name: 'Disable a.zip' })).toBeEnabled();
+    expect(within(grid).getByRole('button', { name: 'Enable b.zip' })).toBeEnabled();
+  });
+
   it('keeps Disable on an enabled broken pack', async () => {
     const user = userEvent.setup();
     const setEnabled = vi.fn(async () =>
