@@ -7,7 +7,7 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
-import type { DragEndEvent } from '@dnd-kit/core';
+import type { Announcements, DragEndEvent, UniqueIdentifier } from '@dnd-kit/core';
 import {
   SortableContext,
   arrayMove,
@@ -79,6 +79,29 @@ export default function ActiveStack({
   const byFilename = useMemo(() => packByFilename(packs), [packs]);
   const blocked = busy || running !== null || guardUnknown;
 
+  const indexOfId = (id: UniqueIdentifier) => ids.indexOf(String(id));
+  const labelOf = (id: UniqueIdentifier) => {
+    const entry = uiEntries[indexOfId(id)];
+    return entry.kind === 'file'
+      ? (byFilename.get(entry.filename)?.name ?? entry.filename)
+      : entry.value;
+  };
+  const positionOf = (id: UniqueIdentifier) =>
+    `position ${indexOfId(id) + 1} of ${uiEntries.length}`;
+  const announcements: Announcements = {
+    onDragStart: ({ active }) => `Picked up ${labelOf(active.id)}, ${positionOf(active.id)}.`,
+    onDragOver: ({ active, over }) =>
+      over
+        ? `${labelOf(active.id)} is over ${positionOf(over.id)}.`
+        : `${labelOf(active.id)} is not over a position.`,
+    onDragEnd: ({ active, over }) =>
+      over
+        ? `Dropped ${labelOf(active.id)} at ${positionOf(over.id)}.`
+        : `Dropped ${labelOf(active.id)} outside the stack. Its position did not change.`,
+    onDragCancel: ({ active }) =>
+      `Cancelled. ${labelOf(active.id)} stays at ${positionOf(active.id)}.`,
+  };
+
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -123,6 +146,7 @@ export default function ActiveStack({
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={handleDragEnd}
+          accessibility={{ announcements }}
         >
           <SortableContext items={ids} strategy={verticalListSortingStrategy}>
             <ul

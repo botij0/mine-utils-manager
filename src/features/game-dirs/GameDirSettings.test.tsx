@@ -45,7 +45,7 @@ describe('GameDirSettings', () => {
     );
 
     await screen.findByText('/tmp/saves/two');
-    await user.click(screen.getByRole('button', { name: 'Remove' }));
+    await user.click(screen.getByRole('button', { name: 'Remove /tmp/saves/two' }));
 
     await waitFor(() =>
       expect(screen.queryByText('/tmp/saves/two')).not.toBeInTheDocument(),
@@ -74,8 +74,8 @@ describe('GameDirSettings', () => {
     const missing = await screen.findByText('/tmp/saves/missing');
     const row = missing.closest('li');
     expect(row).not.toBeNull();
-    expect(within(row!).queryByRole('button', { name: 'Use' })).toBeNull();
-    await user.click(within(row!).getByRole('button', { name: 'Remove' }));
+    expect(within(row!).queryByRole('button', { name: /^Use / })).toBeNull();
+    await user.click(within(row!).getByRole('button', { name: 'Remove /tmp/saves/missing' }));
 
     await waitFor(() =>
       expect(screen.queryByText('/tmp/saves/missing')).not.toBeInTheDocument(),

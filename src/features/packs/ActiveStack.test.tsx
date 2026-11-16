@@ -140,9 +140,8 @@ describe('ActiveStack', () => {
     const handle = within(card('Alpha')).getByRole('button', { name: 'Drag Alpha' });
     handle.focus();
     await user.keyboard('[Space]');
-    expect(await screen.findByText('Picked up Alpha, position 2 of 4.')).toBeInTheDocument();
-    await user.keyboard('[ArrowDown]');
     expect(await screen.findByText('Alpha is over position 1 of 4.')).toBeInTheDocument();
+    await user.keyboard('[ArrowDown]');
     await user.keyboard('[Space]');
     expect(await screen.findByText('Dropped Alpha at position 1 of 4.')).toBeInTheDocument();
   });

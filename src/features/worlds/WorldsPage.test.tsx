@@ -182,7 +182,7 @@ describe('WorldsPage', () => {
     });
     render(<WorldsPage client={lockedClient} />);
     expect(await screen.findByText(/is locked/)).toBeInTheDocument();
-    const enable = await screen.findByRole('button', { name: 'Enable' });
+    const enable = await screen.findByRole('button', { name: 'Enable a.zip' });
     expect(enable).toBeDisabled();
   });
 
@@ -196,7 +196,7 @@ describe('WorldsPage', () => {
     );
     render(<WorldsPage client={pageClient({ setDatapackEnabled: setEnabled })} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
-    await user.click(within(grid).getByRole('button', { name: 'Disable' }));
+    await user.click(within(grid).getByRole('button', { name: 'Disable a.zip' }));
     await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('Survival 1_17', 'a.zip', false));
   });
 
@@ -284,8 +284,8 @@ describe('WorldsPage', () => {
     });
     render(<WorldsPage client={handClient} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
-    expect(within(grid).getByRole('button', { name: /hand\.zip/ })).toBeInTheDocument();
-    await user.click(within(grid).getByRole('button', { name: 'Enable' }));
+    expect(within(grid).getByRole('button', { name: 'hand.zip, disabled' })).toBeInTheDocument();
+    await user.click(within(grid).getByRole('button', { name: 'Enable hand.zip' }));
     await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('Survival 1_17', 'hand.zip', true));
   });
 
@@ -310,8 +310,8 @@ describe('WorldsPage', () => {
     render(<WorldsPage client={missingClient} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     expect(within(grid).getByText('File missing from datapacks')).toBeInTheDocument();
-    expect(within(grid).getByRole('button', { name: 'Enable' })).toBeDisabled();
-    await user.click(within(grid).getByRole('button', { name: /gone\.zip/ }));
+    expect(within(grid).getByRole('button', { name: 'Enable gone.zip' })).toBeDisabled();
+    await user.click(within(grid).getByRole('button', { name: 'gone.zip, disabled' }));
     await user.click(await screen.findByRole('button', { name: 'Remove reference' }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith('Survival 1_17', 'gone.zip'));
   });
@@ -416,12 +416,12 @@ describe('WorldsPage', () => {
     render(<WorldsPage client={actionable} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     // An enabled corrupt pack is still a live entry: it keeps Disable.
-    expect(within(grid).getByRole('button', { name: 'Disable' })).toBeEnabled();
+    expect(within(grid).getByRole('button', { name: 'Disable broken.zip' })).toBeEnabled();
     // The detail offers the same Disable for the selected broken pack.
     await user.click(within(grid).getByRole('button', { name: 'broken.zip, broken' }));
     const detail = await screen.findByRole('region', { name: 'Datapack details' });
     expect(within(detail).getByRole('button', { name: 'Disable' })).toBeEnabled();
-    await user.click(within(grid).getByRole('button', { name: 'Disable' }));
+    await user.click(within(grid).getByRole('button', { name: 'Disable broken.zip' }));
     await waitFor(() =>
       expect(setEnabled).toHaveBeenCalledWith('Survival 1_17', 'broken.zip', false),
     );
@@ -440,8 +440,8 @@ describe('WorldsPage', () => {
     render(<WorldsPage client={badgeClient} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     expect(within(grid).getByText('Broken datapack')).toBeInTheDocument();
-    expect(within(grid).queryByRole('button', { name: 'Enable' })).not.toBeInTheDocument();
-    expect(within(grid).queryByRole('button', { name: 'Disable' })).not.toBeInTheDocument();
+    expect(within(grid).queryByRole('button', { name: /^Enable( |$)/ })).not.toBeInTheDocument();
+    expect(within(grid).queryByRole('button', { name: /^Disable( |$)/ })).not.toBeInTheDocument();
   });
 
   it('explains the removal step for a symlinked pack', async () => {
@@ -527,7 +527,7 @@ describe('WorldsPage', () => {
     });
     render(<WorldsPage client={staleClient} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
-    await user.click(within(grid).getByRole('button', { name: 'Disable' }));
+    await user.click(within(grid).getByRole('button', { name: 'Disable a.zip' }));
     expect(await screen.findByText(/the stack changed on disk/)).toBeInTheDocument();
     const callsBefore = listSpy.mock.calls.length;
     await user.click(screen.getByRole('button', { name: 'Retry' }));
@@ -583,7 +583,7 @@ describe('WorldsPage', () => {
     // clicked while the new world's listing is in flight.
     await waitFor(() => expect(screen.getByText('Loading datapacks…')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'a.zip, enabled' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Disable' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Disable( |$)/ })).not.toBeInTheDocument();
     await act(async () => {
       resolveCreative({
         packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },

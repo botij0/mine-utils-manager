@@ -49,114 +49,55 @@ export default function DatapackGrid({
   if (rows.length === 0) {
     return <StatusNote>No datapacks yet. Import a zip or a folder to add one.</StatusNote>;
   }
+  const brokenCount = rows.filter((row) => row.pack?.error).length;
+  const brokenSummary =
+    brokenCount === 0 ? '' : `${brokenCount} broken ${brokenCount === 1 ? 'datapack' : 'datapacks'}`;
   return (
-    <ul className="datapack-grid" aria-label="Datapack stack" aria-busy={loading}>
-      {rows.map((row, index) => {
-        const name =
-          row.entry.kind === 'file' ? row.entry.filename : row.entry.value;
-        // Rows are keyed by position, not by value: `Enabled` may hold the
-        // same `file/` value twice, and value keys would mis-render.
-        const key = `${row.entry.value}#${index}`;
-        const broken = row.pack?.error ?? null;
-        const selectionId = broken?.code === 'pack_non_utf8_name' ? row.pack!.id : name;
-        if (broken) {
-          // A broken pack is an error card, but an *enabled* broken row is
-          // still a live `level.dat` entry: it keeps Disable (and any move
-          // that stays between `file/` entries) so a corrupt pack can be
-          // switched off. A disabled broken pack has nothing to act on.
-          const actionable = row.enabled && !row.locked;
-          return (
-            <li
-              key={key}
-              className={`datapack-card datapack-card-broken${selectedFilename === selectionId ? ' is-selected' : ''}`}
-            >
-              <button
-                type="button"
-                className="datapack-card-main"
-                onClick={() => onSelect(selectionId)}
-                aria-label={`${name}, broken`}
+    <>
+      <p className="visually-hidden" role="status">
+        {brokenSummary}
+      </p>
+      <ul className="datapack-grid" aria-label="Datapack stack" aria-busy={loading}>
+        {rows.map((row, index) => {
+          const name =
+            row.entry.kind === 'file' ? row.entry.filename : row.entry.value;
+          // Rows are keyed by position, not by value: `Enabled` may hold the
+          // same `file/` value twice, and value keys would mis-render.
+          const key = `${row.entry.value}#${index}`;
+          const broken = row.pack?.error ?? null;
+          const selectionId = broken?.code === 'pack_non_utf8_name' ? row.pack!.id : name;
+          if (broken) {
+            // A broken pack is an error card, but an *enabled* broken row is
+            // still a live `level.dat` entry: it keeps Disable (and any move
+            // that stays between `file/` entries) so a corrupt pack can be
+            // switched off. A disabled broken pack has nothing to act on.
+            const actionable = row.enabled && !row.locked;
+            return (
+              <li
+                key={key}
+                className={`datapack-card datapack-card-broken${selectedFilename === selectionId ? ' is-selected' : ''}`}
               >
-                <span className="datapack-name">{name}</span>
-                <span className="datapack-kind">Broken datapack</span>
-                <span className="datapack-error" role="alert">
-                  {broken.message}
-                </span>
-              </button>
-              {actionable ? (
-                <span className="datapack-actions">
-                  <button
-                    type="button"
-                    className="button"
-                    disabled={writesBlocked}
-                    onClick={() => onToggle(name, false)}
-                  >
-                    Disable
-                  </button>
-                  <button
-                    type="button"
-                    className="button"
-                    disabled={writesBlocked || !row.canMoveUp}
-                    title={row.canMoveUp ? undefined : 'Locked entries cannot move'}
-                    aria-label={`Move ${name} up`}
-                    onClick={() => onMove(index, -1)}
-                  >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    className="button"
-                    disabled={writesBlocked || !row.canMoveDown}
-                    title={row.canMoveDown ? undefined : 'Locked entries cannot move'}
-                    aria-label={`Move ${name} down`}
-                    onClick={() => onMove(index, 1)}
-                  >
-                    ↓
-                  </button>
-                </span>
-              ) : (
-                <span className="datapack-lock" title={broken.message}>
-                  Error
-                </span>
-              )}
-            </li>
-          );
-        }
-        return (
-          <li
-            key={key}
-            className={`datapack-card${selectedFilename === selectionId ? ' is-selected' : ''}${row.locked ? ' is-locked' : ''}`}
-          >
-            <button
-              type="button"
-              className="datapack-card-main"
-              onClick={() => onSelect(selectionId)}
-              aria-label={`${name}${row.enabled ? ', enabled' : ', disabled'}`}
-            >
-              <span className="datapack-name">{name}</span>
-              {row.pack ? (
-                <span className="datapack-kind">{row.pack.game_label ?? row.pack.kind}</span>
-              ) : row.entry.kind === 'file' ? (
-                <span className="datapack-kind">File missing from datapacks</span>
-              ) : null}
-              <CompatibilityChip warning={row.warning} />
-            </button>
-            {row.locked ? (
-              <span className="datapack-lock" title="Locked by Minecraft; it cannot move or toggle">
-                Locked
-              </span>
-            ) : (
-              <span className="datapack-actions">
                 <button
                   type="button"
-                  className="button"
-                  disabled={writesBlocked || row.missing}
-                  title={row.missing ? 'The file is gone; remove the reference instead' : undefined}
-                  onClick={() => onToggle(name, !row.enabled)}
+                  className="datapack-card-main"
+                  onClick={() => onSelect(selectionId)}
+                  aria-label={`${name}, broken`}
                 >
-                  {row.enabled ? 'Disable' : 'Enable'}
+                  <span className="datapack-name">{name}</span>
+                  <span className="datapack-kind">Broken datapack</span>
+                  <span className="datapack-error">{broken.message}</span>
                 </button>
-                {row.enabled ? (
-                  <>
+                {actionable ? (
+                  <span className="datapack-actions">
+                    <button
+                      type="button"
+                      className="button"
+                      disabled={writesBlocked}
+                      aria-label={`Disable ${name}`}
+                      onClick={() => onToggle(name, false)}
+                    >
+                      Disable
+                    </button>
                     <button
                       type="button"
                       className="button"
@@ -177,13 +118,81 @@ export default function DatapackGrid({
                     >
                       ↓
                     </button>
-                  </>
+                  </span>
+                ) : (
+                  <span className="datapack-lock" title={broken.message}>
+                    Error
+                  </span>
+                )}
+              </li>
+            );
+          }
+          const toggleLabel = row.enabled ? 'Disable' : 'Enable';
+          return (
+            <li
+              key={key}
+              className={`datapack-card${selectedFilename === selectionId ? ' is-selected' : ''}${row.locked ? ' is-locked' : ''}`}
+            >
+              <button
+                type="button"
+                className="datapack-card-main"
+                onClick={() => onSelect(selectionId)}
+                aria-label={`${name}${row.enabled ? ', enabled' : ', disabled'}`}
+              >
+                <span className="datapack-name">{name}</span>
+                {row.pack ? (
+                  <span className="datapack-kind">{row.pack.game_label ?? row.pack.kind}</span>
+                ) : row.entry.kind === 'file' ? (
+                  <span className="datapack-kind">File missing from datapacks</span>
                 ) : null}
-              </span>
-            )}
-          </li>
-        );
-      })}
-    </ul>
+                <CompatibilityChip warning={row.warning} />
+              </button>
+              {row.locked ? (
+                <span className="datapack-lock" title="Locked by Minecraft; it cannot move or toggle">
+                  Locked
+                </span>
+              ) : (
+                <span className="datapack-actions">
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={writesBlocked || row.missing}
+                    title={row.missing ? 'The file is gone; remove the reference instead' : undefined}
+                    aria-label={`${toggleLabel} ${name}`}
+                    onClick={() => onToggle(name, !row.enabled)}
+                  >
+                    {toggleLabel}
+                  </button>
+                  {row.enabled ? (
+                    <>
+                      <button
+                        type="button"
+                        className="button"
+                        disabled={writesBlocked || !row.canMoveUp}
+                        title={row.canMoveUp ? undefined : 'Locked entries cannot move'}
+                        aria-label={`Move ${name} up`}
+                        onClick={() => onMove(index, -1)}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="button"
+                        disabled={writesBlocked || !row.canMoveDown}
+                        title={row.canMoveDown ? undefined : 'Locked entries cannot move'}
+                        aria-label={`Move ${name} down`}
+                        onClick={() => onMove(index, 1)}
+                      >
+                        ↓
+                      </button>
+                    </>
+                  ) : null}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }
