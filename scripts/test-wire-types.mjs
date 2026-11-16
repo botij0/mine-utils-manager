@@ -14,23 +14,34 @@ function run(args, expectedStatus = 0) {
   process.stdout.write(output);
   assert.equal(result.error, undefined);
   if (expectedStatus === 0) assert.equal(result.status, 0, args.join(' '));
-  else assert.ok(result.status !== null && result.status !== 0, args.join(' '));
+  else {
+    process.stdout.write(`Mutation tsc exit ${result.status}; first error: ${output.split('\n').find((line) => line.includes('error TS')) ?? 'none'}\n`);
+    assert.ok(result.status !== null && result.status !== 0, args.join(' '));
+  }
   return output;
 }
 
 run(['wire:check']);
 run(['typecheck']);
-try {
-  const renamed = rust.replace('NoActiveGameDir => "no_active_game_dir"', 'NoActiveGameDir => "no_active_game_dir_renamed"');
-  assert.notEqual(renamed, rust);
-  writeFileSync(rustPath, renamed);
-  run(['wire:generate']);
-  const failure = run(['typecheck'], 1);
-  assert.match(failure, /ipc\.mock\.ts.*error TS2345.*no_active_game_dir/);
-  process.stdout.write('PASS: renaming a Rust code rejects the unchanged browser mock\n');
-} finally {
-  writeFileSync(rustPath, rust);
-  writeFileSync(generatedPath, generated);
+for (const [variant, code, expectedError] of [
+  ['NoActiveGameDir', 'no_active_game_dir', /ipc\.mock\.ts.*error TS2345.*no_active_game_dir/],
+  ['DownloadOffline', 'download_offline', /useModrinth\.ts.*error TS2367.*download_offline/],
+  ['GameRunning', 'game_running', /error TS2367.*game_running/],
+  ['StaleStack', 'stale_stack', /error TS2367.*stale_stack/],
+  ['WorldMismatch', 'world_mismatch', /error TS2367.*world_mismatch/],
+]) {
+  try {
+    const renamed = rust.replace(`${variant} => "${code}"`, `${variant} => "${code}_renamed"`);
+    assert.notEqual(renamed, rust);
+    writeFileSync(rustPath, renamed);
+    run(['wire:generate']);
+    const failure = run(['typecheck'], 1);
+    assert.match(failure, expectedError);
+    process.stdout.write(`PASS: renaming ${code} rejects its unchanged consumer\n`);
+  } finally {
+    writeFileSync(rustPath, rust);
+    writeFileSync(generatedPath, generated);
+  }
 }
 try {
   writeFileSync(generatedPath, `${generated}\n// Deliberately stale acceptance probe.\n`);
