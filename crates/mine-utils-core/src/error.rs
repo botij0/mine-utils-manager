@@ -56,26 +56,30 @@ impl AppError {
     }
 
     pub fn code(&self) -> &'static str {
+        self.error_code().as_str()
+    }
+
+    pub fn error_code(&self) -> crate::ErrorCode {
         match self {
-            AppError::Context { error, .. } => error.code(),
-            AppError::Io(_) => "io",
-            AppError::InvalidGameDir { .. } => "invalid_game_dir",
-            AppError::UnknownGameDir { .. } => "unknown_game_dir",
-            AppError::Config { .. } => "config",
-            AppError::NoActiveGameDir => "no_active_game_dir",
-            AppError::Pack(err) => err.code(),
-            AppError::Options(err) => err.code(),
-            AppError::Stack(err) => err.code(),
-            AppError::World { .. } => "world",
-            AppError::LevelDat(err) => err.code(),
-            AppError::DataStack(err) => err.code(),
-            AppError::Modrinth(err) => err.code(),
-            AppError::Download(err) => err.code(),
-            AppError::Provenance(err) => err.code(),
-            AppError::Backup { .. } => "backup",
-            AppError::LevelBackup { .. } => "level_backup",
-            AppError::WorldMismatch => "world_mismatch",
-            AppError::GameRunning { .. } => "game_running",
+            AppError::Context { error, .. } => error.error_code(),
+            AppError::Io(_) => crate::ErrorCode::Io,
+            AppError::InvalidGameDir { .. } => crate::ErrorCode::InvalidGameDir,
+            AppError::UnknownGameDir { .. } => crate::ErrorCode::UnknownGameDir,
+            AppError::Config { .. } => crate::ErrorCode::Config,
+            AppError::NoActiveGameDir => crate::ErrorCode::NoActiveGameDir,
+            AppError::Pack(err) => err.error_code(),
+            AppError::Options(err) => err.error_code(),
+            AppError::Stack(err) => err.error_code(),
+            AppError::World { .. } => crate::ErrorCode::World,
+            AppError::LevelDat(err) => err.error_code(),
+            AppError::DataStack(err) => err.error_code(),
+            AppError::Modrinth(err) => err.error_code(),
+            AppError::Download(err) => err.error_code(),
+            AppError::Provenance(err) => err.error_code(),
+            AppError::Backup { .. } => crate::ErrorCode::Backup,
+            AppError::LevelBackup { .. } => crate::ErrorCode::LevelBackup,
+            AppError::WorldMismatch => crate::ErrorCode::WorldMismatch,
+            AppError::GameRunning { .. } => crate::ErrorCode::GameRunning,
         }
     }
 }
@@ -176,15 +180,17 @@ impl From<crate::provenance::ProvenanceError> for AppError {
 }
 
 #[derive(Serialize)]
-struct AppErrorWire<'a> {
-    code: &'a str,
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
+#[cfg_attr(feature = "wire-types", ts(rename = "AppError"))]
+pub struct AppErrorWire {
+    code: crate::ErrorCode,
     message: String,
 }
 
 impl Serialize for AppError {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         AppErrorWire {
-            code: self.code(),
+            code: self.error_code(),
             message: self.to_string(),
         }
         .serialize(serializer)

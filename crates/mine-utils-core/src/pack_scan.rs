@@ -18,6 +18,7 @@ use crate::pack_source::PackSource;
 pub use crate::pack_source::{MAX_ICON_BYTES, MAX_META_BYTES, MAX_ZIP_ENTRIES};
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct PackListing {
     pub packs: Vec<Pack>,
     pub count: usize,

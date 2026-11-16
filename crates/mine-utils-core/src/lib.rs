@@ -79,3 +79,7 @@ pub use resource_stack::{
     DeleteOutcome, ResourceStack, StackEntry, StackError, StackPaths, StackSnapshot, StackWrite,
 };
 pub use world::{World, WorldIssue, WorldPaths, WorldVersion};
+
+pub mod error_code;
+pub mod wire;
+pub use error_code::ErrorCode;

@@ -22,6 +22,7 @@ const CLIENT_MAIN_CLASSES: &[&str] = &[
 /// How the running client was found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub enum GameRunningKind {
     SessionLock,
     Process,
@@ -29,6 +30,7 @@ pub enum GameRunningKind {
 
 /// Enough detail for the banner to name the lock path or the process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct GameRunning {
     pub kind: GameRunningKind,
     pub detail: String,

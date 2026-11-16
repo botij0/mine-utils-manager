@@ -87,6 +87,7 @@ fn world_of(file_name: &str) -> Option<&str> {
 
 /// One `level.dat` backup as the UI lists it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct LevelBackupInfo {
     pub file_name: String,
     pub world: String,

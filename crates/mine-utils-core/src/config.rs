@@ -10,6 +10,7 @@ pub const CONFIG_SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub enum Theme {
     System,
     Light,
@@ -18,6 +19,7 @@ pub enum Theme {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct BackupsConfig {
     pub enabled: bool,
     pub keep: u32,
@@ -35,6 +37,7 @@ impl Default for BackupsConfig {
 /// The whole persisted state. This is the config file, one to one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct Config {
     pub schema: u32,
     pub game_dirs: Vec<GameDir>,

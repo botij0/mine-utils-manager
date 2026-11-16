@@ -7,6 +7,7 @@ use crate::error::AppError;
 /// Where a game dir came from. The frontend mirrors these names exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub enum DiscoverySource {
     Std,
     Flatpak,
@@ -17,6 +18,7 @@ pub enum DiscoverySource {
 
 /// Identity of a game dir. `path` is canonical so symlinks resolve to one entry.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct GameDir {
     pub path: PathBuf,
     pub source: DiscoverySource,
@@ -24,6 +26,7 @@ pub struct GameDir {
 
 /// A game dir plus its on-disk state at the time of the listing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct GameDirEntry {
     pub path: PathBuf,
     pub source: DiscoverySource,

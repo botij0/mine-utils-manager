@@ -35,9 +35,13 @@ pub enum LevelDatError {
 
 impl LevelDatError {
     pub fn code(&self) -> &'static str {
+        self.error_code().as_str()
+    }
+
+    pub fn error_code(&self) -> crate::ErrorCode {
         match self {
-            LevelDatError::StaleFile => "stale_stack",
-            _ => "level_dat",
+            LevelDatError::StaleFile => crate::ErrorCode::StaleStack,
+            _ => crate::ErrorCode::LevelDat,
         }
     }
 }

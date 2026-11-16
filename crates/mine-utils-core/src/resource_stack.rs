@@ -34,6 +34,8 @@ pub(crate) mod stack_core {
     /// the frontend mirrors this shape in `src/lib/types.ts`.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(tag = "kind", rename_all = "snake_case")]
+    #[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
+    #[cfg_attr(feature = "wire-types", ts(rename = "StackEntry"))]
     pub enum Entry {
         /// The exact `file/<filename>` value plus the filename alone. The
         /// filename is a direct child of the pack folder, never `pack.name`,
@@ -330,9 +332,13 @@ pub enum StackError {
 
 impl StackError {
     pub fn code(&self) -> &'static str {
+        self.error_code().as_str()
+    }
+
+    pub fn error_code(&self) -> crate::ErrorCode {
         match self {
-            StackError::StaleStack => "stale_stack",
-            _ => "resource_stack",
+            StackError::StaleStack => crate::ErrorCode::StaleStack,
+            _ => crate::ErrorCode::ResourceStack,
         }
     }
 }
@@ -341,6 +347,7 @@ pub use stack_core::Entry as StackEntry;
 
 /// The active stack as the app sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct ResourceStack {
     /// Load order, low to high. The UI shows the reverse, so the top card is
     /// the highest priority and loads last.
@@ -358,6 +365,7 @@ pub struct ResourceStack {
 /// What the UI rendered. A mutation that lands on a different file set comes
 /// back as [`StackError::StaleStack`] instead of clobbering the new content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct StackSnapshot {
     pub resource: Vec<String>,
     pub incompatible: Vec<String>,

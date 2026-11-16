@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { toAppError } from '../../lib/ipc';
 import type { IpcClient } from '../../lib/ipc';
-import type { AppError, Config, GameDirEntry } from '../../lib/types';
+import type { ClientError, Config, GameDirEntry } from '../../lib/types';
 import GameDirPicker from './GameDirPicker';
 
 interface GameDirSettingsProps {
@@ -18,7 +18,7 @@ export default function GameDirSettings({
 }: GameDirSettingsProps) {
   const [entries, setEntries] = useState<GameDirEntry[]>([]);
   const [draft, setDraft] = useState('');
-  const [error, setError] = useState<AppError | null>(null);
+  const [error, setError] = useState<ClientError | null>(null);
 
   useEffect(() => {
     client

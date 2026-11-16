@@ -61,15 +61,19 @@ pub enum ModrinthError {
 
 impl ModrinthError {
     pub fn code(&self) -> &'static str {
+        self.error_code().as_str()
+    }
+
+    pub fn error_code(&self) -> crate::ErrorCode {
         match self {
-            ModrinthError::Offline { .. } => "modrinth_offline",
-            ModrinthError::Status { .. } => "modrinth_status",
-            ModrinthError::RetryExhausted { .. } => "modrinth_status",
-            ModrinthError::Redirect { .. } => "modrinth_redirect",
-            ModrinthError::TooManyRedirects { .. } => "modrinth_redirect",
-            ModrinthError::BodyTooLarge { .. } => "modrinth_body",
-            ModrinthError::Parse { .. } => "modrinth_parse",
-            ModrinthError::BadUrl { .. } => "modrinth_url",
+            ModrinthError::Offline { .. } => crate::ErrorCode::ModrinthOffline,
+            ModrinthError::Status { .. } => crate::ErrorCode::ModrinthStatus,
+            ModrinthError::RetryExhausted { .. } => crate::ErrorCode::ModrinthStatus,
+            ModrinthError::Redirect { .. } => crate::ErrorCode::ModrinthRedirect,
+            ModrinthError::TooManyRedirects { .. } => crate::ErrorCode::ModrinthRedirect,
+            ModrinthError::BodyTooLarge { .. } => crate::ErrorCode::ModrinthBody,
+            ModrinthError::Parse { .. } => crate::ErrorCode::ModrinthParse,
+            ModrinthError::BadUrl { .. } => crate::ErrorCode::ModrinthUrl,
         }
     }
 }
@@ -580,6 +584,11 @@ pub fn read_capped(body: Box<dyn Read + Send>, url: &str) -> Result<Vec<u8>, Mod
 
 /// Which Modrinth project type the Discover tab lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "wire-types",
+    ts(rename = "ModrinthKind", rename_all = "lowercase")
+)]
 pub enum SearchKind {
     ResourcePack,
     Datapack,
@@ -587,6 +596,11 @@ pub enum SearchKind {
 
 /// The sort orders the Discover page offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "wire-types",
+    ts(rename = "ModrinthSort", rename_all = "lowercase")
+)]
 pub enum SearchSort {
     Relevance,
     Downloads,
@@ -620,6 +634,8 @@ pub struct SearchQuery {
 
 /// A search hit. Unknown fields are ignored so API additions never break us.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
+#[cfg_attr(feature = "wire-types", ts(rename = "ModrinthSearchHit"))]
 pub struct SearchHit {
     pub project_id: String,
     #[serde(default)]
@@ -651,6 +667,7 @@ struct SearchAnswer {
 
 /// Project metadata for the detail sheet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct ModrinthProject {
     pub id: String,
     #[serde(default)]
@@ -677,6 +694,7 @@ pub struct ModrinthProject {
 
 /// One file inside a version. Only the CDN URL is ever downloaded.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct ModrinthFile {
     #[serde(default)]
     pub url: String,
@@ -691,6 +709,7 @@ pub struct ModrinthFile {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct ModrinthHashes {
     #[serde(default)]
     pub sha512: String,
@@ -700,6 +719,7 @@ pub struct ModrinthHashes {
 
 /// One project version with its game versions and files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct ModrinthVersion {
     pub id: String,
     pub project_id: String,

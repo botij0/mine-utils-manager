@@ -19,6 +19,8 @@ static PROVENANCE_TEMPS: AtomicU64 = AtomicU64::new(0);
 
 /// Where an installed file came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
+#[cfg_attr(feature = "wire-types", ts(rename = "ModrinthProvenanceEntry"))]
 pub struct ProvenanceEntry {
     pub project_id: String,
     pub version_id: String,
@@ -37,9 +39,13 @@ pub enum ProvenanceError {
 
 impl ProvenanceError {
     pub fn code(&self) -> &'static str {
+        self.error_code().as_str()
+    }
+
+    pub fn error_code(&self) -> crate::ErrorCode {
         match self {
-            ProvenanceError::Corrupt { .. } => "provenance_corrupt",
-            ProvenanceError::Io { .. } => "provenance_io",
+            ProvenanceError::Corrupt { .. } => crate::ErrorCode::ProvenanceCorrupt,
+            ProvenanceError::Io { .. } => crate::ErrorCode::ProvenanceIo,
         }
     }
 }

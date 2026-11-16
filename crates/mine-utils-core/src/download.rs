@@ -152,19 +152,23 @@ pub enum DownloadError {
 
 impl DownloadError {
     pub fn code(&self) -> &'static str {
+        self.error_code().as_str()
+    }
+
+    pub fn error_code(&self) -> crate::ErrorCode {
         match self {
-            DownloadError::Cancelled => "download_cancelled",
-            DownloadError::Timeout => "download_timeout",
-            DownloadError::Offline { .. } => "download_offline",
-            DownloadError::Status { .. } => "download_status",
-            DownloadError::BadHost { .. } => "download_host",
-            DownloadError::TooLarge { .. } => "download_too_large",
-            DownloadError::Io { .. } => "download_io",
-            DownloadError::HashMismatch { .. } => "download_hash_mismatch",
-            DownloadError::NotZip { .. } => "download_not_zip",
-            DownloadError::WrongRoot { .. } => "download_wrong_root",
-            DownloadError::BadFilename { .. } => "download_filename",
-            DownloadError::Exists { .. } => "download_exists",
+            DownloadError::Cancelled => crate::ErrorCode::DownloadCancelled,
+            DownloadError::Timeout => crate::ErrorCode::DownloadTimeout,
+            DownloadError::Offline { .. } => crate::ErrorCode::DownloadOffline,
+            DownloadError::Status { .. } => crate::ErrorCode::DownloadStatus,
+            DownloadError::BadHost { .. } => crate::ErrorCode::DownloadHost,
+            DownloadError::TooLarge { .. } => crate::ErrorCode::DownloadTooLarge,
+            DownloadError::Io { .. } => crate::ErrorCode::DownloadIo,
+            DownloadError::HashMismatch { .. } => crate::ErrorCode::DownloadHashMismatch,
+            DownloadError::NotZip { .. } => crate::ErrorCode::DownloadNotZip,
+            DownloadError::WrongRoot { .. } => crate::ErrorCode::DownloadWrongRoot,
+            DownloadError::BadFilename { .. } => crate::ErrorCode::DownloadFilename,
+            DownloadError::Exists { .. } => crate::ErrorCode::DownloadExists,
         }
     }
 }

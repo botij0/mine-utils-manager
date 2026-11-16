@@ -255,3 +255,9 @@ describe('mock install preflight', () => {
     await expect(ipc.installModrinthPack({ projectId: 'demo', versionId: '1', filename: 'offline.zip', kind: 'datapack' })).rejects.toMatchObject({ code: 'modrinth_parse' });
   });
 });
+
+it('preserves unrecognized transport error codes', () => {
+  expect(toAppError({ code: 'plugin_failure', message: 'Plugin failed' })).toMatchObject({
+    code: 'plugin_failure', message: 'Plugin failed', name: 'IpcError',
+  });
+});

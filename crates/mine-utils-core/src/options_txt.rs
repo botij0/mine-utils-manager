@@ -30,7 +30,11 @@ pub enum OptionsError {
 
 impl OptionsError {
     pub fn code(&self) -> &'static str {
-        "options_txt"
+        self.error_code().as_str()
+    }
+
+    pub fn error_code(&self) -> crate::ErrorCode {
+        crate::ErrorCode::OptionsTxt
     }
 }
 
