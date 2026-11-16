@@ -173,7 +173,14 @@ export function useModrinth(
     return () => {
       mounted.current = false;
       selectToken.current += 1;
-      if (installId.current) void client.cancelModrinthInstall(installId.current).catch(() => {});
+      const id = installId.current;
+      if (!id) return;
+      void client
+        .cancelModrinthInstall(id)
+        .then((cancelled) => {
+          if (!cancelled && mounted.current && installId.current === id) setInstallPhase('committing');
+        })
+        .catch(() => {});
     };
   }, [client, gameDir]);
 
