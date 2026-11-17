@@ -270,7 +270,9 @@ impl PackError {
         match self {
             PackError::NonUtf8Name { .. } => crate::ErrorCode::PackNonUtf8Name,
             PackError::UnknownKind { .. } => crate::ErrorCode::PackUnknownKind,
-            PackError::BrokenArchive { .. } | PackError::InvalidHolding { .. } => crate::ErrorCode::PackBrokenArchive,
+            PackError::BrokenArchive { .. } | PackError::InvalidHolding { .. } => {
+                crate::ErrorCode::PackBrokenArchive
+            }
             PackError::MissingMeta { .. } => crate::ErrorCode::PackMissingMeta,
             PackError::Symlink { .. } => crate::ErrorCode::PackSymlink,
             PackError::Duplicate { .. } => crate::ErrorCode::PackDuplicate,

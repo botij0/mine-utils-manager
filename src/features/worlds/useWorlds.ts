@@ -404,11 +404,11 @@ export function useWorlds(
     const request = beginAction();
     try {
       await client.restoreDatapackHolding(world, holdingName);
-      if (isCurrentRequest(world, request)) await refreshListing();
     } catch (err) {
       if (isCurrentRequest(world, request)) setActionError(toAppError(err));
       throw err;
     } finally {
+      if (isCurrentRequest(world, request)) await refreshListing();
       if (isCurrentRequest(world, request)) setBusy(false);
     }
   }, [client, selectedName, beginAction, isCurrentRequest, refreshListing]);

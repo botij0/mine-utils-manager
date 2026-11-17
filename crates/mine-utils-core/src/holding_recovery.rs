@@ -98,7 +98,9 @@ fn restore(
     world: Option<&Path>,
     name: &str,
 ) -> Result<(), AppError> {
-    let invalid = || PackError::InvalidHolding { name: name.to_owned() };
+    let invalid = || PackError::InvalidHolding {
+        name: name.to_owned(),
+    };
     let (holding, pid) = parse(name).ok_or_else(invalid)?;
     if pid == std::process::id() {
         return Err(invalid().into());
@@ -108,7 +110,9 @@ fn restore(
         reject_symlink_folder(world)?;
     }
     let source = folder.join(name);
-    let meta = std::fs::symlink_metadata(&source)?;
+    let destination = folder.join(&holding.original_name);
+    let meta = std::fs::symlink_metadata(&source)
+        .map_err(|err| restore_error(err, &source, &destination))?;
     if meta.file_type().is_symlink() {
         return Err(PackError::Symlink { path: source }.into());
     }
@@ -119,19 +123,35 @@ fn restore(
     if let Some(running) = world.and_then(game_lock::world_locked) {
         return Err(AppError::GameRunning { running });
     }
-    let destination = folder.join(&holding.original_name);
-    crate::fs_commit::strict_no_replace(&source, &destination).map_err(|err| {
-        let message = match err.kind() {
-            std::io::ErrorKind::AlreadyExists => format!(
-                "Could not restore {}. The original name must be free; the holding entry remains at {}",
-                holding.original_name, source.display()
-            ),
-            std::io::ErrorKind::Unsupported => format!(
-                "To restore manually, rename {} by hand to {} without replacing an existing entry",
-                source.display(), destination.display()
-            ),
-            _ => format!("Could not restore the holding entry at {}", source.display()),
-        };
-        AppError::from(err).with_context(message)
-    })
+    crate::fs_commit::strict_no_replace(&source, &destination)
+        .map_err(|err| restore_error(err, &source, &destination))
+}
+
+fn restore_error(err: std::io::Error, source: &Path, destination: &Path) -> AppError {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        return AppError::from(PackError::NotFound {
+            path: source.to_owned(),
+        })
+        .with_context(
+            "The leftover Replace entry is gone. Refresh the listing before trying again"
+                .to_owned(),
+        );
+    }
+    let message = match err.kind() {
+        std::io::ErrorKind::AlreadyExists => format!(
+            "Could not restore {}. The original name must be free; the holding entry remains at {}",
+            destination.display(),
+            source.display()
+        ),
+        std::io::ErrorKind::Unsupported => format!(
+            "To restore manually, rename {} by hand to {} without replacing an existing entry",
+            source.display(),
+            destination.display()
+        ),
+        _ => format!(
+            "Could not restore the holding entry at {}",
+            source.display()
+        ),
+    };
+    AppError::from(err).with_context(message)
 }

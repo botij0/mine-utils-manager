@@ -179,8 +179,8 @@ export function usePacks(
     setBusy(true);
     try {
       await client.restoreResourceHolding(holdingName);
-      await Promise.all([reload(), refreshStack()]);
     } finally {
+      await Promise.all([reload(), refreshStack()]);
       if (mounted.current) setBusy(false);
     }
   }, [client, reload, refreshStack]);

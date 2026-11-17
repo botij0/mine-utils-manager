@@ -228,10 +228,16 @@ mod tests {
             if occupied {
                 std::fs::write(&dest, b"installed bytes").unwrap();
             }
-            assert_eq!(strict_no_replace(&source, &dest).unwrap_err().kind(), ErrorKind::Unsupported);
+            assert_eq!(
+                strict_no_replace(&source, &dest).unwrap_err().kind(),
+                ErrorKind::Unsupported
+            );
             assert_eq!(std::fs::read(&source).unwrap(), b"held bytes");
             if occupied {
-                assert_eq!(atomic_no_replace(&source, &dest).unwrap_err().kind(), ErrorKind::AlreadyExists);
+                assert_eq!(
+                    atomic_no_replace(&source, &dest).unwrap_err().kind(),
+                    ErrorKind::AlreadyExists
+                );
                 assert_eq!(std::fs::read(&dest).unwrap(), b"installed bytes");
             } else {
                 assert!(!dest.exists());
