@@ -364,22 +364,71 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn folder_open_refuses_a_swapped_fifo_without_blocking() {
+    fn swap_for_fifo(path: &Path) {
         use std::os::unix::ffi::OsStrExt;
-        let root = tempfile::tempdir().unwrap();
-        let target = root.path().join("pack.mcmeta");
-        let c_path = std::ffi::CString::new(target.as_os_str().as_bytes()).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+    }
+
+    #[cfg(unix)]
+    fn swap_for_symlink(path: &Path) {
+        let outside = path.with_file_name("outside");
+        std::fs::write(&outside, b"outside").unwrap();
+        std::fs::remove_file(path).unwrap();
+        std::os::unix::fs::symlink(&outside, path).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn within_a_deadline<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(open_regular(&target).is_err());
+            let _ = tx.send(work());
         });
-        assert_eq!(
-            rx.recv_timeout(std::time::Duration::from_secs(2)),
-            Ok(true),
-            "opening a FIFO must fail instead of blocking"
-        );
+        rx.recv_timeout(std::time::Duration::from_secs(2))
+            .expect("a swapped-in entry must not block the read")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_read_skips_an_entry_swapped_after_the_check() {
+        for swap in [swap_for_fifo as fn(&Path), swap_for_symlink] {
+            let root = tempfile::tempdir().unwrap();
+            let pack = root.path().join("Pack");
+            std::fs::create_dir(&pack).unwrap();
+            std::fs::write(pack.join("pack.mcmeta"), b"{}").unwrap();
+            let read = within_a_deadline(move || {
+                crate::read_capped::swap_before_next_open(swap);
+                let source = PackSource::new(&pack, PackLocation::Directory).unwrap();
+                source.read_capped("pack.mcmeta", MAX_META_BYTES, &mut 0)
+            });
+            assert_eq!(read.unwrap(), None);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_digest_refuses_an_entry_swapped_after_the_listing() {
+        let root = tempfile::tempdir().unwrap();
+        let pack = root.path().join("Pack");
+        std::fs::create_dir(&pack).unwrap();
+        std::fs::write(pack.join("pack.mcmeta"), b"{}").unwrap();
+        let digest = within_a_deadline(move || {
+            crate::read_capped::swap_before_next_open(swap_for_fifo);
+            crate::HashCache::new().hash(&pack, PackLocation::Directory)
+        });
+        let err = digest.unwrap_err();
+        assert_eq!(err.code(), "io");
+        assert_eq!(err.to_string(), "io error: not a regular file");
+    }
+
+    #[test]
+    fn a_folder_with_a_directory_where_metadata_belongs_skips_it() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("pack.mcmeta")).unwrap();
+        let source = PackSource::new(root.path(), PackLocation::Directory).unwrap();
+        let read = source.read_capped("pack.mcmeta", MAX_META_BYTES, &mut 0);
+        assert_eq!(read.unwrap(), None);
     }
 
     #[test]

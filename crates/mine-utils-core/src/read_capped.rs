@@ -21,6 +21,8 @@ pub(crate) fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
 }
 
 pub(crate) fn open_regular(path: &Path) -> io::Result<std::fs::File> {
+    #[cfg(test)]
+    before_open(path);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -46,6 +48,26 @@ pub(crate) fn open_regular(path: &Path) -> io::Result<std::fs::File> {
     #[cfg(not(unix))]
     {
         std::fs::File::open(path)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_OPEN: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `hook` once, on this thread, right before the next `open_regular`
+/// opens its path, so a test can replace the entry after any earlier check.
+#[cfg(test)]
+pub(crate) fn swap_before_next_open(hook: impl FnOnce(&Path) + 'static) {
+    BEFORE_OPEN.set(Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn before_open(path: &Path) {
+    if let Some(hook) = BEFORE_OPEN.take() {
+        hook(path);
     }
 }
 
