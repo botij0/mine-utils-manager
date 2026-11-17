@@ -750,6 +750,44 @@ describe('App', () => {
     });
     expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
   });
+  it('blocks Packs and Worlds writes with the checking reason until the first guard answer lands', async () => {
+    const user = userEvent.setup();
+    const client = await shellClient();
+    client.getResourceStack = async () => stackResponse(null);
+    client.listWorlds = async () => [world()];
+    client.listDatapacks = async () => ({
+      packs: { packs: [datapack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
+      stack: stack(),
+    });
+    const calls = holdGuardCalls(client);
+    render(<App client={client} />);
+
+    const list = await screen.findByRole('list', { name: 'Stack order' });
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: 'Import pack' })).toBeDisabled();
+    expect(within(list).getByRole('checkbox')).toBeDisabled();
+    expect(screen.getByText(/^Checking whether Minecraft is running/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Worlds' }));
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    expect(screen.getByRole('button', { name: 'Import zip' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
+    expect(within(grid).getByRole('button', { name: /^Disable( |$)/ })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent(/^Checking whether Minecraft is running/);
+
+    await act(async () => {
+      for (const call of calls) call.answer(null);
+    });
+    expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Import folder' })).toBeEnabled();
+    expect(within(grid).getByRole('button', { name: /^Disable( |$)/ })).toBeEnabled();
+    expect(screen.queryByText(/^Checking whether Minecraft is running/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+    expect(screen.getByRole('button', { name: 'Import pack' })).toBeEnabled();
+    expect(within(list).getByRole('checkbox')).toBeEnabled();
+  });
+
   it('shows unknown one window after a hidden folder switch finds a timed-out check still hung', async () => {
     vi.useFakeTimers({
       toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
