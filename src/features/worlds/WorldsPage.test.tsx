@@ -639,3 +639,23 @@ it('restores an interrupted datapack Replace in the selected world', async () =>
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore Recovered.zip' })).not.toBeInTheDocument());
   expect(await screen.findByRole('button', { name: 'Enable Recovered.zip' })).toBeInTheDocument();
 });
+
+it.each(['pack_not_found', 'io', 'pack_symlink'] as const)('reloads datapacks after Restore fails with %s', async (code) => {
+  let attempted = false;
+  const client = pageClient({
+    listDatapacks: async () => ({
+      packs: { packs: attempted ? [datapack('Recovered.zip')] : [], count: attempted ? 1 : 0, bytes_read: 0, elapsed_ms: 0,
+        holding_entries: attempted ? [] : [{ holdingName: '.mine-utils-replace-Recovered.zip.42-123-0.tmp', originalName: 'Recovered.zip' }] },
+      stack: stack(),
+    }),
+    restoreDatapackHolding: async () => {
+      attempted = true;
+      throw new IpcError(code, 'The leftover Replace entry is gone at /datapacks/holding');
+    },
+  });
+  render(<WorldsPage client={client} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Restore Recovered.zip' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('The leftover Replace entry is gone at /datapacks/holding');
+  expect(await screen.findByRole('button', { name: 'Enable Recovered.zip' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Restore Recovered.zip' })).not.toBeInTheDocument();
+});

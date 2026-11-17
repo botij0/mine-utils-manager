@@ -768,3 +768,23 @@ it('restores an interrupted Replace and refreshes the pack listing', async () =>
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore Vanilla.zip' })).not.toBeInTheDocument());
   expect(await screen.findByText('Vanilla')).toBeInTheDocument();
 });
+
+it.each(['pack_not_found', 'io', 'pack_symlink'] as const)('reloads after Restore fails with %s', async (code) => {
+  const client = makeFakeClient();
+  let attempted = false;
+  const listing = await client.listResourcePacks();
+  client.listResourcePacks = async () => ({
+    ...listing,
+    packs: attempted ? [VANILLA_PACK] : [],
+    holding_entries: attempted ? [] : [{ holdingName: '.mine-utils-replace-Vanilla.zip.42-123-0.tmp', originalName: 'Vanilla.zip' }],
+  });
+  client.restoreResourceHolding = async () => {
+    attempted = true;
+    throw new IpcError(code, 'The leftover Replace entry is gone at /resourcepacks/holding');
+  };
+  renderPage(client);
+  await userEvent.click(await screen.findByRole('button', { name: 'Restore Vanilla.zip' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('The leftover Replace entry is gone at /resourcepacks/holding');
+  expect(await screen.findByText('Vanilla')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Restore Vanilla.zip' })).not.toBeInTheDocument();
+});

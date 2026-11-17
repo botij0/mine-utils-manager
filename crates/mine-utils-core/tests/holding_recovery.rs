@@ -238,3 +238,34 @@ fn restore_permission_denied_names_the_holding_without_collision_advice() {
     assert!(!message.contains("must be free"), "{message}");
     assert_eq!(std::fs::read(folder.join(HOLDING)).unwrap(), b"old pack");
 }
+
+#[test]
+fn vanished_holdings_and_pack_folders_report_the_named_entry_is_gone() {
+    for datapack in [false, true] {
+        for remove_folder in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let folder = root.path().join(if datapack { "saves/World/datapacks" } else { "resourcepacks" });
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join(HOLDING), b"old pack").unwrap();
+            let listing = if datapack {
+                data_stack::scan_datapacks(&folder, &IconCache::new(root.path())).unwrap()
+            } else {
+                scan_packs(&folder, &IconCache::new(root.path())).unwrap()
+            };
+            assert_eq!(listing.holding_entries[0].original_name, "My.pack.zip");
+            std::fs::remove_file(folder.join(HOLDING)).unwrap();
+            if remove_folder { std::fs::remove_dir(&folder).unwrap(); }
+            let result = if datapack {
+                let world = mine_utils_core::WorldPaths::for_world(root.path(), "World").unwrap();
+                let paths = mine_utils_core::DataPaths::for_world(&world, root.path(), Default::default());
+                mine_utils_core::holding_recovery::restore_datapack_holding(&paths, HOLDING)
+            } else {
+                mine_utils_core::holding_recovery::restore_resource_holding(&paths(root.path()), HOLDING)
+            };
+            let err = result.unwrap_err();
+            assert_eq!(err.code(), "pack_not_found");
+            assert!(err.to_string().contains("entry is gone"), "{err}");
+            assert!(err.to_string().contains(HOLDING), "{err}");
+        }
+    }
+}
