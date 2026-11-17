@@ -657,3 +657,26 @@ fn total_deadline_does_not_wait_for_blocked_response_headers() {
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
+
+#[test]
+fn dropping_download_keeps_a_foreign_file_at_the_temp_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let bytes = zip_bytes(&[("assets/a", b"asset")]);
+    let (client, _) = client_for(bytes.clone());
+    let verified = download_verified(
+        &client,
+        CDN_URL,
+        dir.path(),
+        "pack.zip",
+        &sha512_hex(&bytes),
+        ZipRoot::Assets,
+    )
+    .unwrap();
+    let temp = verified.temp_path.clone();
+    let original = dir.path().join("moved");
+    std::fs::rename(&temp, &original).unwrap();
+    std::fs::write(&temp, b"unrelated sentinel").unwrap();
+    drop(verified);
+    assert_eq!(std::fs::read(temp).unwrap(), b"unrelated sentinel");
+    assert_eq!(std::fs::read(original).unwrap(), bytes);
+}

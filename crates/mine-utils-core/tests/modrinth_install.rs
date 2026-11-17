@@ -2164,3 +2164,80 @@ fn finish_with_fifo_parent_returns_without_blocking() {
         Ok("io".to_string())
     );
 }
+
+#[test]
+fn finish_preserves_foreign_temp_after_directory_or_file_swap() {
+    for swap in ["parent", "temp"] {
+        let fx = fixture();
+        let bytes = resource_zip();
+        let (client, api) = client(
+            MockApi::new()
+                .with(
+                    &versions_url(),
+                    versions_json(
+                        RESOURCE_URL,
+                        RESOURCE_FILE,
+                        &sha512_hex(&bytes),
+                        &[WORLD_VERSION],
+                    ),
+                )
+                .with(RESOURCE_URL, bytes.clone()),
+        );
+        let prepared = prepare_modrinth_install(
+            &client,
+            &fx.game_dir,
+            None,
+            PROJECT,
+            VERSION,
+            RESOURCE_FILE,
+            "resourcepack",
+        )
+        .unwrap();
+        let packs = fx.game_dir.join("resourcepacks");
+        let temp = std::fs::read_dir(&packs)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let moved = fx._dir.path().join("moved");
+        let original = if swap == "parent" {
+            std::fs::rename(&packs, &moved).unwrap();
+            std::fs::create_dir(&packs).unwrap();
+            moved.join(temp.file_name().unwrap())
+        } else {
+            std::fs::rename(&temp, &moved).unwrap();
+            moved
+        };
+        std::fs::write(&temp, b"unrelated sentinel").unwrap();
+        let result = finish_modrinth_install(
+            prepared,
+            &fx.stack_paths,
+            None,
+            &fx.data_dir,
+            &fx.icons,
+            &fx.hashes,
+        );
+        println!(
+            "{swap} swap: result={result:?}; sentinel={:?}",
+            std::fs::read(&temp)
+        );
+        assert_eq!(
+            std::fs::read(&temp).unwrap(),
+            b"unrelated sentinel",
+            "{swap}"
+        );
+        assert!(!packs.join(RESOURCE_FILE).exists(), "{swap}");
+        assert_eq!(std::fs::read(original).unwrap(), bytes, "{swap}");
+        assert_eq!(result.unwrap_err().code(), "download_io", "{swap}");
+        assert_eq!(
+            api.calls(),
+            vec![versions_url(), RESOURCE_URL.to_string()],
+            "{swap}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fx.game_dir.join("options.txt")).unwrap(),
+            "version:4707\nresourcePacks:[]\n"
+        );
+    }
+}
