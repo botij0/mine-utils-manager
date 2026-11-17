@@ -1961,3 +1961,50 @@ fn special_target_entries_collide_without_cdn() {
         assert_eq!(api.cdn_calls().len(), 0, "{kind}: {:?}", api.calls());
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn resourcepacks_link_swapped_after_prepare_refuses_finish() {
+    let fx = fixture();
+    let bytes = resource_zip();
+    let (client, _) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    RESOURCE_URL,
+                    RESOURCE_FILE,
+                    &sha512_hex(&bytes),
+                    &[WORLD_VERSION],
+                ),
+            )
+            .with(RESOURCE_URL, bytes),
+    );
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .unwrap();
+    let packs = fx.game_dir.join("resourcepacks");
+    let moved = fx._dir.path().join("moved");
+    std::fs::rename(&packs, &moved).unwrap();
+    let outside = fx._dir.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, &packs).unwrap();
+    let error = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        None,
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "pack_symlink");
+    assert_eq!(std::fs::read_dir(outside).unwrap().count(), 0);
+}
