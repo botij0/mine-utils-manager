@@ -634,7 +634,7 @@ it('restores an interrupted datapack Replace in the selected world', async () =>
       restored = true;
     },
   });
-  render(<WorldsPage client={client} />);
+  render(<WorldsPage client={client} gameRunning={null} />);
   await userEvent.click(await screen.findByRole('button', { name: 'Restore Recovered.zip' }));
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore Recovered.zip' })).not.toBeInTheDocument());
   expect(await screen.findByRole('button', { name: 'Enable Recovered.zip' })).toBeInTheDocument();
@@ -653,7 +653,7 @@ it.each(['pack_not_found', 'io', 'pack_symlink'] as const)('reloads datapacks af
       throw new IpcError(code, 'The leftover Replace entry is gone at /datapacks/holding');
     },
   });
-  render(<WorldsPage client={client} />);
+  render(<WorldsPage client={client} gameRunning={null} />);
   await userEvent.click(await screen.findByRole('button', { name: 'Restore Recovered.zip' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('The leftover Replace entry is gone at /datapacks/holding');
   expect(await screen.findByRole('button', { name: 'Enable Recovered.zip' })).toBeInTheDocument();

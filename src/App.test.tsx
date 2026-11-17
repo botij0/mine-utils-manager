@@ -757,7 +757,7 @@ describe('App', () => {
     client.getResourceStack = async () => stackResponse(null);
     client.listWorlds = async () => [world()];
     client.listDatapacks = async () => ({
-      packs: { packs: [datapack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
+      packs: { packs: [datapack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1, holding_entries: [] },
       stack: stack(),
     });
     const calls = holdGuardCalls(client);
