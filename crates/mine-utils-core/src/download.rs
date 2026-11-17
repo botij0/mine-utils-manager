@@ -270,7 +270,7 @@ impl ZipRoot {
 
 /// A verified temp file inside the target directory. Commit it with
 /// [`VerifiedDownload::commit`] (or [`commit_verified`]); dropping it
-/// without committing removes the temp while its parent directory is unchanged.
+/// without committing removes the temp while its file and parent identities match.
 /// A moved parent can leave a `.tmp` behind; pack scans skip these files.
 #[derive(Debug)]
 pub struct VerifiedDownload {
@@ -281,14 +281,13 @@ pub struct VerifiedDownload {
     /// Bytes written.
     pub bytes: u64,
     committed: bool,
-    temp_file: std::fs::File,
-    parent: same_file::Handle,
+    identity: DownloadFileIdentity,
 }
 
 impl Drop for VerifiedDownload {
     fn drop(&mut self) {
         if !self.committed {
-            remove_file_in_parent(&self.temp_path, &self.parent);
+            self.identity.remove(&self.temp_path);
         }
     }
 }
@@ -309,12 +308,36 @@ pub(crate) fn directory_handle(path: &Path) -> std::io::Result<same_file::Handle
     }
 }
 
-pub(crate) fn remove_file_in_parent(path: &Path, parent: &same_file::Handle) {
-    let Some(dir) = path.parent() else { return };
-    if std::fs::symlink_metadata(dir).is_ok_and(|entry| entry.is_dir())
-        && directory_handle(dir).is_ok_and(|current| current == *parent)
-    {
-        let _ = std::fs::remove_file(path);
+#[derive(Debug)]
+pub(crate) struct DownloadFileIdentity {
+    parent: same_file::Handle,
+    file: same_file::Handle,
+}
+
+impl DownloadFileIdentity {
+    fn matches(&self, path: &Path) -> bool {
+        let Some(dir) = path.parent() else {
+            return false;
+        };
+        std::fs::symlink_metadata(dir).is_ok_and(|entry| entry.is_dir())
+            && directory_handle(dir).is_ok_and(|current| current == self.parent)
+            && std::fs::symlink_metadata(path).is_ok_and(|entry| entry.is_file())
+            && crate::read_capped::open_regular(path)
+                .and_then(same_file::Handle::from_file)
+                .is_ok_and(|current| current == self.file)
+    }
+
+    pub(crate) fn remove(&self, path: &Path) {
+        if self.matches(path) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    fn try_clone(&self) -> std::io::Result<Self> {
+        Ok(Self {
+            parent: same_file::Handle::from_file(self.parent.as_file().try_clone()?)?,
+            file: same_file::Handle::from_file(self.file.as_file().try_clone()?)?,
+        })
     }
 }
 
@@ -322,10 +345,29 @@ impl VerifiedDownload {
     /// Atomically move the verified temp to `target_dir/filename` without
     /// replacing an existing file. Marks the download committed so `Drop`
     /// no longer deletes it.
-    pub fn commit(mut self, target_dir: &Path, filename: &str) -> Result<PathBuf, DownloadError> {
+    pub fn commit(self, target_dir: &Path, filename: &str) -> Result<PathBuf, DownloadError> {
+        self.commit_with_identity(target_dir, filename)
+            .map(|(dest, _)| dest)
+    }
+
+    pub(crate) fn commit_with_identity(
+        mut self,
+        target_dir: &Path,
+        filename: &str,
+    ) -> Result<(PathBuf, DownloadFileIdentity), DownloadError> {
+        if !self.identity.matches(&self.temp_path)
+            || !directory_handle(target_dir).is_ok_and(|current| current == self.identity.parent)
+        {
+            return Err(DownloadError::Io {
+                reason: "download file or target directory changed since preparation".to_string(),
+            });
+        }
+        let identity = self.identity.try_clone().map_err(|err| DownloadError::Io {
+            reason: format!("cannot retain download identity: {err}"),
+        })?;
         let dest = commit_path(&self.temp_path, target_dir, filename)?;
         self.committed = true;
-        Ok(dest)
+        Ok((dest, identity))
     }
 }
 
@@ -574,11 +616,15 @@ pub fn download_verified_controlled<T: Transport + 'static>(
         sha256: String::new(),
         bytes: 0,
         committed: false,
-        temp_file,
-        parent,
+        identity: DownloadFileIdentity {
+            file: same_file::Handle::from_file(temp_file).map_err(|err| DownloadError::Io {
+                reason: format!("cannot identify download temp: {err}"),
+            })?,
+            parent,
+        },
     };
     #[cfg(unix)]
-    if let Err(err) = lock_download_temp(&verified.temp_file, libc::LOCK_EX) {
+    if let Err(err) = lock_download_temp(verified.identity.file.as_file(), libc::LOCK_EX) {
         if err.raw_os_error().is_some_and(|code| {
             [
                 libc::EOPNOTSUPP,
@@ -603,7 +649,7 @@ pub fn download_verified_controlled<T: Transport + 'static>(
         client,
         url,
         &verified.temp_path,
-        &mut verified.temp_file,
+        verified.identity.file.as_file_mut(),
         expected_sha512,
         root,
         max_bytes,
@@ -860,6 +906,64 @@ mod tests {
             ("all bits set", u32::MAX),
         ] {
             assert!(!is_local_linux_filesystem(fs_type), "{name}: {fs_type:#x}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn rollback_removes_only_the_committed_download() {
+        for swap in ["none", "file", "parent"] {
+            let root = tempfile::tempdir().unwrap();
+            let target = root.path().join("resourcepacks");
+            std::fs::create_dir(&target).unwrap();
+            let temp_path = target.join(".pack.tmp");
+            let file = std::fs::File::create(&temp_path).unwrap();
+            (&file).write_all(b"downloaded bytes").unwrap();
+            let verified = VerifiedDownload {
+                temp_path,
+                sha256: String::new(),
+                bytes: 16,
+                committed: false,
+                identity: DownloadFileIdentity {
+                    parent: directory_handle(&target).unwrap(),
+                    file: same_file::Handle::from_file(file).unwrap(),
+                },
+            };
+            let (dest, identity) = verified.commit_with_identity(&target, "pack.zip").unwrap();
+            let moved = root.path().join("moved");
+            let original = match swap {
+                "file" => {
+                    std::fs::rename(&dest, &moved).unwrap();
+                    std::fs::write(&dest, b"unrelated sentinel").unwrap();
+                    moved
+                }
+                "parent" => {
+                    std::fs::rename(&target, &moved).unwrap();
+                    std::fs::create_dir(&target).unwrap();
+                    std::fs::write(&dest, b"unrelated sentinel").unwrap();
+                    moved.join("pack.zip")
+                }
+                _ => dest.clone(),
+            };
+            identity.remove(&dest);
+            if swap == "none" {
+                assert!(!dest.exists());
+            } else {
+                assert_eq!(
+                    std::fs::read(dest).unwrap(),
+                    b"unrelated sentinel",
+                    "{swap}"
+                );
+                assert_eq!(
+                    std::fs::read(original).unwrap(),
+                    b"downloaded bytes",
+                    "{swap}"
+                );
+            }
         }
     }
 }

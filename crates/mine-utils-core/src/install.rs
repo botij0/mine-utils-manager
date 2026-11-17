@@ -407,9 +407,9 @@ pub fn finish_modrinth_install(
         SearchKind::ResourcePack => {
             game_lock::ensure_writable(stack_paths.game_dir())?;
             reject_resourcepacks_link(&prepared.target_dir)?;
-            let parent = download::directory_handle(&prepared.target_dir)?;
-            let (dest, sha256, fresh) = match commit_source(prepared)? {
-                Committed::Ready(dest, sha256, fresh) => (dest, sha256, fresh),
+            download::directory_handle(&prepared.target_dir)?;
+            let (dest, sha256, identity) = match commit_source(prepared)? {
+                Committed::Ready(dest, sha256, identity) => (dest, sha256, identity),
                 Committed::Collision { name } => {
                     return Ok(CoreInstallOutcome::ResourcePack {
                         outcome: ImportOutcome::Collision { name },
@@ -429,11 +429,8 @@ pub fn finish_modrinth_install(
                     outcome => outcome,
                 },
                 Err(err) => {
-                    // A fresh commit that fails validation must not linger as
-                    // a stray file with no provenance. An `Existing` file is
-                    // never removed: it predates this install.
-                    if fresh {
-                        download::remove_file_in_parent(&dest, &parent);
+                    if let Some(identity) = identity {
+                        identity.remove(&dest);
                     }
                     return Err(err);
                 }
@@ -455,9 +452,9 @@ pub fn finish_modrinth_install(
             let paths = data_paths.ok_or_else(|| AppError::World {
                 reason: "a datapack install needs a target world".to_string(),
             })?;
-            let parent = download::directory_handle(&prepared.target_dir)?;
-            let (dest, sha256, fresh) = match commit_source(prepared)? {
-                Committed::Ready(dest, sha256, fresh) => (dest, sha256, fresh),
+            download::directory_handle(&prepared.target_dir)?;
+            let (dest, sha256, identity) = match commit_source(prepared)? {
+                Committed::Ready(dest, sha256, identity) => (dest, sha256, identity),
                 Committed::Collision { name } => {
                     return Ok(CoreInstallOutcome::Datapack {
                         outcome: DatapackImportOutcome::Collision { name },
@@ -476,8 +473,8 @@ pub fn finish_modrinth_install(
                     outcome => outcome,
                 },
                 Err(err) => {
-                    if fresh {
-                        download::remove_file_in_parent(&dest, &parent);
+                    if let Some(identity) = identity {
+                        identity.remove(&dest);
                     }
                     return Err(err);
                 }
@@ -503,12 +500,12 @@ pub fn finish_modrinth_install(
 /// collision. An `Existing` dest is re-hashed immediately before reuse: if
 /// the bytes changed between prepare and finish, the install fails instead
 /// of recording provenance for the wrong bytes. Returns the final path, its
-/// SHA-256, whether the commit was fresh this run, or the collision.
+/// SHA-256, ownership of a fresh commit, or the collision.
 /// A second filename with identical bytes is an intentional second copy under
 /// the API filename (not a `Duplicate`): the picker installs by filename and
 /// the import path treats a direct child as the pack itself.
 enum Committed {
-    Ready(PathBuf, String, bool),
+    Ready(PathBuf, String, Option<download::DownloadFileIdentity>),
     Collision { name: String },
 }
 
@@ -533,18 +530,18 @@ fn commit_source(prepared: PreparedInstall) -> Result<Committed, AppError> {
                     actual: current.sha512,
                 }));
             }
-            Ok(Committed::Ready(dest, sha256, false))
+            Ok(Committed::Ready(dest, sha256, None))
         }
         PreparedSource::Downloaded(verified) => {
             let sha256 = verified.sha256.clone();
-            match verified.commit(&target_dir, &filename) {
-                Ok(dest) => Ok(Committed::Ready(dest, sha256, true)),
+            match verified.commit_with_identity(&target_dir, &filename) {
+                Ok((dest, identity)) => Ok(Committed::Ready(dest, sha256, Some(identity))),
                 Err(DownloadError::Exists { .. }) => {
                     // Lost a race: reuse identical bytes, else collide. The
                     // temp was cleaned up by `Drop` on the failed commit.
                     let dest = target_dir.join(&filename);
                     if hash_file_bounded(&dest)?.is_some_and(|hashes| hashes.sha256 == sha256) {
-                        Ok(Committed::Ready(dest, sha256, false))
+                        Ok(Committed::Ready(dest, sha256, None))
                     } else {
                         Ok(Committed::Collision { name: filename })
                     }
