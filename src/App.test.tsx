@@ -83,7 +83,7 @@ describe('App', () => {
     render(<App client={client} />);
     expect(await screen.findByText(/Minecraft process detection is unavailable/)).toHaveTextContent('writes are allowed');
     const list = await screen.findByRole('list', { name: 'Stack order' });
-    expect(within(list).getByRole('button', { name: 'Remove' })).toBeEnabled();
+    expect(within(list).getByRole('button', { name: 'Remove Alpha.zip' })).toBeEnabled();
   });
 
   it('shows the startup warning and the shell', async () => {
@@ -124,7 +124,7 @@ describe('App', () => {
 
     const list = await screen.findByRole('list', { name: 'Stack order' });
     expect(await screen.findByText('Minecraft is running.')).toBeInTheDocument();
-    expect(within(list).getByRole('button', { name: 'Remove' })).toBeDisabled();
+    expect(within(list).getByRole('button', { name: /^Remove / })).toBeDisabled();
 
     fail = true;
     await act(async () => {
@@ -133,7 +133,7 @@ describe('App', () => {
 
     expect(screen.getByText('Minecraft is running.')).toBeInTheDocument();
     expect(screen.getByText(/pid 4242 runs java/)).toBeInTheDocument();
-    expect(within(list).getByRole('button', { name: 'Remove' })).toBeDisabled();
+    expect(within(list).getByRole('button', { name: /^Remove / })).toBeDisabled();
   });
 
   it('shows the unavailable banner when the first guard check fails', async () => {
@@ -196,8 +196,8 @@ describe('App', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Worlds' }));
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
-    expect(within(grid).getByRole('button', { name: 'Disable' })).toBeEnabled();
-    expect(within(grid).getByRole('button', { name: 'Enable' })).toBeEnabled();
+    expect(within(grid).getByRole('button', { name: /^Disable( |$)/ })).toBeEnabled();
+    expect(within(grid).getByRole('button', { name: /^Enable( |$)/ })).toBeEnabled();
 
     await user.click(screen.getByRole('button', { name: 'Settings' }));
     const restore = await screen.findByRole('button', { name: 'Restore' });
@@ -235,7 +235,7 @@ describe('App', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
     await waitFor(() => expect(checkedDirs).toEqual(['/home/demo/.minecraft']));
-    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(await screen.findByRole('button', { name: /^Use / }));
 
     await waitFor(() =>
       expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/prism']),
@@ -266,7 +266,7 @@ describe('App', () => {
     render(<App client={client} />);
 
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
-    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(await screen.findByRole('button', { name: /^Use / }));
     expect(
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
     ).toBeInTheDocument();
@@ -297,7 +297,7 @@ describe('App', () => {
     render(<App client={client} />);
 
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
-    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(await screen.findByRole('button', { name: /^Use / }));
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
     const list = await screen.findByRole('list', { name: 'Stack order' });
 
@@ -306,7 +306,7 @@ describe('App', () => {
       'status',
     );
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(within(list).getByRole('button', { name: 'Remove' })).toBeDisabled();
+    expect(within(list).getByRole('button', { name: /^Remove / })).toBeDisabled();
 
     await user.click(screen.getByRole('button', { name: 'Discover' }));
     expect(screen.getByRole('status')).toHaveTextContent(/^Checking whether Minecraft is running/);
@@ -319,7 +319,7 @@ describe('App', () => {
     expect(screen.queryByText(/^Checking whether Minecraft is running/)).not.toBeInTheDocument();
     expect(
       within(await screen.findByRole('list', { name: 'Stack order' })).getByRole('button', {
-        name: 'Remove',
+        name: /^Remove /,
       }),
     ).toBeEnabled();
   });
@@ -342,13 +342,13 @@ describe('App', () => {
     render(<App client={client} />);
 
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
-    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(await screen.findByRole('button', { name: /^Use / }));
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
     const list = await screen.findByRole('list', { name: 'Stack order' });
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Game guard unavailable.');
     expect(screen.queryByText(/^Checking whether Minecraft is running/)).not.toBeInTheDocument();
-    expect(within(list).getByRole('button', { name: 'Remove' })).toBeDisabled();
+    expect(within(list).getByRole('button', { name: /^Remove / })).toBeDisabled();
   });
 
   it('pauses writes when the folder changes while the window is hidden', async () => {
@@ -379,7 +379,7 @@ describe('App', () => {
     await act(async () => {
       setDocumentHidden(true);
     });
-    await user.click(screen.getByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: /^Use / }));
     expect(
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
     ).toBeInTheDocument();
@@ -421,7 +421,7 @@ describe('App', () => {
     };
     render(<App client={client} />);
     const list = await screen.findByRole('list', { name: 'Stack order' });
-    const remove = within(list).getByRole('button', { name: 'Remove' });
+    const remove = within(list).getByRole('button', { name: /^Remove / });
     await waitFor(() => expect(remove).toBeEnabled());
 
     await act(async () => {
@@ -483,7 +483,7 @@ describe('App', () => {
     };
     render(<App client={client} />);
     const list = await screen.findByRole('list', { name: 'Stack order' });
-    const remove = within(list).getByRole('button', { name: 'Remove' });
+    const remove = within(list).getByRole('button', { name: /^Remove / });
     await waitFor(() => expect(remove).toBeEnabled());
 
     await act(async () => {
@@ -537,7 +537,7 @@ describe('App', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled());
-    await user.click(screen.getByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: /^Use / }));
     await waitFor(() =>
       expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/prism']),
     );
@@ -601,7 +601,7 @@ describe('App', () => {
     );
     expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/.minecraft']);
 
-    await user.click(screen.getByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: /^Use / }));
     expect(
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
     ).toBeInTheDocument();
@@ -721,7 +721,7 @@ describe('App', () => {
       await user.click(screen.getByRole('button', { name: 'Settings' }));
       await screen.findByRole('button', { name: 'Restore' });
     }
-    await user.click(screen.getByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: /^Use / }));
     expect(
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
     ).toBeInTheDocument();
@@ -779,7 +779,7 @@ describe('App', () => {
     await act(async () => {
       setDocumentHidden(true);
     });
-    await user.click(screen.getByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: /^Use / }));
     expect(
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
     ).toBeInTheDocument();
@@ -812,11 +812,11 @@ describe('App', () => {
     render(<App client={client} />);
 
     await screen.findByRole('button', { name: 'Restore' });
-    await user.click(screen.getByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: /^Use / }));
     expect(
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
     ).toBeInTheDocument();
-    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(await screen.findByRole('button', { name: /^Use / }));
     expect(
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/\.minecraft/ }),
     ).toBeInTheDocument();
@@ -1000,7 +1000,7 @@ describe('App', () => {
     const oldWorldCalls = worlds.mock.calls.length;
     const oldTargetCalls = targets.mock.calls.length;
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(await screen.findByRole('button', { name: /^Use / }));
     await user.click(screen.getByRole('button', { name: 'Discover' }));
     expect(await screen.findByRole('option', { name: 'B world (b)' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'A world (a)' })).not.toBeInTheDocument();
@@ -1028,11 +1028,11 @@ describe('App', () => {
     await user.click(within(grid).getByRole('button', { name: /Alpha/ }));
     expect(screen.getByRole('button', { name: 'Delete pack' })).toBeEnabled();
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(await screen.findByRole('button', { name: /^Use / }));
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
     expect(screen.queryAllByText('Alpha')).toHaveLength(0);
     expect(screen.queryByRole('button', { name: 'Delete pack' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Import pack' })).toBeDisabled();
   });
 
@@ -1051,7 +1051,7 @@ describe('App', () => {
       : new Promise((resolve) => { releaseStack = () => resolve(stackResponse(null)); });
     render(<App client={client} />);
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
-    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(await screen.findByRole('button', { name: /^Use / }));
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
     expect(await screen.findByText('B pack')).toBeInTheDocument();
     await act(async () => { releasePacks(); releaseStack(); });
@@ -1075,7 +1075,7 @@ describe('App', () => {
     expect(within(await screen.findByRole('navigation', { name: 'Worlds' })).getByText('Loading worlds…')).toBeInTheDocument();
     const oldCalls = datapacks.mock.calls.length;
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(await screen.findByRole('button', { name: /^Use / }));
     await user.click(screen.getByRole('button', { name: 'Worlds' }));
     expect(await screen.findByText('No worlds yet. Launch Minecraft once to create one.')).toBeInTheDocument();
     await act(async () => release());
@@ -1097,7 +1097,7 @@ describe('App', () => {
     await screen.findByRole('list', { name: 'Datapack stack' });
     const oldCalls = datapacks.mock.calls.length;
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    await user.click(await screen.findByRole('button', { name: 'Use' }));
+    await user.click(await screen.findByRole('button', { name: /^Use / }));
     await user.click(screen.getByRole('button', { name: 'Worlds' }));
     expect(await screen.findByRole('button', { name: /B first/ })).toHaveAttribute('aria-current', 'true');
     await waitFor(() => expect(datapacks.mock.calls.slice(oldCalls)).toEqual([['first-b']]));

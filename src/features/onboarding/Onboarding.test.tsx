@@ -12,7 +12,7 @@ describe('Onboarding', () => {
     render(<Onboarding client={client} onDone={onDone} />);
 
     expect(await screen.findByText('/home/demo/.minecraft')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Use' }));
+    await user.click(screen.getByRole('button', { name: 'Use /home/demo/.minecraft' }));
     expect(onDone).toHaveBeenCalledTimes(1);
     expect(client.config.active_game_dir).toBe('/home/demo/.minecraft');
   });

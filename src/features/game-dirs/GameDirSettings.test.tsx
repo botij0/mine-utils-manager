@@ -45,7 +45,7 @@ describe('GameDirSettings', () => {
     );
 
     await screen.findByText('/tmp/saves/two');
-    await user.click(screen.getByRole('button', { name: 'Remove' }));
+    await user.click(screen.getByRole('button', { name: 'Remove /tmp/saves/two' }));
 
     await waitFor(() =>
       expect(screen.queryByText('/tmp/saves/two')).not.toBeInTheDocument(),
@@ -74,12 +74,33 @@ describe('GameDirSettings', () => {
     const missing = await screen.findByText('/tmp/saves/missing');
     const row = missing.closest('li');
     expect(row).not.toBeNull();
-    expect(within(row!).queryByRole('button', { name: 'Use' })).toBeNull();
-    await user.click(within(row!).getByRole('button', { name: 'Remove' }));
+    expect(within(row!).queryByRole('button', { name: /^Use / })).toBeNull();
+    await user.click(within(row!).getByRole('button', { name: 'Remove /tmp/saves/missing' }));
 
     await waitFor(() =>
       expect(screen.queryByText('/tmp/saves/missing')).not.toBeInTheDocument(),
     );
+  });
+
+  it('names each folder row Use and Remove after its path', async () => {
+    const client = makeFakeClient([
+      DETECTED,
+      gameDir('/tmp/saves/two', true, true),
+    ]);
+    render(
+      <GameDirSettings
+        client={client}
+        activePath={null}
+        onConfigChanged={() => {}}
+      />,
+    );
+
+    const added = (await screen.findByText('/tmp/saves/two')).closest('li');
+    expect(added).not.toBeNull();
+    expect(within(added!).getByRole('button', { name: 'Use /tmp/saves/two' })).toBeEnabled();
+    expect(within(added!).getByRole('button', { name: 'Remove /tmp/saves/two' })).toBeEnabled();
+    const detected = screen.getByText('/home/demo/.minecraft').closest('li');
+    expect(within(detected!).getByRole('button', { name: 'Use /home/demo/.minecraft' })).toBeEnabled();
   });
 
   it('shows an inline error and keeps the list when the path is not a game dir', async () => {

@@ -42,6 +42,7 @@ export default function GameDirPicker({
                 <button
                   type="button"
                   className="button"
+                  aria-label={`Use ${entry.path}`}
                   onClick={() => onSelect(entry.path)}
                 >
                   Use
@@ -51,6 +52,7 @@ export default function GameDirPicker({
                 <button
                   type="button"
                   className="button"
+                  aria-label={`Remove ${entry.path}`}
                   onClick={() => onRemove(entry.path)}
                 >
                   Remove

@@ -101,6 +101,7 @@ export default function StackEntry({
         <button
           type="button"
           className="button button-danger stack-remove"
+          aria-label={`Remove ${label}`}
           disabled={disabled}
           onClick={() => onToggle(false)}
         >
