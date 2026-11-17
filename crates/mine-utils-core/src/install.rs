@@ -407,7 +407,7 @@ pub fn finish_modrinth_install(
         SearchKind::ResourcePack => {
             game_lock::ensure_writable(stack_paths.game_dir())?;
             reject_resourcepacks_link(&prepared.target_dir)?;
-            let parent = same_file::Handle::from_path(&prepared.target_dir)?;
+            let parent = download::directory_handle(&prepared.target_dir)?;
             let (dest, sha256, fresh) = match commit_source(prepared)? {
                 Committed::Ready(dest, sha256, fresh) => (dest, sha256, fresh),
                 Committed::Collision { name } => {
@@ -455,7 +455,7 @@ pub fn finish_modrinth_install(
             let paths = data_paths.ok_or_else(|| AppError::World {
                 reason: "a datapack install needs a target world".to_string(),
             })?;
-            let parent = same_file::Handle::from_path(&prepared.target_dir)?;
+            let parent = download::directory_handle(&prepared.target_dir)?;
             let (dest, sha256, fresh) = match commit_source(prepared)? {
                 Committed::Ready(dest, sha256, fresh) => (dest, sha256, fresh),
                 Committed::Collision { name } => {

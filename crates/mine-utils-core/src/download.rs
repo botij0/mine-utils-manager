@@ -293,10 +293,26 @@ impl Drop for VerifiedDownload {
     }
 }
 
+pub(crate) fn directory_handle(path: &Path) -> std::io::Result<same_file::Handle> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)?;
+        same_file::Handle::from_file(file)
+    }
+    #[cfg(not(unix))]
+    {
+        same_file::Handle::from_path(path)
+    }
+}
+
 pub(crate) fn remove_file_in_parent(path: &Path, parent: &same_file::Handle) {
     let Some(dir) = path.parent() else { return };
     if std::fs::symlink_metadata(dir).is_ok_and(|entry| entry.is_dir())
-        && same_file::Handle::from_path(dir).is_ok_and(|current| current == *parent)
+        && directory_handle(dir).is_ok_and(|current| current == *parent)
     {
         let _ = std::fs::remove_file(path);
     }
@@ -542,7 +558,7 @@ pub fn download_verified_controlled<T: Transport + 'static>(
         reason: format!("cannot use {}: {err}", target_dir.display()),
     })?;
     sweep_download_temps(target_dir);
-    let parent = same_file::Handle::from_path(target_dir).map_err(|err| DownloadError::Io {
+    let parent = directory_handle(target_dir).map_err(|err| DownloadError::Io {
         reason: format!("cannot open {}: {err}", target_dir.display()),
     })?;
     let temp = temp_path_for(target_dir, filename);
