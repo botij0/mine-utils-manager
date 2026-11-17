@@ -21,6 +21,7 @@ use crate::modrinth::{validate_modrinth_id, ModrinthClient, ModrinthError, Searc
 use crate::options_txt::OptionsError;
 use crate::pack::{ImportChoice, ImportOutcome, PackError};
 use crate::provenance::{self, ProvenanceEntry};
+use crate::read_capped::read_capped;
 use crate::resource_stack::{self, StackPaths};
 use crate::world::WorldPaths;
 use crate::{HashCache, IconCache};
@@ -381,7 +382,7 @@ impl FileHashes {
 /// missing or unreadable; `prepare` treats that as a refusal (a typo or an
 /// unreadable world must fail before any download), never as a skip.
 fn world_version_name(level_dat: &Path) -> Option<String> {
-    let bytes = std::fs::read(level_dat).ok()?;
+    let bytes = read_capped(level_dat, level_dat::MAX_LEVEL_DAT_BYTES).ok()?;
     level_dat::parse(&bytes).ok().map(|view| view.version_name)
 }
 

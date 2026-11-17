@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 use crate::pack::{PackError, PackLocation};
+use crate::read_capped::open_regular;
 
 /// A pack.png larger than this is ignored rather than cached.
 pub const MAX_ICON_BYTES: u64 = 2 * 1024 * 1024;
@@ -118,17 +119,18 @@ impl<'a> PackSource<'a> {
             }),
             Self::Dir { path, validated } => {
                 validate_folder(path, validated)?;
-                let target = path.join(name);
-                let metadata = match std::fs::symlink_metadata(&target) {
-                    Ok(metadata) => metadata,
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                let file = match open_regular(&path.join(name)) {
+                    Ok(file) => file,
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+                        ) =>
+                    {
+                        return Ok(None)
+                    }
                     Err(err) => return Err(broken(&display_name(path), err)),
                 };
-                if !metadata.is_file() {
-                    return Ok(None);
-                }
-                let file =
-                    open_folder_file(&target).map_err(|err| broken(&display_name(path), err))?;
                 read_limited(file, name, &display_name(path), cap, bytes_read).map(Some)
             }
         }
@@ -192,17 +194,6 @@ fn validate_folder(path: &Path, validated: &Cell<bool>) -> Result<(), PackError>
         validated.set(true);
     }
     Ok(())
-}
-
-fn open_folder_file(path: &Path) -> std::io::Result<File> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    options.open(path)
 }
 
 fn read_limited(
@@ -288,7 +279,7 @@ fn hash_dir(root: &Path) -> Result<String, AppError> {
     for relative in files {
         hasher.update(relative.to_string_lossy().as_bytes());
         hasher.update([0u8]);
-        let mut file = open_folder_file(&root.join(&relative))?;
+        let mut file = open_regular(&root.join(&relative))?;
         feed_hasher(&mut file, &mut hasher)?;
     }
     Ok(hex::encode(hasher.finalize()))
@@ -350,7 +341,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn folder_file_open_refuses_a_swapped_leaf_symlink() {
+    fn folder_open_refuses_a_swapped_leaf_symlink() {
         let root = tempfile::tempdir().unwrap();
         let target = root.path().join("pack.mcmeta");
         std::fs::write(&target, b"original").unwrap();
@@ -359,13 +350,13 @@ mod tests {
         std::fs::write(root.path().join("outside"), b"outside").unwrap();
         std::os::unix::fs::symlink("outside", &target).unwrap();
         assert_eq!(
-            open_folder_file(&target).unwrap_err().raw_os_error(),
-            Some(libc::ELOOP)
+            open_regular(&target).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
         );
         std::fs::remove_file(&target).unwrap();
         std::fs::write(&target, b"real").unwrap();
         let mut bytes = String::new();
-        open_folder_file(&target)
+        open_regular(&target)
             .unwrap()
             .read_to_string(&mut bytes)
             .unwrap();
@@ -374,7 +365,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn folder_file_open_refuses_a_swapped_fifo_without_blocking() {
+    fn folder_open_refuses_a_swapped_fifo_without_blocking() {
         use std::os::unix::ffi::OsStrExt;
         let root = tempfile::tempdir().unwrap();
         let target = root.path().join("pack.mcmeta");
@@ -382,7 +373,7 @@ mod tests {
         assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(open_folder_file(&target).is_err());
+            let _ = tx.send(open_regular(&target).is_err());
         });
         assert_eq!(
             rx.recv_timeout(std::time::Duration::from_secs(2)),
