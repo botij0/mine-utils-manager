@@ -1990,11 +1990,19 @@ fn resourcepacks_link_swapped_after_prepare_refuses_finish() {
         "resourcepack",
     )
     .unwrap();
+    let temp_name = std::fs::read_dir(fx.game_dir.join("resourcepacks"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .file_name();
     let packs = fx.game_dir.join("resourcepacks");
     let moved = fx._dir.path().join("moved");
     std::fs::rename(&packs, &moved).unwrap();
     let outside = fx._dir.path().join("outside");
     std::fs::create_dir(&outside).unwrap();
+    let sentinel = outside.join(&temp_name);
+    std::fs::write(&sentinel, b"unrelated sentinel").unwrap();
     std::os::unix::fs::symlink(&outside, &packs).unwrap();
     let error = finish_modrinth_install(
         prepared,
@@ -2006,5 +2014,10 @@ fn resourcepacks_link_swapped_after_prepare_refuses_finish() {
     )
     .unwrap_err();
     assert_eq!(error.code(), "pack_symlink");
-    assert_eq!(std::fs::read_dir(outside).unwrap().count(), 0);
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"unrelated sentinel");
+    assert_eq!(std::fs::read_dir(outside).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read_to_string(fx.game_dir.join("options.txt")).unwrap(),
+        "version:4707\nresourcePacks:[]\n"
+    );
 }
