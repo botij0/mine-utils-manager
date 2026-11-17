@@ -27,7 +27,14 @@ pub(crate) fn open_regular(path: &Path) -> io::Result<std::fs::File> {
         let file = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)?;
+            .open(path)
+            .map_err(|err| {
+                if err.raw_os_error() == Some(libc::ELOOP) {
+                    io::Error::new(io::ErrorKind::InvalidData, err)
+                } else {
+                    err
+                }
+            })?;
         if !file.metadata()?.file_type().is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,

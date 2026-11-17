@@ -322,12 +322,7 @@ fn reject_resourcepacks_link(path: &Path) -> Result<(), AppError> {
 fn hash_file_bounded(path: &Path) -> Result<Option<FileHashes>, AppError> {
     let file = match crate::read_capped::open_regular(path) {
         Ok(file) => file,
-        Err(err)
-            if err.kind() == std::io::ErrorKind::InvalidData
-                || err.raw_os_error() == Some(libc::ELOOP) =>
-        {
-            return Ok(None)
-        }
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidData => return Ok(None),
         Err(err) => return Err(err.into()),
     };
     if file.metadata()?.len() > crate::modrinth::MAX_DOWNLOAD_BYTES {
