@@ -2218,10 +2218,6 @@ fn finish_preserves_foreign_temp_after_directory_or_file_swap() {
             &fx.icons,
             &fx.hashes,
         );
-        println!(
-            "{swap} swap: result={result:?}; sentinel={:?}",
-            std::fs::read(&temp)
-        );
         assert_eq!(
             std::fs::read(&temp).unwrap(),
             b"unrelated sentinel",
