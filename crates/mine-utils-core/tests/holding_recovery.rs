@@ -152,18 +152,22 @@ fn listing_and_restore_reject_malformed_names_and_current_process() {
 
 #[cfg(unix)]
 #[test]
-fn symlinks_are_never_offered_or_followed() {
+fn symlinked_pack_folders_list_packs_but_never_offer_or_restore_holdings() {
     let root = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
     std::fs::write(outside.path().join(HOLDING), b"outside").unwrap();
+    std::fs::create_dir(outside.path().join("Valid")).unwrap();
+    std::fs::write(
+        outside.path().join("Valid/pack.mcmeta"),
+        br#"{"pack":{"pack_format":15,"description":"valid pack"}}"#,
+    ).unwrap();
     let folder = root.path().join("resourcepacks");
     std::os::unix::fs::symlink(outside.path(), &folder).unwrap();
-    assert_eq!(
-        scan_packs(&folder, &IconCache::new(root.path()))
-            .unwrap_err()
-            .code(),
-        "pack_symlink"
-    );
+    let listing = scan_packs(&folder, &IconCache::new(root.path())).unwrap();
+    assert_eq!(listing.count, 1);
+    assert_eq!(listing.packs[0].name, "Valid");
+    assert!(listing.packs[0].error.is_none());
+    assert!(listing.holding_entries.is_empty());
     assert_eq!(
         mine_utils_core::holding_recovery::restore_resource_holding(&paths(root.path()), HOLDING)
             .unwrap_err()
