@@ -17,6 +17,7 @@ pub struct GameGuard {
     pub stale_locks: Vec<PathBuf>,
     /// False where POSIX lock probing is unsupported.
     pub detection_supported: bool,
+    pub process_probe_available: bool,
 }
 
 impl From<GameStatus> for GameGuard {
@@ -25,6 +26,7 @@ impl From<GameStatus> for GameGuard {
             running: status.running,
             stale_locks: status.stale_locks,
             detection_supported: status.supported,
+            process_probe_available: status.process_probe_available,
         }
     }
 }
@@ -84,6 +86,7 @@ mod tests {
                 "running": null,
                 "stale_locks": [world.join("session.lock")],
                 "detection_supported": true,
+                "process_probe_available": true,
             })
         );
     }

@@ -58,6 +58,7 @@ export default function App({ client = ipc }: AppProps) {
   // Undefined until the first check lands, so the pages can tell "not yet
   // checked" apart from a fresh "not running" result.
   const [gameRunning, setGameRunning] = useState<GameRunning | null | undefined>(undefined);
+  const [processProbeAvailable, setProcessProbeAvailable] = useState(true);
   const [guardPause, setGuardPause] = useState<'checking' | 'unknown' | null>(null);
   // True once the stored config lands, so onboarding only shows for a real
   // first run and never for the default placeholder.
@@ -129,9 +130,10 @@ export default function App({ client = ipc }: AppProps) {
         if (slot.wanted) send();
       };
       activeGameRunning(client).then(
-        (running) =>
+        (guardStatus) =>
           settle(() => {
-            setGameRunning(running);
+            setGameRunning(guardStatus.running);
+            setProcessProbeAvailable(guardStatus.process_probe_available);
             setGuardPause(null);
           }),
         // Keep the last known value: only a successful check may clear it.
@@ -224,6 +226,9 @@ export default function App({ client = ipc }: AppProps) {
     return (
       <div className="app">
         <main className="content">
+          {!processProbeAvailable && guardPause === null && !gameRunning ? (
+            <div className="banner" role="status">Minecraft process detection is unavailable. Session locks are still checked; writes are allowed.</div>
+          ) : null}
           <Onboarding client={client} onDone={finishOnboarding} />
         </main>
       </div>
@@ -267,6 +272,9 @@ export default function App({ client = ipc }: AppProps) {
           </button>
         </header>
         <main className="content">
+          {!processProbeAvailable && guardPause === null && !gameRunning ? (
+            <div className="banner" role="status">Minecraft process detection is unavailable. Session locks are still checked; writes are allowed.</div>
+          ) : null}
           {error ? (
             <p className="error" role="alert">
               {error.message}

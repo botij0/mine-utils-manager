@@ -803,3 +803,18 @@ fn a_held_lock_blocks_the_guarded_delete() {
     assert_eq!(std::fs::read(paths.options_path()).unwrap(), original);
     assert!(trash.calls().is_empty(), "nothing was trashed");
 }
+
+#[test]
+fn process_probe_reports_unavailable_and_empty_roots() {
+    let root = tempfile::tempdir().unwrap();
+    let game = root.path().join("game");
+    let empty = root.path().join("empty");
+    std::fs::create_dir_all(&game).unwrap();
+    std::fs::create_dir_all(&empty).unwrap();
+    let unavailable = serde_json::to_value(check_in(&game, &root.path().join("missing"))).unwrap();
+    let idle = serde_json::to_value(check_in(&game, &empty)).unwrap();
+    assert_eq!(unavailable["process_probe_available"], false);
+    assert_eq!(unavailable["running"], serde_json::Value::Null);
+    assert_eq!(idle["process_probe_available"], true);
+    assert_eq!(idle["running"], serde_json::Value::Null);
+}

@@ -234,7 +234,7 @@ export function makeFakeClient(
       if (!config.active_game_dir) {
         throw new IpcError('no_active_game_dir', 'no active game dir; pick one in Settings first');
       }
-      return { running, stale_locks: [...staleLocks], detection_supported: true };
+      return { running, stale_locks: [...staleLocks], detection_supported: true, process_probe_available: true };
     },
     async setResourcePackEnabled(filename: string, enabled: boolean) {
       toggles.push({ filename, enabled });

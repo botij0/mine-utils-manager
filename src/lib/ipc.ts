@@ -12,7 +12,6 @@ import type {
   GameDirEntry,
   GameDirState,
   GameGuard,
-  GameRunning,
   ImportChoice,
   ImportOutcome,
   LevelBackupInfo,
@@ -115,11 +114,11 @@ export function toAppError(err: unknown): IpcError {
  *  one, so `no_active_game_dir` is an answer rather than a failed check. */
 export async function activeGameRunning(
   client: Pick<IpcClient, 'getGameGuard'>,
-): Promise<GameRunning | null> {
+): Promise<GameGuard> {
   try {
-    return (await client.getGameGuard()).running;
+    return await client.getGameGuard();
   } catch (err) {
-    if (toAppError(err).code === 'no_active_game_dir') return null;
+    if (toAppError(err).code === 'no_active_game_dir') return { running: null, stale_locks: [], detection_supported: true, process_probe_available: true };
     throw err;
   }
 }

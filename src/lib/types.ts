@@ -151,12 +151,16 @@ export interface GameRunning {
 }
 
 /** The game-running guard shared by both stacks. The wire shape is unchanged. */
-export interface GameGuard {
+export interface StackGuard {
   running: GameRunning | null;
   /** Stale `session.lock` files. They never block a write. */
   stale_locks: string[];
   /** False where POSIX lock probing is unsupported. */
   detection_supported: boolean;
+}
+
+export interface GameGuard extends StackGuard {
+  process_probe_available: boolean;
 }
 
 /**
@@ -165,7 +169,7 @@ export interface GameGuard {
  * is the highest priority and loads last. Foreign entries such as `vanilla`
  * and `fabric` are locked to their indices and never move.
  */
-export interface ResourceStack extends GameGuard {
+export interface ResourceStack extends StackGuard {
   entries: StackEntry[];
   incompatible: string[];
 }
@@ -191,7 +195,7 @@ export type DataStackEntry = StackEntry;
  * top card is the highest priority. Foreign entries such as `vanilla` are
  * locked to their indices and never move.
  */
-export interface DataStack extends GameGuard {
+export interface DataStack extends StackGuard {
   enabled: DataStackEntry[];
   disabled: DataStackEntry[];
   /** The lock on this world's own `session.lock`, when held. */
