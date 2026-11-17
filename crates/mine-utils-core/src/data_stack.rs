@@ -45,9 +45,13 @@ pub enum DataStackError {
 
 impl DataStackError {
     pub fn code(&self) -> &'static str {
+        self.error_code().as_str()
+    }
+
+    pub fn error_code(&self) -> crate::ErrorCode {
         match self {
-            DataStackError::StaleFile => "stale_stack",
-            _ => "level_dat",
+            DataStackError::StaleFile => crate::ErrorCode::StaleStack,
+            _ => crate::ErrorCode::LevelDat,
         }
     }
 }
@@ -57,6 +61,7 @@ pub use crate::resource_stack::StackEntry as DataStackEntry;
 
 /// The active datapack stack as the app sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct DataStack {
     /// Load order, low to high. The UI shows the reverse, so the top card is
     /// the highest priority and loads last.
@@ -77,6 +82,7 @@ pub struct DataStack {
 /// What the UI rendered. A mutation that lands on a different file set comes
 /// back as [`DataStackError::StaleFile`] instead of clobbering the new content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct DataSnapshot {
     pub enabled: Vec<String>,
     pub disabled: Vec<String>,
@@ -172,6 +178,7 @@ pub struct DataWrite {
 /// because the world was locked; the UI explains why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub enum DatapackImportOutcome {
     Imported {
         filename: String,

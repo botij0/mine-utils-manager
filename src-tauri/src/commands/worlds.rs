@@ -1,8 +1,10 @@
+pub use mine_utils_core::wire::DatapackDeleteOutcome;
+pub use mine_utils_core::wire::DatapackListing;
 use std::path::Path;
 
 use mine_utils_core::{
     data_stack, level_backup, world, AppError, DataSnapshot, DataStack, DatapackImportOutcome,
-    ImportChoice, LevelBackupInfo, PackListing, SystemTrash, World,
+    ImportChoice, LevelBackupInfo, SystemTrash, World,
 };
 use tauri::State;
 
@@ -43,13 +45,6 @@ pub async fn list_datapacks(
     })
     .await
     .map_err(join_error)?
-}
-
-/// The installed packs plus the stack, as the Worlds page renders them.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct DatapackListing {
-    pub packs: PackListing,
-    pub stack: DataStack,
 }
 
 /// Import a zip or directory datapack into `saves/<world>/datapacks`. When
@@ -148,13 +143,6 @@ pub async fn delete_datapack(
     })
     .await
     .map_err(join_error)?
-}
-
-/// What a delete did, plus the refreshed stack for the UI.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct DatapackDeleteOutcome {
-    pub removed_references: bool,
-    pub stack: DataStack,
 }
 
 /// The `level.dat` backups of one world, newest first.

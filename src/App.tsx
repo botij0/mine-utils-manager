@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ipc } from './lib/ipc';
 import type { IpcClient } from './lib/ipc';
-import type { AppError, Config, GameRunning, Theme } from './lib/types';
+import type { ClientError, Config, GameRunning, Theme } from './lib/types';
 import { defaultConfig } from './lib/types';
 import { activeGameRunning, toAppError } from './lib/ipc';
 import DiscoverPage from './features/discover/DiscoverPage';
@@ -53,7 +53,7 @@ export default function App({ client = ipc }: AppProps) {
     setVisited((previous) => previous.includes(page) ? previous : [...previous, page]);
   }, [page]);
   const [config, setConfig] = useState<Config>(defaultConfig);
-  const [error, setError] = useState<AppError | null>(null);
+  const [error, setError] = useState<ClientError | null>(null);
   const [startupWarning, setStartupWarning] = useState<string | null>(null);
   // Undefined until the first check lands, so the pages can tell "not yet
   // checked" apart from a fresh "not running" result.

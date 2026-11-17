@@ -25,6 +25,7 @@ use crate::read_capped::read_capped;
 /// version the table covers, so a missing `data_format` can be told apart
 /// from a game that is newer than this build.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct WorldVersion {
     pub name: String,
     pub data_format: Option<FormatVersion>,
@@ -33,6 +34,7 @@ pub struct WorldVersion {
 
 /// Why a world is read-only. The write controls hide while this is set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct WorldIssue {
     pub code: String,
     pub message: String,
@@ -41,6 +43,7 @@ pub struct WorldIssue {
 /// One world as the UI lists it. `issue` is set for corrupt, version-less, or
 /// datapack-less worlds; those render an error card instead of write controls.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct World {
     pub dir_name: String,
     pub path: PathBuf,

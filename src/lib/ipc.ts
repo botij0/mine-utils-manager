@@ -1,6 +1,8 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { mockClient } from './ipc.mock';
 import { IpcError } from './types';
+import { ERROR_CODES } from './generated/wire';
+import type * as Wire from './generated/wire';
 import type {
   BackupInfo,
   Config,
@@ -23,7 +25,6 @@ import type {
   ModrinthSort,
   ModrinthTargets,
   ModrinthVersion,
-  Pack,
   PackIcon,
   PackListing,
   ResourceStack,
@@ -101,10 +102,11 @@ export function isTauriRuntime(win: Window = window): boolean {
 }
 
 export function toAppError(err: unknown): IpcError {
+  if (err instanceof IpcError) return err;
   if (typeof err === 'object' && err !== null && 'code' in err && 'message' in err) {
-    const wire = err as { code: unknown; message: unknown };
-    if (typeof wire.code === 'string' && typeof wire.message === 'string') {
-      return new IpcError(wire.code, wire.message);
+    if (typeof err.code === 'string' && typeof err.message === 'string') {
+      const code = ERROR_CODES.find((code) => code === err.code) ?? 'unknown';
+      return new IpcError(code, err.message, code === 'unknown' ? err.code : undefined);
     }
   }
   if (err instanceof Error) return new IpcError('unknown', err.message);
@@ -132,22 +134,9 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
 }
 
-/**
- * The backend stores icon files and returns their paths. The asset protocol
- * turns them into URLs the webview may load.
- */
-export interface WirePack extends Omit<Pack, 'icon'> {
-  icon: { sha256: string; path: string } | null;
-}
-
-export interface WireWorld extends Omit<World, 'icon'> {
-  icon: { sha256: string; path: string } | null;
-}
-
-/** The import command returns icon paths too; they are converted like listing. */
-export type WireImportOutcome =
-  | { status: 'imported'; pack: WirePack }
-  | Exclude<ImportOutcome, { status: 'imported' }>;
+export type WirePack = Wire.Pack;
+export type WireWorld = Wire.World;
+export type WireImportOutcome = Wire.ImportOutcome;
 
 export function withIconUrl<T extends { icon: { sha256: string; path: string } | null }>(
   item: T,
@@ -161,7 +150,7 @@ export function withIconUrl<T extends { icon: { sha256: string; path: string } |
 }
 
 export function listingWithIconUrls(
-  listing: Omit<PackListing, 'packs'> & { packs: WirePack[] },
+  listing: Wire.PackListing,
 ): PackListing {
   return { ...listing, packs: listing.packs.map(withIconUrl) };
 }
@@ -185,7 +174,7 @@ const tauriClient: IpcClient = {
   getStartupWarning: () => call<string | null>('get_startup_warning'),
   getGameGuard: () => call<GameGuard>('get_game_guard'),
   async listResourcePacks() {
-    const listing = await call<Omit<PackListing, 'packs'> & { packs: WirePack[] }>(
+    const listing = await call<Wire.PackListing>(
       'list_resource_packs',
     );
     return listingWithIconUrls(listing);
@@ -212,9 +201,7 @@ const tauriClient: IpcClient = {
   },
   async listDatapacks(world: string) {
     const listing = await call<
-      Omit<DatapackListing, 'packs'> & {
-        packs: Omit<PackListing, 'packs'> & { packs: WirePack[] };
-      }
+      Wire.DatapackListing
     >('list_datapacks', { world });
     return {
       ...listing,
@@ -266,7 +253,7 @@ const tauriClient: IpcClient = {
     installRegistrations.set(installId, registration);
     try {
       await registration;
-      const outcome = await call<ModrinthInstallOutcome>('install_modrinth_pack', {
+      const outcome = await call<Wire.ModrinthInstallOutcome>('install_modrinth_pack', {
         installId,
         projectId: args.projectId,
         versionId: args.versionId,
@@ -274,12 +261,10 @@ const tauriClient: IpcClient = {
         kind: args.kind,
         world: args.world ?? null,
       });
-      // The resource outcome carries a server-side icon path; convert it to a
-      // URL exactly like a manual Packs import. The wire kind is `resourcepack`.
       if (outcome.kind === 'resourcepack') {
         return {
           ...outcome,
-          outcome: outcomeWithIconUrl(outcome.outcome as WireImportOutcome),
+          outcome: outcomeWithIconUrl(outcome.outcome),
         };
       }
       return outcome;

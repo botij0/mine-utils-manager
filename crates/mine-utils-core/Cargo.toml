@@ -4,7 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+wire-types = ["dep:ts-rs"]
+
+[[bin]]
+name = "generate-wire-types"
+path = "src/bin/generate-wire-types.rs"
+required-features = ["wire-types"]
+
 [dependencies]
+ts-rs = { version = "12", optional = true }
 directories.workspace = true
 log.workspace = true
 serde.workspace = true

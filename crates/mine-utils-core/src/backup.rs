@@ -433,6 +433,7 @@ fn options_owned(file_name: &str) -> bool {
 
 /// One backup file as the UI lists it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct BackupInfo {
     pub file_name: String,
     pub bytes: u64,

@@ -11,7 +11,10 @@
     "tauri": "tauri",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "wire:generate": "env -u APPIMAGE cargo run --locked -p mine-utils-core --features wire-types --bin generate-wire-types --",
+    "wire:check": "pnpm wire:generate --check",
+    "wire:test": "node scripts/test-wire-types.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

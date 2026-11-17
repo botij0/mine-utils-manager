@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// `[94]` accepts every minor of that major; the game stores that as the minor
 /// `ANY_MINOR`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct FormatVersion {
     pub major: u32,
     pub minor: u32,
@@ -64,6 +65,7 @@ impl fmt::Display for FormatVersion {
 /// `min_format` leaves `max` empty and a lone `max_format` leaves `min` empty,
 /// so an open declaration is shown as open instead of being dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct FormatRange {
     pub min: Option<FormatVersion>,
     pub max: Option<FormatVersion>,
@@ -107,6 +109,7 @@ impl FormatRange {
 /// `data`, and a modded pack may carry both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub enum PackKind {
     Resource,
     Data,
@@ -128,6 +131,7 @@ impl PackKind {
 /// How the pack is stored on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub enum PackLocation {
     Zip,
     Directory,
@@ -135,6 +139,7 @@ pub enum PackLocation {
 
 /// The `pack` object of pack.mcmeta after normalization.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct PackMeta {
     pub pack_format: Option<FormatVersion>,
     pub min_format: Option<FormatVersion>,
@@ -183,6 +188,7 @@ impl PackMeta {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct PackIcon {
     pub sha256: String,
     pub path: PathBuf,
@@ -191,14 +197,17 @@ pub struct PackIcon {
 /// A broken pack still shows up in a listing, with `error` set and the fields
 /// the scan managed to read. One bad archive never hides the rest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct PackIssue {
     pub code: String,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "wire-types", ts(optional))]
     pub symlink_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct Pack {
     pub id: String,
     pub name: String,
@@ -252,17 +261,21 @@ pub enum PackError {
 
 impl PackError {
     pub fn code(&self) -> &'static str {
+        self.error_code().as_str()
+    }
+
+    pub fn error_code(&self) -> crate::ErrorCode {
         match self {
-            PackError::NonUtf8Name { .. } => "pack_non_utf8_name",
-            PackError::UnknownKind { .. } => "pack_unknown_kind",
-            PackError::BrokenArchive { .. } => "pack_broken_archive",
-            PackError::MissingMeta { .. } => "pack_missing_meta",
-            PackError::Symlink { .. } => "pack_symlink",
-            PackError::Duplicate { .. } => "pack_duplicate",
-            PackError::NameCollision { .. } => "pack_name_collision",
-            PackError::NotFound { .. } => "pack_not_found",
-            PackError::OutsideRoot { .. } => "pack_outside_root",
-            PackError::Trash { .. } => "pack_trash",
+            PackError::NonUtf8Name { .. } => crate::ErrorCode::PackNonUtf8Name,
+            PackError::UnknownKind { .. } => crate::ErrorCode::PackUnknownKind,
+            PackError::BrokenArchive { .. } => crate::ErrorCode::PackBrokenArchive,
+            PackError::MissingMeta { .. } => crate::ErrorCode::PackMissingMeta,
+            PackError::Symlink { .. } => crate::ErrorCode::PackSymlink,
+            PackError::Duplicate { .. } => crate::ErrorCode::PackDuplicate,
+            PackError::NameCollision { .. } => crate::ErrorCode::PackNameCollision,
+            PackError::NotFound { .. } => crate::ErrorCode::PackNotFound,
+            PackError::OutsideRoot { .. } => crate::ErrorCode::PackOutsideRoot,
+            PackError::Trash { .. } => crate::ErrorCode::PackTrash,
         }
     }
 }
@@ -271,6 +284,7 @@ impl PackError {
 /// `collision` into a Skip/Replace choice and retries with that choice.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub enum ImportOutcome {
     Imported {
         pack: Box<Pack>,
@@ -288,6 +302,7 @@ pub enum ImportOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub enum ImportChoice {
     #[default]
     Default,

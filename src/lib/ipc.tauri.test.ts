@@ -7,6 +7,8 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import { invoke } from '@tauri-apps/api/core';
 import { ipc } from './ipc';
+import type { ModrinthInstallOutcome } from './generated/wire';
+import { pack } from '../test/fake-packs';
 
 type TauriWindow = Window & { __TAURI_INTERNALS__?: unknown };
 
@@ -30,5 +32,28 @@ describe('tauri transport', () => {
       sort: 'relevance',
       offset: 40,
     });
+  });
+});
+
+it('converts the generated install result icon path to an asset URL', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+  const installed = {
+    kind: 'resourcepack',
+    outcome: {
+      status: 'imported',
+      pack: { ...pack('Fresh'), icon: { sha256: 'digest', path: '/cache/fresh.png' } },
+    },
+    provenance_warning: 'Could not save provenance',
+  } satisfies ModrinthInstallOutcome;
+  mockedInvoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce(installed);
+
+  const result = await ipc.installModrinthPack({
+    installId: 'wire-icon', projectId: 'fresh', versionId: 'v1',
+    filename: 'fresh.zip', kind: 'resourcepack',
+  });
+
+  expect(result).toEqual({
+    ...installed,
+    outcome: { ...installed.outcome, pack: { ...installed.outcome.pack, icon: { sha256: 'digest', url: 'asset:///cache/fresh.png' } } },
   });
 });

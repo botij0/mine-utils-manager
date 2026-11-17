@@ -2,7 +2,7 @@ import type { Config, GameRunning, Theme } from '../../lib/types';
 import type { IpcClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import { useMemo, useState } from 'react';
-import type { AppError } from '../../lib/types';
+import type { ClientError } from '../../lib/types';
 import GameDirSettings from '../game-dirs/GameDirSettings';
 import BackupsPanel from './BackupsPanel';
 
@@ -41,7 +41,7 @@ export default function SettingsPage({
   gameGuardChecking = false,
   refreshGameRunning = () => {},
 }: SettingsPageProps) {
-  const [error, setError] = useState<AppError | null>(null);
+  const [error, setError] = useState<ClientError | null>(null);
   const orderedClient = useMemo(() => {
     function enqueue<T>(action: () => Promise<T>): Promise<T> {
       const result = (pendingWrites.get(client) ?? Promise.resolve()).then(action);
