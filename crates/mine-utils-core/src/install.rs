@@ -330,6 +330,9 @@ fn hash_file_bounded(path: &Path) -> Result<Option<FileHashes>, AppError> {
         }
         Err(err) => return Err(err.into()),
     };
+    if file.metadata()?.len() > crate::modrinth::MAX_DOWNLOAD_BYTES {
+        return Ok(None);
+    }
     let mut reader = file.take(crate::modrinth::MAX_DOWNLOAD_BYTES + 1);
     let mut sha512 = Sha512::new();
     let mut sha256 = Sha256::new();
@@ -377,28 +380,6 @@ impl FileHashes {
                 .zip(expected.to_ascii_lowercase().bytes())
                 .all(|(a, b)| a == b)
     }
-}
-
-/// Hash an installed file with both digests the install commit needs.
-/// Stays separate from `pack_import`'s single-SHA-256 loop: one pass must feed
-/// both hashes, so sharing would cost a second read or a threaded signal.
-fn hash_file(path: &Path) -> Result<FileHashes, AppError> {
-    let mut file = std::fs::File::open(path).map_err(AppError::from)?;
-    let mut sha512 = Sha512::new();
-    let mut sha256 = Sha256::new();
-    let mut chunk = [0u8; 64 * 1024];
-    loop {
-        let n = file.read(&mut chunk).map_err(AppError::from)?;
-        if n == 0 {
-            break;
-        }
-        sha512.update(&chunk[..n]);
-        sha256.update(&chunk[..n]);
-    }
-    Ok(FileHashes {
-        sha512: hex::encode(sha512.finalize()),
-        sha256: hex::encode(sha256.finalize()),
-    })
 }
 
 /// Read a world's game version from its `level.dat`. `None` when the file is
@@ -547,7 +528,9 @@ fn commit_source(prepared: PreparedInstall) -> Result<Committed, AppError> {
         PreparedSource::Collision => Ok(Committed::Collision { name: filename }),
         PreparedSource::Existing { sha256, sha512 } => {
             let dest = target_dir.join(&filename);
-            let current = hash_file(&dest)?;
+            let Some(current) = hash_file_bounded(&dest)? else {
+                return Ok(Committed::Collision { name: filename });
+            };
             if !current.sha512_eq(&sha512) {
                 return Err(AppError::Download(DownloadError::HashMismatch {
                     expected: sha512,
@@ -564,11 +547,7 @@ fn commit_source(prepared: PreparedInstall) -> Result<Committed, AppError> {
                     // Lost a race: reuse identical bytes, else collide. The
                     // temp was cleaned up by `Drop` on the failed commit.
                     let dest = target_dir.join(&filename);
-                    if std::fs::symlink_metadata(&dest).is_ok_and(|entry| !entry.is_file()) {
-                        return Ok(Committed::Collision { name: filename });
-                    }
-                    let hashes = hash_file(&dest)?;
-                    if hashes.sha256 == sha256 {
+                    if hash_file_bounded(&dest)?.is_some_and(|hashes| hashes.sha256 == sha256) {
                         Ok(Committed::Ready(dest, sha256, false))
                     } else {
                         Ok(Committed::Collision { name: filename })
