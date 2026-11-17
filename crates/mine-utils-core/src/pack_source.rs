@@ -372,6 +372,25 @@ mod tests {
         assert_eq!(bytes, "real");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn folder_file_open_refuses_a_swapped_fifo_without_blocking() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("pack.mcmeta");
+        let c_path = std::ffi::CString::new(target.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(open_folder_file(&target).is_err());
+        });
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(true),
+            "opening a FIFO must fail instead of blocking"
+        );
+    }
+
     #[test]
     fn scan_opens_each_archive_and_walks_each_folder_once() {
         let root = tempfile::tempdir().unwrap();

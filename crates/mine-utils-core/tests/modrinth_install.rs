@@ -1053,6 +1053,31 @@ fn datapack_corrupt_level_dat_fails_before_any_request() {
         .exists());
 }
 
+#[test]
+fn datapack_oversized_level_dat_fails_before_any_request() {
+    let fx = fixture();
+    let level = fx.game_dir.join("saves").join("alpha").join("level.dat");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&level)
+        .unwrap();
+    file.set_len(64 * 1024 * 1024 + 1).unwrap();
+    drop(file);
+    let (client, api) = client(MockApi::new());
+    let err = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        Some("alpha"),
+        PROJECT,
+        VERSION,
+        DATAPACK_FILE,
+        "datapack",
+    )
+    .expect_err("a level.dat over the cap must fail");
+    assert!(err.to_string().contains("no readable level.dat"), "{err}");
+    assert!(api.calls().is_empty(), "no metadata or CDN request");
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_datapacks_refuses_before_any_request() {

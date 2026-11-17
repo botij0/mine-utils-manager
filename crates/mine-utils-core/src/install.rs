@@ -631,3 +631,55 @@ fn best_effort_provenance(
         },
     )
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::world_version_name;
+    use std::os::unix::ffi::OsStrExt;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    fn level_dat_bytes(version: &str) -> Vec<u8> {
+        let data = serde_json::json!({"Data": {
+            "Version": {"Name": version},
+            "DataPacks": {"Enabled": ["vanilla"], "Disabled": []},
+        }});
+        crate::level_dat::gzip(&fastnbt::to_bytes(&data).unwrap())
+    }
+
+    fn within_a_deadline(path: std::path::PathBuf) -> Option<String> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(world_version_name(&path));
+        });
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("world_version_name must not block")
+    }
+
+    #[test]
+    fn a_regular_level_dat_yields_its_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let level = dir.path().join("level.dat");
+        std::fs::write(&level, level_dat_bytes("1.21.10")).unwrap();
+        assert_eq!(within_a_deadline(level), Some("1.21.10".to_string()));
+    }
+
+    #[test]
+    fn a_symlinked_level_dat_is_never_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.dat");
+        std::fs::write(&outside, level_dat_bytes("1.21.10")).unwrap();
+        let level = dir.path().join("level.dat");
+        std::os::unix::fs::symlink(&outside, &level).unwrap();
+        assert_eq!(within_a_deadline(level), None);
+    }
+
+    #[test]
+    fn a_fifo_level_dat_is_refused_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let level = dir.path().join("level.dat");
+        let c_path = std::ffi::CString::new(level.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        assert_eq!(within_a_deadline(level), None);
+    }
+}
