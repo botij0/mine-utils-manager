@@ -219,3 +219,22 @@ fn restore_refuses_a_running_game() {
     assert_eq!(err.code(), "game_running");
     assert_eq!(std::fs::read(folder.join(HOLDING)).unwrap(), b"old pack");
 }
+
+#[cfg(unix)]
+#[test]
+fn restore_permission_denied_names_the_holding_without_collision_advice() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("resourcepacks");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join(HOLDING), b"old pack").unwrap();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let result = mine_utils_core::holding_recovery::restore_resource_holding(&paths(root.path()), HOLDING);
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("Permission denied"), "{message}");
+    assert!(message.contains(&folder.join(HOLDING).display().to_string()), "{message}");
+    assert!(!message.contains("unsupported"), "{message}");
+    assert!(!message.contains("must be free"), "{message}");
+    assert_eq!(std::fs::read(folder.join(HOLDING)).unwrap(), b"old pack");
+}
