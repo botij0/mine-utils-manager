@@ -1885,7 +1885,8 @@ fn resourcepacks_link_refuses_before_requests() {
         RESOURCE_FILE,
         "resourcepack",
     );
-    assert!(result.is_err(), "requests: {:?}", api.calls());
+    let error = result.expect_err("symlinked resourcepacks must be refused");
+    assert_eq!(error.code(), "pack_symlink");
     assert_eq!(api.calls().len(), 0);
 }
 
@@ -1956,6 +1957,7 @@ fn special_target_entries_collide_without_cdn() {
             ),
             "{kind}: {outcome:?}"
         );
+        assert_eq!(api.calls(), vec![versions_url()], "{kind}");
         assert_eq!(api.cdn_calls().len(), 0, "{kind}: {:?}", api.calls());
     }
 }
