@@ -98,10 +98,7 @@ fn restore(
     world: Option<&Path>,
     name: &str,
 ) -> Result<(), AppError> {
-    let invalid = || PackError::BrokenArchive {
-        name: name.to_owned(),
-        reason: "not an inactive Replace holding entry in this folder".to_owned(),
-    };
+    let invalid = || PackError::InvalidHolding { name: name.to_owned() };
     let (holding, pid) = parse(name).ok_or_else(invalid)?;
     if pid == std::process::id() {
         return Err(invalid().into());
@@ -124,10 +121,17 @@ fn restore(
     }
     let destination = folder.join(&holding.original_name);
     crate::fs_commit::strict_no_replace(&source, &destination).map_err(|err| {
-        AppError::from(err).with_context(format!(
-            "Could not restore {}. The original name must be free; the holding entry remains at {}",
-            holding.original_name,
-            source.display()
-        ))
+        let message = match err.kind() {
+            std::io::ErrorKind::AlreadyExists => format!(
+                "Could not restore {}. The original name must be free; the holding entry remains at {}",
+                holding.original_name, source.display()
+            ),
+            std::io::ErrorKind::Unsupported => format!(
+                "To restore manually, rename {} by hand to {} without replacing an existing entry",
+                source.display(), destination.display()
+            ),
+            _ => format!("Could not restore the holding entry at {}", source.display()),
+        };
+        AppError::from(err).with_context(message)
     })
 }

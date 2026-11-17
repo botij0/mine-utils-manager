@@ -7,19 +7,21 @@ use std::path::Path;
 /// happen.
 pub(crate) fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
     match strict_no_replace(temp, dest) {
+        #[cfg(target_os = "linux")]
+        Err(err) if rename_noreplace_unsupported(&err) => no_replace_fallback(temp, dest),
         Err(err) if err.kind() == ErrorKind::Unsupported => no_replace_fallback(temp, dest),
         result => result,
     }
 }
 
-pub(crate) fn strict_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
+pub(crate) fn strict_no_replace(_temp: &Path, _dest: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         // renameat2 with AT_FDCWD renames by path. RENAME_NOREPLACE makes
         // an existing destination fail with EEXIST instead of replacing it.
         const RENAME_NOREPLACE: libc::c_uint = 1;
-        let temp_c = std::ffi::CString::new(temp.as_os_str().as_encoded_bytes());
-        let dest_c = std::ffi::CString::new(dest.as_os_str().as_encoded_bytes());
+        let temp_c = std::ffi::CString::new(_temp.as_os_str().as_encoded_bytes());
+        let dest_c = std::ffi::CString::new(_dest.as_os_str().as_encoded_bytes());
         if let (Ok(temp_c), Ok(dest_c)) = (temp_c, dest_c) {
             // SAFETY: plain integers and NUL-terminated path pointers; no
             // memory is retained by the kernel after the call returns.
@@ -36,7 +38,7 @@ pub(crate) fn strict_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()>
                 return Ok(());
             }
             let err = std::io::Error::last_os_error();
-            if !rename_noreplace_unsupported(&err) {
+            if !rename_noreplace_unsupported(&err) || err.kind() == ErrorKind::PermissionDenied {
                 return Err(err);
             }
         }

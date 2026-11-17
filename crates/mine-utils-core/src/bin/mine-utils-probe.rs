@@ -448,7 +448,9 @@ fn world_format_name(paths: &DataPaths) -> Option<String> {
     mine_utils_core::data_format_for_version(&view.version_name).map(|format| format.label())
 }
 
-const USAGE: &str = "restore-resource-holding <holding-name> <game-dir>\nrestore-datapack-holding <world> <holding-name> <game-dir>\nusage: mine-utils-probe <subcommand>\n\
+const USAGE: &str = "usage: mine-utils-probe <subcommand>\n\
+  restore-resource-holding <holding-name> [game-dir]\n\
+  restore-datapack-holding <world> <holding-name> [game-dir]\n\
   list-game-dirs\n\
   scan-packs [game-dir]\n\
   import-pack <source> [game-dir] [default|replace|skip]\n\
