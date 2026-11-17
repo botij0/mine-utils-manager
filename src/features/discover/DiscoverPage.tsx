@@ -219,6 +219,7 @@ export default function DiscoverPage({
           world={discover.world}
           onWorldChange={discover.setWorld}
           busy={discover.installBusy}
+          committing={discover.installCommitting}
           writesBlocked={writesBlocked}
           blockedReason={blockedReason}
           hasGameDir={hasGameDir}
@@ -226,6 +227,7 @@ export default function DiscoverPage({
           error={discover.installError}
           onClose={closeInstall}
           onInstall={() => void onInstall()}
+          onCancel={() => void discover.cancelInstall()}
         />
       ) : discover.selected ? (
         <ProjectDetail

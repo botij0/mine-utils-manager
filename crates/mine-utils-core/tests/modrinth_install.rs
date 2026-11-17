@@ -1558,3 +1558,298 @@ fn a_folder_or_dangling_symlink_at_the_name_reports_collision() {
         ]
     );
 }
+
+mod cancellation {
+    use super::*;
+    use mine_utils_core::download::InstallControl;
+    use mine_utils_core::install::prepare_modrinth_install_controlled;
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+
+    struct LocalCdn {
+        metadata: Vec<u8>,
+        url: String,
+        metadata_delay: Duration,
+    }
+
+    impl Transport for LocalCdn {
+        fn request(&self, url: &str) -> Result<RawResponse, ModrinthError> {
+            if url == versions_url() {
+                std::thread::sleep(self.metadata_delay);
+                return Ok(RawResponse {
+                    status: 200,
+                    headers: vec![],
+                    body: Box::new(std::io::Cursor::new(self.metadata.clone())),
+                });
+            }
+            assert_eq!(url, RESOURCE_URL);
+            let response = reqwest::blocking::Client::new()
+                .get(&self.url)
+                .send()
+                .map_err(|err| ModrinthError::Offline {
+                    reason: err.to_string(),
+                })?;
+            Ok(RawResponse {
+                status: response.status().as_u16(),
+                headers: vec![],
+                body: Box::new(response),
+            })
+        }
+    }
+
+    fn local_http_replay(cancel: bool, metadata_delay: Duration) {
+        let fx = fixture();
+        let bytes = resource_zip();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/pack.zip", listener.local_addr().unwrap());
+        let metadata = versions_json(
+            RESOURCE_URL,
+            RESOURCE_FILE,
+            &sha512_hex(&bytes),
+            &["1.21.10"],
+        );
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        if stop_rx.try_recv().is_ok() {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("local CDN accept failed: {err}"),
+                }
+            };
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 4096];
+            assert!(stream.read(&mut request).unwrap() > 0);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            )
+            .unwrap();
+            for (index, chunk) in bytes.chunks(8).enumerate() {
+                if stream.write_all(chunk).is_err() {
+                    break;
+                }
+                if index == 0 {
+                    started_tx.send(()).unwrap();
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let control = InstallControl::with_timeout(if cancel {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_millis(500)
+        });
+        let canceller = if cancel {
+            let control = control.clone();
+            Some(std::thread::spawn(move || {
+                started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                std::thread::sleep(Duration::from_millis(20));
+                assert!(control.cancel());
+            }))
+        } else {
+            None
+        };
+        let client = ModrinthClient::without_sleep(LocalCdn {
+            metadata,
+            url,
+            metadata_delay,
+        });
+        let started = Instant::now();
+        let result = prepare_modrinth_install_controlled(
+            &client,
+            &fx.game_dir,
+            None,
+            PROJECT,
+            VERSION,
+            RESOURCE_FILE,
+            "resourcepack",
+            &control,
+        );
+        let elapsed = started.elapsed();
+        if let Some(canceller) = canceller {
+            canceller.join().unwrap();
+        }
+        let result = result.and_then(|prepared| {
+            finish_modrinth_install(
+                prepared,
+                &fx.stack_paths,
+                None,
+                &fx.data_dir,
+                &fx.icons,
+                &fx.hashes,
+            )
+        });
+        let files: Vec<_> = std::fs::read_dir(fx.game_dir.join("resourcepacks"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        let options = std::fs::read_to_string(fx.game_dir.join("options.txt")).unwrap();
+        println!("local HTTP cancel={cancel} result={result:?} elapsed={elapsed:?} files={files:?} options={options:?}");
+        let _ = stop_tx.send(());
+        server.join().unwrap();
+        assert_eq!(
+            result.unwrap_err().code(),
+            if cancel {
+                "download_cancelled"
+            } else {
+                "download_timeout"
+            }
+        );
+        assert_eq!(files, Vec::<std::ffi::OsString>::new());
+        assert_eq!(options, "version:4707\nresourcePacks:[]\n");
+        assert!(elapsed < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn local_http_cancel_mid_download() {
+        local_http_replay(true, Duration::ZERO);
+    }
+
+    #[test]
+    fn local_http_total_deadline() {
+        local_http_replay(false, Duration::ZERO);
+    }
+
+    #[test]
+    fn local_http_deadline_before_cdn_connect_does_not_hang() {
+        local_http_replay(false, Duration::from_millis(650));
+    }
+
+    #[test]
+    fn cancel_before_finish_cleans_verified_temp_without_enabling() {
+        let fx = fixture();
+        let bytes = resource_zip();
+        let (client, _) = client(
+            MockApi::new()
+                .with(
+                    &versions_url(),
+                    versions_json(
+                        RESOURCE_URL,
+                        RESOURCE_FILE,
+                        &sha512_hex(&bytes),
+                        &["1.21.10"],
+                    ),
+                )
+                .with(RESOURCE_URL, bytes),
+        );
+        let control = InstallControl::default();
+        let prepared = prepare_modrinth_install_controlled(
+            &client,
+            &fx.game_dir,
+            None,
+            PROJECT,
+            VERSION,
+            RESOURCE_FILE,
+            "resourcepack",
+            &control,
+        )
+        .unwrap();
+        assert!(control.cancel());
+        let err = finish_modrinth_install(
+            prepared,
+            &fx.stack_paths,
+            None,
+            &fx.data_dir,
+            &fx.icons,
+            &fx.hashes,
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "download_cancelled");
+        assert_eq!(
+            std::fs::read_dir(fx.game_dir.join("resourcepacks"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert_eq!(
+            std::fs::read_to_string(fx.game_dir.join("options.txt")).unwrap(),
+            "version:4707\nresourcePacks:[]\n"
+        );
+    }
+
+    #[test]
+    fn cancel_after_commit_keeps_the_complete_enabled_install() {
+        let fx = fixture();
+        let bytes = resource_zip();
+        let sha256 = sha256_hex(&bytes);
+        let (client, _) = client(
+            MockApi::new()
+                .with(
+                    &versions_url(),
+                    versions_json(
+                        RESOURCE_URL,
+                        RESOURCE_FILE,
+                        &sha512_hex(&bytes),
+                        &["1.21.10"],
+                    ),
+                )
+                .with(RESOURCE_URL, bytes.clone()),
+        );
+        let control = InstallControl::default();
+        let prepared = prepare_modrinth_install_controlled(
+            &client,
+            &fx.game_dir,
+            None,
+            PROJECT,
+            VERSION,
+            RESOURCE_FILE,
+            "resourcepack",
+            &control,
+        )
+        .unwrap();
+        finish_modrinth_install(
+            prepared,
+            &fx.stack_paths,
+            None,
+            &fx.data_dir,
+            &fx.icons,
+            &fx.hashes,
+        )
+        .unwrap();
+        assert!(!control.cancel());
+        assert_eq!(
+            std::fs::read(fx.game_dir.join("resourcepacks").join(RESOURCE_FILE)).unwrap(),
+            bytes
+        );
+        assert!(std::fs::read_to_string(fx.game_dir.join("options.txt"))
+            .unwrap()
+            .contains("file/fresh-1.9.zip"));
+        assert!(provenance_lookup(&fx.data_dir, &sha256).unwrap().is_some());
+        assert!(leftovers(&fx.game_dir).is_empty());
+    }
+
+    #[test]
+    fn cancel_and_commit_have_exactly_one_winner() {
+        for _ in 0..100 {
+            let control = InstallControl::default();
+            let worker = control.clone();
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let other_barrier = barrier.clone();
+            let canceller = std::thread::spawn(move || {
+                other_barrier.wait();
+                worker.cancel()
+            });
+            barrier.wait();
+            let commit = control.begin_commit();
+            let cancelled = canceller.join().unwrap();
+            assert_eq!(commit.is_ok(), !cancelled);
+            if cancelled {
+                assert_eq!(commit.unwrap_err().code(), "download_cancelled");
+            }
+        }
+    }
+}

@@ -216,6 +216,10 @@ The version picker lists the available releases for the selected project.
 3. For a datapack, select the **Target world**.
 4. Choose **Install**.
 
+During a download, choose **Cancel** to stop it. The sheet shows **Install cancelled.** after the backend confirms cancellation and removes the temporary file. Cancellation is available until the commit phase begins. After that point, the install completes and the sheet shows its outcome.
+
+Switching tabs keeps the install running. Return to **Discover** to see the result. Closing the app view or changing game folders requests cancellation before the commit phase. Installation preparation has a 15-minute total deadline, including a slow trickle of bytes.
+
 A successful install copies the pack and enables it. Return to **Packs** or **Worlds** to adjust it.
 
 Special outcomes:

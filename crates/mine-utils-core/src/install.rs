@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256, Sha512};
 
 use crate::data_stack::{self, DataPaths, DatapackImportOutcome};
-use crate::download::{self, DownloadError, VerifiedDownload, ZipRoot};
+use crate::download::{self, DownloadError, InstallControl, VerifiedDownload, ZipRoot};
 use crate::error::AppError;
 use crate::game_lock;
 use crate::level_dat;
@@ -65,6 +65,7 @@ pub struct PreparedInstall {
     pub target_dir: PathBuf,
     pub world: Option<String>,
     pub source: PreparedSource,
+    control: InstallControl,
 }
 
 /// What an install did. A `provenance_warning` never fails the install: the
@@ -84,7 +85,7 @@ pub enum CoreInstallOutcome {
 /// Read-only half of the install: validate, guard-check, fetch metadata,
 /// download and verify. Holds no locks.
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_modrinth_install<T: Transport>(
+pub fn prepare_modrinth_install<T: Transport + 'static>(
     client: &ModrinthClient<T>,
     game_dir: &Path,
     world: Option<&str>,
@@ -93,6 +94,30 @@ pub fn prepare_modrinth_install<T: Transport>(
     filename: &str,
     kind: &str,
 ) -> Result<PreparedInstall, AppError> {
+    prepare_modrinth_install_controlled(
+        client,
+        game_dir,
+        world,
+        project_id,
+        version_id,
+        filename,
+        kind,
+        &InstallControl::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_modrinth_install_controlled<T: Transport + 'static>(
+    client: &ModrinthClient<T>,
+    game_dir: &Path,
+    world: Option<&str>,
+    project_id: &str,
+    version_id: &str,
+    filename: &str,
+    kind: &str,
+    control: &InstallControl,
+) -> Result<PreparedInstall, AppError> {
+    control.check()?;
     let kind = parse_install_kind(kind)?;
     validate_modrinth_id(project_id)?;
     validate_modrinth_id(version_id)?;
@@ -216,13 +241,15 @@ pub fn prepare_modrinth_install<T: Transport>(
             _ => PreparedSource::Collision,
         }
     } else {
-        let verified = download::download_verified(
+        let verified = download::download_verified_controlled(
             client,
             &file.url,
             &target_dir,
             &file.filename,
             &file.hashes.sha512,
             root,
+            crate::modrinth::MAX_DOWNLOAD_BYTES,
+            control,
         )?;
         PreparedSource::Downloaded(verified)
     };
@@ -234,6 +261,7 @@ pub fn prepare_modrinth_install<T: Transport>(
         target_dir,
         world: world.map(str::to_string),
         source,
+        control: control.clone(),
     })
 }
 
@@ -337,6 +365,7 @@ pub fn finish_modrinth_install(
     icons: &IconCache,
     hashes: &HashCache,
 ) -> Result<CoreInstallOutcome, AppError> {
+    prepared.control.begin_commit()?;
     let ids = (
         prepared.project_id.clone(),
         prepared.version_id.clone(),

@@ -8,47 +8,153 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
 use sha2::{Digest, Sha256, Sha512};
+use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
 use crate::fs_commit::atomic_no_replace;
 use crate::modrinth::{ModrinthClient, Transport, MAX_DOWNLOAD_BYTES};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+const MAX_READER_WORKERS: usize = 8;
+static READER_WORKERS: AtomicUsize = AtomicUsize::new(0);
+
+struct ReaderPermit;
+
+impl ReaderPermit {
+    fn acquire(control: &InstallControl) -> Result<Self, DownloadError> {
+        loop {
+            control.check()?;
+            let live = READER_WORKERS.load(Ordering::SeqCst);
+            if live < MAX_READER_WORKERS
+                && READER_WORKERS
+                    .compare_exchange(live, live + 1, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            {
+                return Ok(Self);
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
+impl Drop for ReaderPermit {
+    fn drop(&mut self) {
+        READER_WORKERS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+const DOWNLOADING: u8 = 0;
+const CANCELLED: u8 = 1;
+const COMMITTING: u8 = 2;
+
+#[derive(Debug, Clone)]
+pub struct InstallControl {
+    state: Arc<AtomicU8>,
+    deadline: Instant,
+}
+
+impl Default for InstallControl {
+    fn default() -> Self {
+        Self::with_timeout(Duration::from_secs(crate::modrinth::DOWNLOAD_TIMEOUT_SECS))
+    }
+}
+
+impl InstallControl {
+    pub fn with_timeout(timeout: Duration) -> Self {
+        Self {
+            state: Arc::new(AtomicU8::new(DOWNLOADING)),
+            deadline: Instant::now() + timeout,
+        }
+    }
+
+    pub fn cancel(&self) -> bool {
+        self.state
+            .compare_exchange(DOWNLOADING, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+            || self.state.load(Ordering::SeqCst) == CANCELLED
+    }
+
+    pub fn check(&self) -> Result<(), DownloadError> {
+        if self.state.load(Ordering::SeqCst) == CANCELLED {
+            return Err(DownloadError::Cancelled);
+        }
+        if Instant::now() >= self.deadline {
+            return Err(DownloadError::Timeout);
+        }
+        Ok(())
+    }
+
+    /// Cancellation and the write phase race on this transition. After it
+    /// succeeds, finish must complete import, enablement, and provenance.
+    pub fn begin_commit(&self) -> Result<(), DownloadError> {
+        self.check()?;
+        self.state
+            .compare_exchange(DOWNLOADING, COMMITTING, Ordering::SeqCst, Ordering::SeqCst)
+            .map(|_| ())
+            .map_err(|_| DownloadError::Cancelled)
+    }
+}
+
 /// What the download verifier reports. Codes are the wire codes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadError {
+    Cancelled,
+    Timeout,
     /// The CDN could not be reached. The UI shows offline.
-    Offline { reason: String },
+    Offline {
+        reason: String,
+    },
     /// The CDN answered with a non-2xx status after retries.
-    Status { status: u16, url: String },
+    Status {
+        status: u16,
+        url: String,
+    },
     /// A redirect left the Modrinth hosts. Refused, not retried.
-    BadHost { host: String },
+    BadHost {
+        host: String,
+    },
     /// More than 500 MB arrived. The temp is deleted, nothing is kept.
-    TooLarge { url: String },
+    TooLarge {
+        url: String,
+    },
     /// The stream failed or the target dir was unusable.
-    Io { reason: String },
+    Io {
+        reason: String,
+    },
     /// The bytes do not match the version metadata. Not retried.
-    HashMismatch { expected: String, actual: String },
+    HashMismatch {
+        expected: String,
+        actual: String,
+    },
     /// The bytes are not a zip. Not retried.
-    NotZip { reason: String },
+    NotZip {
+        reason: String,
+    },
     /// The zip has no `assets` (resource) or `data` (datapack) root.
     WrongRoot {
         expected: String,
         found: Vec<String>,
     },
     /// The file name is unsafe for the target directory.
-    BadFilename { name: String },
+    BadFilename {
+        name: String,
+    },
     /// The destination already exists; the installer routes this through the
     /// duplicate/collision prompt instead of overwriting.
-    Exists { name: String },
+    Exists {
+        name: String,
+    },
 }
 
 impl DownloadError {
     pub fn code(&self) -> &'static str {
         match self {
+            DownloadError::Cancelled => "download_cancelled",
+            DownloadError::Timeout => "download_timeout",
             DownloadError::Offline { .. } => "download_offline",
             DownloadError::Status { .. } => "download_status",
             DownloadError::BadHost { .. } => "download_host",
@@ -66,6 +172,8 @@ impl DownloadError {
 impl std::fmt::Display for DownloadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            DownloadError::Cancelled => write!(f, "Install cancelled."),
+            DownloadError::Timeout => write!(f, "Download exceeded its total deadline. Try again."),
             DownloadError::Offline { reason } => {
                 write!(f, "download failed: CDN unreachable ({reason})")
             }
@@ -360,7 +468,7 @@ fn sweep_download_temps(_target_dir: &Path) {}
 /// cap and the SHA-512 while streaming, then validating the zip root.
 /// The URL must be `https://cdn.modrinth.com/...` and every redirect hop
 /// must stay on the Modrinth hosts. The temp is deleted on every error.
-pub fn download_verified<T: Transport>(
+pub fn download_verified<T: Transport + 'static>(
     client: &ModrinthClient<T>,
     url: &str,
     target_dir: &Path,
@@ -382,7 +490,7 @@ pub fn download_verified<T: Transport>(
 /// [`download_verified`] with an explicit byte cap. Tests use a small cap to
 /// prove the limit without staging 500 MB; production passes
 /// [`MAX_DOWNLOAD_BYTES`].
-pub fn download_verified_capped<T: Transport>(
+pub fn download_verified_capped<T: Transport + 'static>(
     client: &ModrinthClient<T>,
     url: &str,
     target_dir: &Path,
@@ -391,6 +499,30 @@ pub fn download_verified_capped<T: Transport>(
     root: ZipRoot,
     max_bytes: u64,
 ) -> Result<VerifiedDownload, DownloadError> {
+    download_verified_controlled(
+        client,
+        url,
+        target_dir,
+        filename,
+        expected_sha512,
+        root,
+        max_bytes,
+        &InstallControl::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn download_verified_controlled<T: Transport + 'static>(
+    client: &ModrinthClient<T>,
+    url: &str,
+    target_dir: &Path,
+    filename: &str,
+    expected_sha512: &str,
+    root: ZipRoot,
+    max_bytes: u64,
+    control: &InstallControl,
+) -> Result<VerifiedDownload, DownloadError> {
+    control.check()?;
     validate_filename(filename)?;
     std::fs::create_dir_all(target_dir).map_err(|err| DownloadError::Io {
         reason: format!("cannot use {}: {err}", target_dir.display()),
@@ -441,13 +573,15 @@ pub fn download_verified_capped<T: Transport>(
         expected_sha512,
         root,
         max_bytes,
+        control,
     )?;
     verified.sha256 = sha256;
     verified.bytes = bytes;
     Ok(verified)
 }
 
-fn download_into<T: Transport>(
+#[allow(clippy::too_many_arguments)]
+fn download_into<T: Transport + 'static>(
     client: &ModrinthClient<T>,
     url: &str,
     temp: &Path,
@@ -455,27 +589,83 @@ fn download_into<T: Transport>(
     expected_sha512: &str,
     root: ZipRoot,
     max_bytes: u64,
+    control: &InstallControl,
 ) -> Result<(String, u64), DownloadError> {
-    let fetched = client.file_stream(url)?;
+    let permit = ReaderPermit::acquire(control)?;
+    let (tx, rx) = mpsc::sync_channel(1);
+    let client = client.clone();
+    let url = url.to_string();
+    let stream_url = url.clone();
+    let worker_control = control.clone();
+    // The worker owns only network bytes. The caller alone owns the temp,
+    // so cancellation can delete it even while a socket read is blocked.
+    std::thread::Builder::new()
+        .name("modrinth-reader".into())
+        .spawn(move || {
+            let _permit = permit;
+            let stream = (|| {
+                worker_control.check()?;
+                Ok(client.file_stream(&stream_url)?.body.take(max_bytes + 1))
+            })();
+            let mut reader = match stream {
+                Ok(reader) => reader,
+                Err(err) => {
+                    let _ = tx.send(Err(err));
+                    return;
+                }
+            };
+            loop {
+                if worker_control.check().is_err() {
+                    return;
+                }
+                let mut chunk = vec![0u8; 64 * 1024];
+                let result = reader
+                    .read(&mut chunk)
+                    .map(|n| {
+                        chunk.truncate(n);
+                        chunk
+                    })
+                    .map_err(|err| DownloadError::Io {
+                        reason: format!("download interrupted: {err}"),
+                    });
+                let done = result.as_ref().map_or(true, |bytes| bytes.is_empty());
+                if tx.send(result).is_err() || done {
+                    return;
+                }
+            }
+        })
+        .map_err(|err| DownloadError::Io {
+            reason: format!("cannot start download worker: {err}"),
+        })?;
     let mut sha512 = Sha512::new();
     let mut sha256 = Sha256::new();
     let mut bytes: u64 = 0;
-    let mut reader = fetched.body.take(max_bytes + 1);
-    // Same 64KiB size as the pack/install hash loops, but not shared: this
-    // loop hashes two digests while writing and enforcing the byte cap.
-    let mut chunk = [0u8; 64 * 1024];
     loop {
-        let n = reader.read(&mut chunk).map_err(|err| DownloadError::Io {
-            reason: format!("download interrupted: {err}"),
-        })?;
+        control.check()?;
+        let wait = control
+            .deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(25));
+        let chunk = match rx.recv_timeout(wait) {
+            Ok(result) => {
+                control.check()?;
+                result?
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                control.check()?;
+                return Err(DownloadError::Io {
+                    reason: "download worker stopped".to_string(),
+                });
+            }
+        };
+        let n = chunk.len();
         if n == 0 {
             break;
         }
         bytes += n as u64;
         if bytes > max_bytes {
-            return Err(DownloadError::TooLarge {
-                url: fetched.url.clone(),
-            });
+            return Err(DownloadError::TooLarge { url: url.clone() });
         }
         sha512.update(&chunk[..n]);
         sha256.update(&chunk[..n]);
@@ -501,6 +691,7 @@ fn download_into<T: Transport>(
         });
     }
     validate_zip_root(temp, root)?;
+    control.check()?;
     Ok((hex::encode(sha256.finalize()), bytes))
 }
 

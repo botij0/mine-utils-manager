@@ -130,6 +130,36 @@ describe('useModrinth', () => {
     }
   });
 
+  it('requests backend cancellation when unmounted during an install', async () => {
+    const client = makeFakeClient([]);
+    const cancel = vi.spyOn(client, 'cancelModrinthInstall').mockResolvedValue(true);
+    const install = vi.spyOn(client, 'installModrinthPack').mockReturnValue(new Promise(() => {}));
+    const { result, unmount } = renderHook(() => useModrinth(client));
+    await act(async () => { await result.current.select(freshHit()); });
+    act(() => { void result.current.install(); });
+    const id = install.mock.calls[0][0].installId;
+    expect(id).toEqual(expect.any(String));
+    unmount();
+    expect(cancel.mock.calls).toEqual([[id]]);
+  });
+
+  it('shows the install as committing when a game-folder change cannot cancel it', async () => {
+    const client = makeFakeClient([]);
+    const cancel = vi.spyOn(client, 'cancelModrinthInstall').mockResolvedValue(false);
+    vi.spyOn(client, 'installModrinthPack').mockReturnValue(new Promise(() => {}));
+    const { result, rerender } = renderHook(
+      ({ dir }: { dir: string }) => useModrinth(client, true, '', dir),
+      { initialProps: { dir: '/a' } },
+    );
+    await act(async () => { await result.current.select(freshHit()); });
+    act(() => { void result.current.install(); });
+    expect(result.current.installCommitting).toBe(false);
+    await act(async () => { rerender({ dir: '/b' }); });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(result.current.installBusy).toBe(true);
+    expect(result.current.installCommitting).toBe(true);
+  });
+
   it('drops an install outcome after selecting another project', async () => {
     const client = makeFakeClient([]);
     let release!: (outcome: ModrinthInstallOutcome) => void;

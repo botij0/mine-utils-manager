@@ -3,13 +3,16 @@
 //! `https://cdn.modrinth.com`, and every write goes through the existing
 //! pack/datapack import paths so duplicates, locks, and guards behave as one.
 
-use std::sync::Arc;
+use mine_utils_core::download::InstallControl;
+use mine_utils_core::install::prepare_modrinth_install_controlled;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use mine_utils_core::{
     finish_modrinth_install, installed_game_versions, parse_install_kind,
-    preferred_launcher_version, prepare_modrinth_install, world, AppError, CoreInstallOutcome,
-    DatapackImportOutcome, ImportOutcome, ModrinthClient, ModrinthError, ModrinthProject,
-    ModrinthVersion, ReqwestTransport, SearchHit, SearchQuery, SearchSort,
+    preferred_launcher_version, world, AppError, CoreInstallOutcome, DatapackImportOutcome,
+    ImportOutcome, ModrinthClient, ModrinthError, ModrinthProject, ModrinthVersion,
+    ReqwestTransport, SearchHit, SearchQuery, SearchSort,
 };
 use tauri::State;
 
@@ -22,12 +25,14 @@ use super::resource_stack::StackState;
 /// thread without rebuilding connection pools.
 pub struct ModrinthState {
     client: Arc<ModrinthClient<ReqwestTransport>>,
+    installs: Arc<Mutex<HashMap<String, RegisteredInstall>>>,
 }
 
 impl ModrinthState {
     pub fn new() -> Self {
         ModrinthState {
             client: Arc::new(ModrinthClient::new(ReqwestTransport::default())),
+            installs: Arc::default(),
         }
     }
 }
@@ -36,6 +41,81 @@ impl Default for ModrinthState {
     fn default() -> Self {
         ModrinthState::new()
     }
+}
+
+enum RegisteredInstall {
+    Ready(InstallControl),
+    Running(InstallControl),
+}
+
+impl RegisteredInstall {
+    fn control(&self) -> &InstallControl {
+        match self {
+            Self::Ready(control) | Self::Running(control) => control,
+        }
+    }
+}
+
+const MAX_REGISTERED_INSTALLS: usize = 64;
+
+fn expire_ready(installs: &mut HashMap<String, RegisteredInstall>) {
+    installs.retain(|_, entry| match entry {
+        RegisteredInstall::Ready(control) => control.check().is_ok(),
+        RegisteredInstall::Running(_) => true,
+    });
+}
+
+#[tauri::command]
+pub fn begin_modrinth_install(
+    mods: State<'_, ModrinthState>,
+    install_id: String,
+) -> Result<(), AppError> {
+    let mut installs = mods.installs.lock().unwrap_or_else(|err| err.into_inner());
+    expire_ready(&mut installs);
+    if installs.len() >= MAX_REGISTERED_INSTALLS {
+        return Err(ModrinthError::Parse {
+            reason: "too many active installs; cancel an install or wait for it to finish".into(),
+        }
+        .into());
+    }
+    if installs.contains_key(&install_id) {
+        return Err(ModrinthError::Parse {
+            reason: "install id is already active".to_string(),
+        }
+        .into());
+    }
+    installs.insert(
+        install_id,
+        RegisteredInstall::Ready(InstallControl::default()),
+    );
+    Ok(())
+}
+
+struct InstallRegistration {
+    id: String,
+    installs: Arc<Mutex<HashMap<String, RegisteredInstall>>>,
+}
+
+impl Drop for InstallRegistration {
+    fn drop(&mut self) {
+        self.installs
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&self.id);
+    }
+}
+
+#[tauri::command]
+pub fn cancel_modrinth_install(mods: State<'_, ModrinthState>, install_id: String) -> bool {
+    let mut installs = mods.installs.lock().unwrap_or_else(|err| err.into_inner());
+    let cancelled = installs
+        .get(&install_id)
+        .is_some_and(|entry| entry.control().cancel());
+    if matches!(installs.get(&install_id), Some(RegisteredInstall::Ready(_))) {
+        installs.remove(&install_id);
+    }
+    expire_ready(&mut installs);
+    cancelled
 }
 
 fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
@@ -238,6 +318,7 @@ pub async fn install_modrinth_pack(
     packs: State<'_, PackState>,
     stack: State<'_, StackState>,
     mods: State<'_, ModrinthState>,
+    install_id: String,
     project_id: String,
     version_id: String,
     filename: String,
@@ -245,6 +326,27 @@ pub async fn install_modrinth_pack(
     world: Option<String>,
 ) -> Result<ModrinthInstallOutcome, AppError> {
     state.note_ipc();
+    let control = {
+        let mut installs = mods.installs.lock().unwrap_or_else(|err| err.into_inner());
+        match installs.get_mut(&install_id) {
+            Some(entry @ RegisteredInstall::Ready(_)) => {
+                let control = entry.control().clone();
+                *entry = RegisteredInstall::Running(control.clone());
+                control
+            }
+            None => return Err(mine_utils_core::download::DownloadError::Cancelled.into()),
+            Some(RegisteredInstall::Running(_)) => {
+                return Err(ModrinthError::Parse {
+                    reason: "install id is not ready".to_string(),
+                }
+                .into())
+            }
+        }
+    };
+    let registration = InstallRegistration {
+        id: install_id,
+        installs: Arc::clone(&mods.installs),
+    };
     // One snapshot: the game dir, stack paths, and backup policy are read
     // once, not three times across the install.
     let snapshot = state.snapshot()?;
@@ -259,7 +361,8 @@ pub async fn install_modrinth_pack(
     let hashes = packs.hashes();
     let client = Arc::clone(&mods.client);
     tauri::async_runtime::spawn_blocking(move || {
-        let prepared = prepare_modrinth_install(
+        let _registration = registration;
+        let prepared = prepare_modrinth_install_controlled(
             &client,
             &snapshot.game_dir,
             world.as_deref(),
@@ -267,6 +370,7 @@ pub async fn install_modrinth_pack(
             &version_id,
             &filename,
             &kind,
+            &control,
         )?;
         let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
         finish_modrinth_install(
@@ -286,6 +390,74 @@ pub async fn install_modrinth_pack(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::Manager;
+
+    #[test]
+    fn unused_registrations_are_released_on_cancel() {
+        let app = mock_builder()
+            .manage(ModrinthState::new())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        for _ in 0..100 {
+            begin_modrinth_install(app.state(), "unused".into()).unwrap();
+            assert!(cancel_modrinth_install(app.state(), "unused".into()));
+            let count = app.state::<ModrinthState>().installs.lock().unwrap().len();
+            assert_eq!(count, 0, "cancel must release a Ready registration");
+        }
+        begin_modrinth_install(app.state(), "unused".into()).unwrap();
+        assert_eq!(
+            app.state::<ModrinthState>().installs.lock().unwrap().len(),
+            1
+        );
+        println!(
+            "registry replay: 100 register/cancel pairs left 0 entries; same id registers again"
+        );
+    }
+
+    #[test]
+    fn expired_ready_registration_can_be_registered_again() {
+        let app = mock_builder()
+            .manage(ModrinthState::new())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        app.state::<ModrinthState>()
+            .installs
+            .lock()
+            .unwrap()
+            .insert(
+                "expired".into(),
+                RegisteredInstall::Ready(InstallControl::with_timeout(std::time::Duration::ZERO)),
+            );
+        begin_modrinth_install(app.state(), "expired".into()).unwrap();
+        assert_eq!(
+            app.state::<ModrinthState>().installs.lock().unwrap().len(),
+            1
+        );
+        assert!(cancel_modrinth_install(app.state(), "expired".into()));
+    }
+
+    #[test]
+    fn unused_registrations_have_a_capacity_limit() {
+        let app = mock_builder()
+            .manage(ModrinthState::new())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let accepted = (0..100)
+            .filter(|id| begin_modrinth_install(app.state(), format!("unused-{id}")).is_ok())
+            .count();
+        assert_eq!(accepted, 64);
+        assert_eq!(
+            app.state::<ModrinthState>().installs.lock().unwrap().len(),
+            64
+        );
+        assert!(cancel_modrinth_install(app.state(), "unused-0".into()));
+        begin_modrinth_install(app.state(), "replacement".into()).unwrap();
+        println!(
+            "registry replay: 100 abandoned registrations retained 64; cancellation freed a slot"
+        );
+    }
 
     fn hit() -> SearchHit {
         serde_json::from_value(serde_json::json!({ "project_id": "p" })).expect("hit")

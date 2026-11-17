@@ -109,7 +109,9 @@ export interface ModrinthState {
   detailError: IpcError | null;
   selectedVersionId: string | null;
   setSelectedVersionId: (id: string) => void;
+  cancelInstall: () => Promise<void>;
   installBusy: boolean;
+  installCommitting: boolean;
   installResult: ModrinthInstallOutcome | null;
   installError: IpcError | null;
   install: () => Promise<ModrinthInstallOutcome | null>;
@@ -146,9 +148,10 @@ export function useModrinth(
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<IpcError | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
-  const [installBusy, setInstallBusy] = useState(false);
+  const [installPhase, setInstallPhase] = useState<'idle' | 'downloading' | 'committing'>('idle');
   const [installResult, setInstallResult] = useState<ModrinthInstallOutcome | null>(null);
   const [installError, setInstallError] = useState<IpcError | null>(null);
+  const installId = useRef<string | null>(null);
   const requestId = useRef(0);
   const selectToken = useRef(0);
   const mounted = useRef(true);
@@ -169,8 +172,17 @@ export function useModrinth(
     mounted.current = true;
     return () => {
       mounted.current = false;
+      selectToken.current += 1;
+      const id = installId.current;
+      if (!id) return;
+      void client
+        .cancelModrinthInstall(id)
+        .then((cancelled) => {
+          if (!cancelled && mounted.current && installId.current === id) setInstallPhase('committing');
+        })
+        .catch(() => {});
     };
-  }, []);
+  }, [client, gameDir]);
 
   const resetSearchResults = useCallback(() => {
     loadingMore.current = false;
@@ -400,7 +412,7 @@ export function useModrinth(
   }, []);
 
   const install = useCallback(async (): Promise<ModrinthInstallOutcome | null> => {
-    if (!selected) return null;
+    if (!selected || installId.current) return null;
     const version = versions.find((item) => item.id === selectedVersionId) ?? null;
     const file = version?.files.find((item) => item.primary) ?? version?.files[0] ?? null;
     if (!version || !file) {
@@ -408,10 +420,13 @@ export function useModrinth(
       return null;
     }
     const token = selectToken.current;
-    setInstallBusy(true);
+    const id = crypto.randomUUID();
+    installId.current = id;
+    setInstallPhase('downloading');
     setInstallError(null);
     try {
       const outcome = await client.installModrinthPack({
+        installId: id,
         projectId: selected.project_id,
         versionId: version.id,
         filename: file.filename,
@@ -425,9 +440,23 @@ export function useModrinth(
       if (mounted.current && selectToken.current === token) setInstallError(toAppError(err));
       return null;
     } finally {
-      if (mounted.current) setInstallBusy(false);
+      installId.current = null;
+      if (mounted.current) setInstallPhase('idle');
     }
   }, [client, kind, selected, selectedVersionId, versions, world]);
+
+  const cancelInstall = useCallback(async () => {
+    const id = installId.current;
+    if (!id) return;
+    try {
+      const cancelled = await client.cancelModrinthInstall(id);
+      if (!cancelled && mounted.current && installId.current === id) {
+        setInstallPhase('committing');
+      }
+    } catch (err) {
+      if (mounted.current) setInstallError(toAppError(err));
+    }
+  }, [client]);
 
   const clearInstall = useCallback(() => {
     setInstallResult(null);
@@ -480,7 +509,9 @@ export function useModrinth(
     detailError,
     selectedVersionId,
     setSelectedVersionId: chooseVersion,
-    installBusy,
+    cancelInstall,
+    installBusy: installPhase !== 'idle',
+    installCommitting: installPhase === 'committing',
     installResult,
     installError,
     install,
