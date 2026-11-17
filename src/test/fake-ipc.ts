@@ -187,7 +187,7 @@ export function makeFakeClient(
     async listResourcePacks() {
       return {
         packs: packs.map((item) => ({ ...item })),
-        count: packs.length,
+        count: packs.length, holding_entries: [],
         bytes_read: packs.reduce((total, item) => total + item.bytes_read, 0),
         elapsed_ms: 4,
       };
@@ -221,6 +221,8 @@ export function makeFakeClient(
       packs = [...packs, imported];
       return { status: 'imported', pack: imported };
     },
+    async restoreResourceHolding() {},
+    async restoreDatapackHolding() {},
     async deleteResourcePack(path: string) {
       if (!packs.some((item) => item.path === path)) {
         throw new IpcError('pack_not_found', `pack ${path} does not exist`);
@@ -266,7 +268,7 @@ export function makeFakeClient(
     },
     async listDatapacks() {
       return {
-        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        packs: { packs: [], count: 0, holding_entries: [], bytes_read: 0, elapsed_ms: 0 },
         stack: dataStack(),
       };
     },
@@ -364,10 +366,11 @@ export function worldsClient(
     getConfig: async () => defaultConfig(),
     setLastWorld: async () => {},
     listDatapacks: async () => ({
-      packs: { packs: [datapack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
+      packs: { packs: [datapack('a.zip')], count: 1, holding_entries: [], bytes_read: 128, elapsed_ms: 1 },
       stack: stack(),
     }),
     importDatapack: async () => ({ status: 'skipped' }),
+    restoreDatapackHolding: async () => {},
     deleteDatapack: async () => ({ removed_references: true, stack: stack() }),
     removeDatapackReference: async () => stack(),
     setDatapackEnabled: async () => stack(),

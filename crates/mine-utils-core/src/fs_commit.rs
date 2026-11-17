@@ -6,6 +6,13 @@ use std::path::Path;
 /// filesystem that supports the flag the exists-then-rename race cannot
 /// happen.
 pub(crate) fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
+    match strict_no_replace(temp, dest) {
+        Err(err) if err.kind() == ErrorKind::Unsupported => no_replace_fallback(temp, dest),
+        result => result,
+    }
+}
+
+pub(crate) fn strict_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         // renameat2 with AT_FDCWD renames by path. RENAME_NOREPLACE makes
@@ -34,7 +41,15 @@ pub(crate) fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()>
             }
         }
     }
-    no_replace_fallback(temp, dest)
+    #[cfg(windows)]
+    {
+        return std::fs::rename(temp, dest);
+    }
+    #[cfg(not(windows))]
+    Err(std::io::Error::new(
+        ErrorKind::Unsupported,
+        "atomic no-replace rename is unsupported on this filesystem",
+    ))
 }
 
 /// A hard link (same directory, so same filesystem) is the atomic

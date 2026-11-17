@@ -57,7 +57,7 @@ function pageClient(overrides: Partial<WorldsClient> = {}): WorldsClient {
               bytes_read: 64,
             }),
           ],
-          count: 1,
+          count: 1, holding_entries: [],
           bytes_read: 64,
           elapsed_ms: 1,
         },
@@ -171,7 +171,7 @@ describe('WorldsPage', () => {
       error: { code: 'pack_non_utf8_name', message: 'Invalid filename' },
     });
     const client = pageClient({ listDatapacks: async () => ({
-      packs: { packs: [bad, valid], count: 2, bytes_read: 0, elapsed_ms: 0 },
+      packs: { packs: [bad, valid], count: 2, holding_entries: [], bytes_read: 0, elapsed_ms: 0 },
       stack: stack({ enabled: [], disabled: [stackEntry('file/Caf�.zip')] }),
     }) });
     render(<WorldsPage client={client} gameRunning={null} />);
@@ -195,7 +195,7 @@ describe('WorldsPage', () => {
     const lockedClient = pageClient({
       listWorlds: async () => [lockedWorld],
       listDatapacks: async () => ({
-        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        packs: { packs: [], count: 0, holding_entries: [], bytes_read: 0, elapsed_ms: 0 },
         stack: stack({
           enabled: [{ kind: 'foreign', value: 'vanilla' }],
           disabled: [{ kind: 'file', value: 'file/a.zip', filename: 'a.zip' }],
@@ -226,7 +226,7 @@ describe('WorldsPage', () => {
   it('keys duplicate entries by position so both cards render', async () => {
     const dupClient = pageClient({
       listDatapacks: async () => ({
-        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        packs: { packs: [], count: 0, holding_entries: [], bytes_read: 0, elapsed_ms: 0 },
         stack: stack({
           enabled: [
             { kind: 'file', value: 'file/dup.zip', filename: 'dup.zip' },
@@ -247,7 +247,7 @@ describe('WorldsPage', () => {
     const orderClient = pageClient({
       reorderDatapacks: reorder,
       listDatapacks: async () => ({
-        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        packs: { packs: [], count: 0, holding_entries: [], bytes_read: 0, elapsed_ms: 0 },
         stack: stack({
           enabled: [
             { kind: 'file', value: 'file/a.zip', filename: 'a.zip' },
@@ -298,7 +298,7 @@ describe('WorldsPage', () => {
               bytes_read: 8,
             }),
           ],
-          count: 1,
+          count: 1, holding_entries: [],
           bytes_read: 8,
           elapsed_ms: 1,
         },
@@ -323,7 +323,7 @@ describe('WorldsPage', () => {
     const missingClient = pageClient({
       removeDatapackReference: remove,
       listDatapacks: async () => ({
-        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        packs: { packs: [], count: 0, holding_entries: [], bytes_read: 0, elapsed_ms: 0 },
         stack: stack({
           enabled: [{ kind: 'foreign', value: 'vanilla' }],
           disabled: [{ kind: 'file', value: 'file/gone.zip', filename: 'gone.zip' }],
@@ -344,7 +344,7 @@ describe('WorldsPage', () => {
       listDatapacks: async () => ({
         packs: {
           packs: [BROKEN_DATAPACK],
-          count: 1,
+          count: 1, holding_entries: [],
           bytes_read: 8,
           elapsed_ms: 1,
         },
@@ -370,7 +370,7 @@ describe('WorldsPage', () => {
     };
     const brokenClient = pageClient({
       listDatapacks: async () => ({
-        packs: { packs: [BROKEN_DATAPACK, otherBroken], count: 2, bytes_read: 16, elapsed_ms: 1 },
+        packs: { packs: [BROKEN_DATAPACK, otherBroken], count: 2, holding_entries: [], bytes_read: 16, elapsed_ms: 1 },
         stack: stack({
           enabled: [
             { kind: 'file', value: 'file/broken.zip', filename: 'broken.zip' },
@@ -402,7 +402,7 @@ describe('WorldsPage', () => {
             datapack('a.zip', 7, 7, { id: '/saves/Survival/a.zip', name: 'a', path: '/saves/Survival/datapacks/a.zip' }),
             datapack('b.zip', 7, 7, { id: '/saves/Survival/b.zip', name: 'b', path: '/saves/Survival/datapacks/b.zip' }),
           ],
-          count: 2,
+          count: 2, holding_entries: [],
           bytes_read: 256,
           elapsed_ms: 1,
         },
@@ -429,7 +429,7 @@ describe('WorldsPage', () => {
     const actionable = pageClient({
       setDatapackEnabled: setEnabled,
       listDatapacks: async () => ({
-        packs: { packs: [BROKEN_DATAPACK], count: 1, bytes_read: 8, elapsed_ms: 1 },
+        packs: { packs: [BROKEN_DATAPACK], count: 1, holding_entries: [], bytes_read: 8, elapsed_ms: 1 },
         stack: stack({
           enabled: [{ kind: 'file', value: 'file/broken.zip', filename: 'broken.zip' }],
           disabled: [],
@@ -453,7 +453,7 @@ describe('WorldsPage', () => {
   it('leaves a disabled broken pack as an error badge with no actions', async () => {
     const badgeClient = pageClient({
       listDatapacks: async () => ({
-        packs: { packs: [BROKEN_DATAPACK], count: 1, bytes_read: 8, elapsed_ms: 1 },
+        packs: { packs: [BROKEN_DATAPACK], count: 1, holding_entries: [], bytes_read: 8, elapsed_ms: 1 },
         stack: stack({
           enabled: [{ kind: 'foreign', value: 'vanilla' }],
           disabled: [{ kind: 'file', value: 'file/broken.zip', filename: 'broken.zip' }],
@@ -489,7 +489,7 @@ describe('WorldsPage', () => {
               bytes_read: 8,
             }),
           ],
-          count: 1,
+          count: 1, holding_entries: [],
           bytes_read: 8,
           elapsed_ms: 1,
         },
@@ -522,7 +522,7 @@ describe('WorldsPage', () => {
     const staleWhileLocked = pageClient({
       listWorlds: async () => [lockedWorld],
       listDatapacks: async () => ({
-        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        packs: { packs: [], count: 0, holding_entries: [], bytes_read: 0, elapsed_ms: 0 },
         stack: stack({
           enabled: [{ kind: 'foreign', value: 'vanilla' }],
           disabled: [],
@@ -609,7 +609,7 @@ describe('WorldsPage', () => {
     expect(screen.queryByRole('button', { name: /^Disable( |$)/ })).not.toBeInTheDocument();
     await act(async () => {
       resolveCreative({
-        packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+        packs: { packs: [], count: 0, holding_entries: [], bytes_read: 0, elapsed_ms: 0 },
         stack: stack({ enabled: [], disabled: [] }),
       });
       await creativeListing;
@@ -618,4 +618,24 @@ describe('WorldsPage', () => {
       expect(screen.getByText('No datapacks yet. Import a zip or a folder to add one.')).toBeInTheDocument(),
     );
   });
+});
+
+it('restores an interrupted datapack Replace in the selected world', async () => {
+  let restored = false;
+  const client = pageClient({
+    listDatapacks: async () => ({
+      packs: { packs: restored ? [datapack('Recovered.zip')] : [], count: restored ? 1 : 0, bytes_read: 0, elapsed_ms: 0,
+        holding_entries: restored ? [] : [{ holdingName: '.mine-utils-replace-Recovered.zip.42-123-0.tmp', originalName: 'Recovered.zip' }] },
+      stack: stack(),
+    }),
+    restoreDatapackHolding: async (world, name) => {
+      expect(world).toBe('Survival 1_17');
+      expect(name).toBe('.mine-utils-replace-Recovered.zip.42-123-0.tmp');
+      restored = true;
+    },
+  });
+  render(<WorldsPage client={client} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Restore Recovered.zip' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore Recovered.zip' })).not.toBeInTheDocument());
+  expect(await screen.findByRole('button', { name: 'Enable Recovered.zip' })).toBeInTheDocument();
 });

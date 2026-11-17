@@ -214,3 +214,21 @@ pub async fn restore_level_backup(
     .await
     .map_err(join_error)?
 }
+
+#[tauri::command]
+pub async fn restore_datapack_holding(
+    state: State<'_, AppState>,
+    stack: State<'_, super::resource_stack::StackState>,
+    world: String,
+    holding_name: String,
+) -> Result<(), AppError> {
+    state.note_ipc();
+    let paths = state.world_data_paths(&world)?;
+    let guard = stack.lock_for(paths.game_dir());
+    tauri::async_runtime::spawn_blocking(move || {
+        let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
+        mine_utils_core::holding_recovery::restore_datapack_holding(&paths, &holding_name)
+    })
+    .await
+    .map_err(join_error)?
+}

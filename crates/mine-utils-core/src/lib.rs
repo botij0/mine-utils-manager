@@ -7,6 +7,7 @@ pub mod format_table;
 mod fs_commit;
 pub mod game_dir;
 pub mod game_lock;
+pub mod holding_recovery;
 pub mod icon_cache;
 pub mod install;
 pub mod level_backup;

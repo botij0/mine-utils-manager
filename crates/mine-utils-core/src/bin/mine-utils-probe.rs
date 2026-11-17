@@ -35,6 +35,27 @@ fn run() -> Result<String, String> {
                 .map_err(|err| err.to_string())?;
             serde_json::to_string_pretty(&listing).map_err(|err| err.to_string())
         }
+        Some("restore-resource-holding") => {
+            let name = args
+                .next()
+                .ok_or("restore-resource-holding needs a holding name")?;
+            let paths = stack_paths(game_dir(args.next())?)?;
+            mine_utils_core::holding_recovery::restore_resource_holding(&paths, &name)
+                .map_err(|err| err.to_string())?;
+            Ok("{\"restored\":true}".to_owned())
+        }
+        Some("restore-datapack-holding") => {
+            let world = args
+                .next()
+                .ok_or("restore-datapack-holding needs a world")?;
+            let name = args
+                .next()
+                .ok_or("restore-datapack-holding needs a holding name")?;
+            let paths = data_paths(game_dir(args.next())?, &world)?;
+            mine_utils_core::holding_recovery::restore_datapack_holding(&paths, &name)
+                .map_err(|err| err.to_string())?;
+            Ok("{\"restored\":true}".to_owned())
+        }
         Some("import-pack") => {
             let source = args
                 .next()
@@ -60,6 +81,7 @@ fn run() -> Result<String, String> {
                     let listing = PackListing {
                         packs: vec![(**pack).clone()],
                         count: 1,
+                        holding_entries: Vec::new(),
                         bytes_read: pack.bytes_read,
                         elapsed_ms: 0.0,
                     };
@@ -426,7 +448,7 @@ fn world_format_name(paths: &DataPaths) -> Option<String> {
     mine_utils_core::data_format_for_version(&view.version_name).map(|format| format.label())
 }
 
-const USAGE: &str = "usage: mine-utils-probe <subcommand>\n\
+const USAGE: &str = "restore-resource-holding <holding-name> <game-dir>\nrestore-datapack-holding <world> <holding-name> <game-dir>\nusage: mine-utils-probe <subcommand>\n\
   list-game-dirs\n\
   scan-packs [game-dir]\n\
   import-pack <source> [game-dir] [default|replace|skip]\n\

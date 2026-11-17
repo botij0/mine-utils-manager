@@ -101,3 +101,20 @@ pub async fn delete_resource_pack(
     .await
     .map_err(join_error)?
 }
+
+#[tauri::command]
+pub async fn restore_resource_holding(
+    state: State<'_, AppState>,
+    stack: State<'_, super::resource_stack::StackState>,
+    holding_name: String,
+) -> Result<(), AppError> {
+    state.note_ipc();
+    let paths = state.stack_paths()?;
+    let guard = stack.lock_for(paths.game_dir());
+    tauri::async_runtime::spawn_blocking(move || {
+        let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
+        mine_utils_core::holding_recovery::restore_resource_holding(&paths, &holding_name)
+    })
+    .await
+    .map_err(join_error)?
+}

@@ -10,3 +10,6 @@ pub(crate) fn join_error(
 ) -> mine_utils_core::AppError {
     mine_utils_core::AppError::Io(std::io::Error::other(err))
 }
+
+#[cfg(test)]
+mod holding_recovery_tests;

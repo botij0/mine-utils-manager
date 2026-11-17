@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { PackClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import type {
+  HoldingEntry,
   ImportChoice,
   ImportOutcome,
   IpcError,
@@ -17,6 +18,8 @@ export interface PackStats {
 
 export interface PacksState {
   packs: Pack[];
+  holdings: HoldingEntry[];
+  restoreHolding: (holdingName: string) => Promise<void>;
   stats: PackStats | null;
   loading: boolean;
   busy: boolean;
@@ -54,6 +57,7 @@ export function usePacks(
   reloadSignal = '',
   gameDir: string | null = null,
 ): PacksState {
+  const [holdings, setHoldings] = useState<HoldingEntry[]>([]);
   const [packs, setPacks] = useState<Pack[]>([]);
   const [stats, setStats] = useState<PackStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,6 +76,7 @@ export function usePacks(
     stackRequest.current += 1;
     loadedSignal.current = null;
     setPacks([]);
+    setHoldings([]);
     setStats(null);
     setStack(null);
     setError(null);
@@ -94,12 +99,14 @@ export function usePacks(
       const listing = await client.listResourcePacks();
       if (!mounted.current || request !== packRequest.current) return;
       setPacks(listing.packs);
+      setHoldings(listing.holding_entries);
       setStats({ bytesRead: listing.bytes_read, elapsedMs: listing.elapsed_ms });
       setError(null);
     } catch (err) {
       if (!mounted.current || request !== packRequest.current) return;
       setError(toAppError(err));
       setPacks([]);
+      setHoldings([]);
     } finally {
       if (mounted.current && request === packRequest.current) setLoading(false);
     }
@@ -168,6 +175,16 @@ export function usePacks(
     [client, reload, refreshStack],
   );
 
+  const restoreHolding = useCallback(async (holdingName: string) => {
+    setBusy(true);
+    try {
+      await client.restoreResourceHolding(holdingName);
+      await Promise.all([reload(), refreshStack()]);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }, [client, reload, refreshStack]);
+
   const togglePack = useCallback(
     async (filename: string, enabled: boolean) => {
       setBusy(true);
@@ -209,6 +226,8 @@ export function usePacks(
   );
 
   return {
+    holdings,
+    restoreHolding,
     packs,
     stats,
     loading,

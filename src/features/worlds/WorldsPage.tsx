@@ -1,3 +1,4 @@
+import HoldingRecovery from '../packs/HoldingRecovery';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { WorldsClient } from '../../lib/ipc';
 import { ipc, pickPackPath, toAppError } from '../../lib/ipc';
@@ -49,6 +50,8 @@ export default function WorldsPage({
     packsError,
     stack,
     stackLoading,
+    holdings,
+    restoreHolding,
     busy,
     listingWorld,
     actionError,
@@ -333,6 +336,9 @@ export default function WorldsPage({
                     </button>
                   </p>
                 ) : null}
+                <HoldingRecovery entries={holdings} disabled={busy || writesBlocked} onRestore={(name) => {
+                  void restoreHolding(name).catch(() => { void refreshGameRunning(); });
+                }} />
                 <div className="worlds-toolbar">
                   <button
                     type="button"
