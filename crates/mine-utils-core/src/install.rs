@@ -19,7 +19,7 @@ use crate::game_lock;
 use crate::level_dat;
 use crate::modrinth::{validate_modrinth_id, ModrinthClient, ModrinthError, SearchKind, Transport};
 use crate::options_txt::OptionsError;
-use crate::pack::{ImportChoice, ImportOutcome};
+use crate::pack::{ImportChoice, ImportOutcome, PackError};
 use crate::provenance::{self, ProvenanceEntry};
 use crate::resource_stack::{self, StackPaths};
 use crate::world::WorldPaths;
@@ -136,7 +136,9 @@ pub fn prepare_modrinth_install_controlled<T: Transport + 'static>(
             if !options.is_file() {
                 return Err(AppError::Options(OptionsError::Missing { path: options }));
             }
-            (game_dir.join("resourcepacks"), None)
+            let target = game_dir.join("resourcepacks");
+            reject_resourcepacks_link(&target)?;
+            (target, None)
         }
         SearchKind::Datapack => {
             let name = world.ok_or_else(|| ModrinthError::Parse {
@@ -227,9 +229,18 @@ pub fn prepare_modrinth_install_controlled<T: Transport + 'static>(
     };
     let dest = target_dir.join(filename);
     crate::pack_scan::reject_ambiguous_name(&dest, &target_dir)?;
-    let source = if dest.is_file() {
-        match hash_file(&dest)? {
-            hashes if hashes.sha512_eq(&file.hashes.sha512) => {
+    let metadata = match std::fs::symlink_metadata(&dest) {
+        Ok(metadata) => Some(metadata),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err.into()),
+    };
+    let source = if let Some(metadata) = metadata {
+        match if metadata.is_file() && metadata.len() <= crate::modrinth::MAX_DOWNLOAD_BYTES {
+            hash_file_bounded(&dest)?
+        } else {
+            None
+        } {
+            Some(hashes) if hashes.sha512_eq(&file.hashes.sha512) => {
                 // Identical bytes already in place: reuse them, no download.
                 // The expected hash rides along so `finish` can re-hash and
                 // refuse a swap that landed between the two phases.
@@ -296,6 +307,50 @@ fn missing_file_reason(
         "version {version_id} has no file named {filename:?}; files: {}",
         names.join(", ")
     )
+}
+
+fn reject_resourcepacks_link(path: &Path) -> Result<(), AppError> {
+    if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(PackError::Symlink {
+            path: path.to_path_buf(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn hash_file_bounded(path: &Path) -> Result<Option<FileHashes>, AppError> {
+    let file = match crate::read_capped::open_regular(path) {
+        Ok(file) => file,
+        Err(err)
+            if err.kind() == std::io::ErrorKind::InvalidData
+                || err.raw_os_error() == Some(libc::ELOOP) =>
+        {
+            return Ok(None)
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let mut reader = file.take(crate::modrinth::MAX_DOWNLOAD_BYTES + 1);
+    let mut sha512 = Sha512::new();
+    let mut sha256 = Sha256::new();
+    let mut chunk = [0u8; 64 * 1024];
+    let mut count = 0u64;
+    loop {
+        let n = reader.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        count += n as u64;
+        if count > crate::modrinth::MAX_DOWNLOAD_BYTES {
+            return Ok(None);
+        }
+        sha512.update(&chunk[..n]);
+        sha256.update(&chunk[..n]);
+    }
+    Ok(Some(FileHashes {
+        sha512: hex::encode(sha512.finalize()),
+        sha256: hex::encode(sha256.finalize()),
+    }))
 }
 
 fn supported_list(version: &crate::modrinth::ModrinthVersion) -> String {
@@ -375,6 +430,7 @@ pub fn finish_modrinth_install(
     match kind {
         SearchKind::ResourcePack => {
             game_lock::ensure_writable(stack_paths.game_dir())?;
+            reject_resourcepacks_link(&prepared.target_dir)?;
             let (dest, sha256, fresh) = match commit_source(prepared)? {
                 Committed::Ready(dest, sha256, fresh) => (dest, sha256, fresh),
                 Committed::Collision { name } => {

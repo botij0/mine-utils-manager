@@ -20,7 +20,7 @@ pub(crate) fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn open_regular(path: &Path) -> io::Result<std::fs::File> {
+pub(crate) fn open_regular(path: &Path) -> io::Result<std::fs::File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
