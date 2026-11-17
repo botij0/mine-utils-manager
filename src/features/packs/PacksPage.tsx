@@ -87,11 +87,13 @@ export default function PacksPage({
   const [dragging, setDragging] = useState(false);
   const [toast, setToast] = useState<ToggleToast | null>(null);
 
-  // A fresh null from the app poll clears the banner; undefined means the
-  // first check has not landed yet, so fall back to the stack response. A
-  // failed check keeps the last known running value and blocks writes.
-  const running = gameRunning !== undefined ? gameRunning : (stack?.running ?? null);
-  const writesBlocked = running !== null || gameGuardUnknown || loading || stackLoading;
+  // Undefined means no guard answer yet. The stored stack value is not one, so
+  // that state pauses writes with the checking reason, as Discover and Settings do.
+  const guardPending = gameRunning === undefined;
+  const guardUnknown = gameGuardUnknown || guardPending;
+  const guardChecking = gameGuardChecking || (guardPending && !gameGuardUnknown);
+  const running = gameRunning ?? null;
+  const writesBlocked = running !== null || guardUnknown || loading || stackLoading;
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -375,8 +377,8 @@ export default function PacksPage({
               packs={packs}
               busy={busy || loading || stackLoading}
               running={running}
-              guardUnknown={gameGuardUnknown}
-              guardChecking={gameGuardChecking}
+              guardUnknown={guardUnknown}
+              guardChecking={guardChecking}
               onToggle={(filename, enabled) => void handleToggle(filename, enabled)}
               onReorder={(order) => void handleReorder(order)}
               onRecheck={() => {
@@ -392,8 +394,8 @@ export default function PacksPage({
             </div>
             <GameRunningBanner
               running={running}
-              guardUnknown={gameGuardUnknown}
-              checking={gameGuardChecking}
+              guardUnknown={guardUnknown}
+              checking={guardChecking}
               staleLocks={[]}
               supported
               onRecheck={() => {

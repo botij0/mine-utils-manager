@@ -95,8 +95,9 @@ describe('App', () => {
 
     render(<App client={withWarning} />);
 
-    expect(await screen.findByRole('status')).toHaveTextContent(
-      'The config file could not be read.',
+    expect(await screen.findByText('The config file could not be read.')).toHaveAttribute(
+      'role',
+      'status',
     );
     expect(screen.getByText('Mine Utils')).toBeInTheDocument();
   });
@@ -765,7 +766,7 @@ describe('App', () => {
     const list = await screen.findByRole('list', { name: 'Stack order' });
     await act(async () => {});
     expect(screen.getByRole('button', { name: 'Import pack' })).toBeDisabled();
-    expect(within(list).getByRole('checkbox')).toBeDisabled();
+    expect(within(list).getByRole('button', { name: /^Remove / })).toBeDisabled();
     expect(screen.getByText(/^Checking whether Minecraft is running/)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Worlds' }));
@@ -773,7 +774,8 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: 'Import zip' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
     expect(within(grid).getByRole('button', { name: /^Disable( |$)/ })).toBeDisabled();
-    expect(screen.getByRole('status')).toHaveTextContent(/^Checking whether Minecraft is running/);
+    const worlds = screen.getByRole('button', { name: 'Import zip' }).closest('section') as HTMLElement;
+    expect(within(worlds).getByText(/^Checking whether Minecraft is running/)).toBeInTheDocument();
 
     await act(async () => {
       for (const call of calls) call.answer(null);
@@ -785,7 +787,7 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
     expect(screen.getByRole('button', { name: 'Import pack' })).toBeEnabled();
-    expect(within(list).getByRole('checkbox')).toBeEnabled();
+    expect(within(list).getByRole('button', { name: /^Remove / })).toBeEnabled();
   });
 
   it('shows unknown one window after a hidden folder switch finds a timed-out check still hung', async () => {

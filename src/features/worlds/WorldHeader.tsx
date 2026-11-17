@@ -30,7 +30,7 @@ export default function WorldHeader({
   refreshGameRunning,
   onRefresh,
 }: WorldHeaderProps) {
-  const running = gameRunning !== undefined ? gameRunning : world.running;
+  const running = gameRunning ?? null;
   const locked = world.world_locked;
   const refresh = onRefresh ?? refreshGameRunning;
   return (

@@ -16,7 +16,15 @@ import {
 import PacksPage from './PacksPage';
 
 function renderPage(client: FakeClient) {
-  return render(<PacksPage client={client} />);
+  return render(<PacksPage client={client} gameRunning={null} />);
+}
+
+/** The app guard answers `answer()` each time the page asks for a recheck. */
+function GuardedPage({ client, answer }: { client: FakeClient; answer: () => GameRunning | null }) {
+  const [gameRunning, setGameRunning] = useState<GameRunning | null>(null);
+  return (
+    <PacksPage client={client} gameRunning={gameRunning} refreshGameRunning={() => setGameRunning(answer())} />
+  );
 }
 
 describe('PacksPage', () => {
@@ -49,7 +57,7 @@ describe('PacksPage', () => {
         throw new IpcError('io', 'New pack installed; original pack retained.');
       },
     };
-    render(<PacksPage client={client} />);
+    render(<PacksPage client={client} gameRunning={null} />);
     await screen.findByText('Vanilla');
     await user.click(screen.getByRole('button', { name: 'Import pack' }));
     await user.type(screen.getByLabelText('Pack path'), '/tmp/Autumn.zip');
@@ -238,7 +246,7 @@ describe('PacksPage', () => {
       nowRunning = running;
       throw new IpcError('game_running', 'Minecraft is running; close it first');
     };
-    renderPage(client);
+    render(<GuardedPage client={client} answer={() => nowRunning} />);
 
     await user.click(await screen.findByRole('button', { name: /^Vanilla,/ }));
     const detail = screen.getByRole('complementary', { name: 'Pack details' });
@@ -319,7 +327,7 @@ describe('PacksPage', () => {
       picked.push(directory);
       return directory ? '/drop/PackFolder' : '/drop/Pack.zip';
     };
-    render(<PacksPage client={client} pickPath={pickPath} />);
+    render(<PacksPage client={client} pickPath={pickPath} gameRunning={null} />);
 
     await screen.findByText('Vanilla');
     await user.click(screen.getByRole('button', { name: 'Import pack' }));
@@ -434,7 +442,7 @@ describe('PacksPage', () => {
       nowRunning = running;
       throw new IpcError('game_running', 'Minecraft is running; close it first');
     };
-    renderPage(client);
+    render(<GuardedPage client={client} answer={() => nowRunning} />);
 
     const list = await screen.findByRole('list', { name: 'Stack order' });
     expect(screen.queryByText(/Minecraft is running/)).not.toBeInTheDocument();
@@ -471,6 +479,13 @@ describe('PacksPage', () => {
     render(
       <PacksPage
         client={client}
+        gameRunning={{
+          kind: 'process',
+          detail: 'pid 4242 runs java',
+          lock_path: null,
+          pid: 4242,
+          command: 'java',
+        }}
         refreshGameRunning={() => {
           guardChecks += 1;
         }}
@@ -503,6 +518,34 @@ describe('PacksPage', () => {
 
     const list = await screen.findByRole('list', { name: 'Stack order' });
     expect(screen.queryByText(/Minecraft is running/)).not.toBeInTheDocument();
+    expect(within(list).getByRole('checkbox')).toBeEnabled();
+  });
+
+  it('holds writes with the checking text until the first guard answer, even when the stored stack says running', async () => {
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
+    client.getResourceStack = async () => ({
+      entries: [{ kind: 'file', value: 'file/Vanilla.zip', filename: 'Vanilla.zip' }],
+      incompatible: [],
+      running: {
+        kind: 'process',
+        detail: 'pid 4242 runs java',
+        lock_path: null,
+        pid: 4242,
+        command: 'java',
+      },
+      stale_locks: [],
+      detection_supported: true,
+    });
+    const { rerender } = render(<PacksPage client={client} />);
+
+    const list = await screen.findByRole('list', { name: 'Stack order' });
+    expect(screen.getByRole('button', { name: 'Import pack' })).toBeDisabled();
+    expect(within(list).getByRole('checkbox')).toBeDisabled();
+    expect(screen.getByText(/^Checking whether Minecraft is running; writes are paused/)).toBeInTheDocument();
+    expect(screen.queryByText('Minecraft is running.')).not.toBeInTheDocument();
+
+    rerender(<PacksPage client={client} gameRunning={null} />);
+    expect(screen.getByRole('button', { name: 'Import pack' })).toBeEnabled();
     expect(within(list).getByRole('checkbox')).toBeEnabled();
   });
 
@@ -551,7 +594,7 @@ describe('PacksPage', () => {
         throw new IpcError('no_active_game_dir', 'no active game dir');
       },
     };
-    render(<PacksPage client={client} />);
+    render(<PacksPage client={client} gameRunning={null} />);
 
     expect(await screen.findByRole('button', { name: 'Import pack' })).toBeDisabled();
   });
