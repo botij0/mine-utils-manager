@@ -157,6 +157,7 @@ pub(crate) mod stack_core {
         Reorder { order: Vec<String> },
         Remove { filename: String },
         Rename { old: String, new: String },
+        ReplaceData { old: String, new: String },
     }
 
     impl Change {
@@ -182,6 +183,31 @@ pub(crate) mod stack_core {
                         }
                     }
                     Ok(changed)
+                }
+                Change::ReplaceData { old, new } => {
+                    let old = file_value(old)?;
+                    let new = file_value(new)?;
+                    let exists = lists
+                        .primary
+                        .iter()
+                        .chain(&lists.secondary)
+                        .any(|v| *v == old);
+                    if !exists {
+                        return (rules.enable)(lists, new.strip_prefix("file/").unwrap_or(&new));
+                    }
+                    let mut replaced = false;
+                    for list in [&mut lists.primary, &mut lists.secondary] {
+                        list.retain_mut(|value| {
+                            if *value == old && !replaced {
+                                value.clone_from(&new);
+                                replaced = true;
+                                true
+                            } else {
+                                *value != old && *value != new
+                            }
+                        });
+                    }
+                    Ok(true)
                 }
                 Change::Reorder { order } => {
                     reorder(&lists.primary, order)?;

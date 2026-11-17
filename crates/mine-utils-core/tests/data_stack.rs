@@ -1248,3 +1248,31 @@ fn replace_preserves_datapack_reference_and_same_name_bytes() {
     .unwrap();
     assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), before);
 }
+
+#[test]
+fn replace_removes_existing_new_reference() {
+    let world = temp_world(&["vanilla"], &[]);
+    install_pack(&world, "cool");
+    let bytes = std::fs::read(world.paths.level_dat_path()).unwrap();
+    let initial = lists(&["vanilla", "file/cool", "file/other"], &["file/cool-new"]);
+    std::fs::write(
+        world.paths.level_dat_path(),
+        level_dat::render_with(&bytes, &initial.0, &initial.1).unwrap(),
+    )
+    .unwrap();
+    let source = datapack_source(world._dir.path(), "cool-new");
+    data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &RecordingTrash::new(),
+        &PassGuard,
+    )
+    .unwrap();
+    assert_eq!(
+        view(&world.paths),
+        lists(&["vanilla", "file/cool-new", "file/other"], &[])
+    );
+}

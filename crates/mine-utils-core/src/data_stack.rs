@@ -530,6 +530,7 @@ pub fn import_datapack_with(
         paths,
         choice,
         guard,
+        replaced: std::cell::Cell::new(false),
     };
     let outcome = pack_import::import_pack_guarded(
         source,
@@ -561,7 +562,9 @@ pub fn import_datapack_with(
             .unwrap_or_else(|| "the world is locked".to_string());
         return Ok(DatapackImportOutcome::Locked { filename, detail });
     }
-    set_enabled_with_guard(paths, &filename, true, guard)?;
+    if !hooks.replaced.get() {
+        set_enabled_with_guard(paths, &filename, true, guard)?;
+    }
     Ok(DatapackImportOutcome::Imported { filename })
 }
 
@@ -569,11 +572,19 @@ struct DatapackImport<'a> {
     paths: &'a DataPaths,
     choice: ImportChoice,
     guard: &'a dyn WriteGuard,
+    replaced: std::cell::Cell<bool>,
 }
 
 impl pack_import::ImportHooks for DatapackImport<'_> {
-    fn replaced(&self, _old: &Path, new: &Path) -> Result<(), AppError> {
-        set_enabled_with_guard(self.paths, &pack_filename(new)?, true, self.guard)?;
+    fn replaced(&self, old: &Path, new: &Path) -> Result<(), AppError> {
+        if old.file_name() != new.file_name() {
+            let change = stack_core::Change::ReplaceData {
+                old: pack_filename(old)?,
+                new: pack_filename(new)?,
+            };
+            commit(self.paths, None, &change, self.guard)?;
+        }
+        self.replaced.set(true);
         Ok(())
     }
 
