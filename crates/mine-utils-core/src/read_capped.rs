@@ -53,8 +53,11 @@ fn not_regular() -> io::Error {
 }
 
 #[cfg(test)]
+type SwapHook = Box<dyn FnOnce(&Path)>;
+
+#[cfg(test)]
 thread_local! {
-    static BEFORE_OPEN: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+    static BEFORE_OPEN: std::cell::RefCell<Option<SwapHook>> =
         const { std::cell::RefCell::new(None) };
 }
 
