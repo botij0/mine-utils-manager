@@ -2021,3 +2021,92 @@ fn resourcepacks_link_swapped_after_prepare_refuses_finish() {
         "version:4707\nresourcePacks:[]\n"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn finish_target_swaps_collide_without_blocking() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::time::Duration;
+
+    for reuse_existing in [true, false] {
+        for kind in ["fifo", "symlink", "oversized"] {
+            let fx = fixture();
+            let bytes = resource_zip();
+            let dest = fx.game_dir.join("resourcepacks").join(RESOURCE_FILE);
+            if reuse_existing {
+                std::fs::write(&dest, &bytes).unwrap();
+            }
+            let (client, api) = client(
+                MockApi::new()
+                    .with(
+                        &versions_url(),
+                        versions_json(
+                            RESOURCE_URL,
+                            RESOURCE_FILE,
+                            &sha512_hex(&bytes),
+                            &[WORLD_VERSION],
+                        ),
+                    )
+                    .with(RESOURCE_URL, bytes.clone()),
+            );
+            let prepared = prepare_modrinth_install(
+                &client,
+                &fx.game_dir,
+                None,
+                PROJECT,
+                VERSION,
+                RESOURCE_FILE,
+                "resourcepack",
+            )
+            .unwrap();
+            assert_eq!(api.cdn_calls().len(), usize::from(!reuse_existing));
+            if reuse_existing {
+                std::fs::remove_file(&dest).unwrap();
+            }
+            match kind {
+                "fifo" => {
+                    let path = std::ffi::CString::new(dest.as_os_str().as_bytes()).unwrap();
+                    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+                }
+                "symlink" => {
+                    let target = fx._dir.path().join("outside.zip");
+                    std::fs::write(&target, &bytes).unwrap();
+                    std::os::unix::fs::symlink(target, &dest).unwrap();
+                }
+                "oversized" => {
+                    std::fs::File::create(&dest)
+                        .unwrap()
+                        .set_len(501 * 1024 * 1024)
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = finish_modrinth_install(
+                    prepared,
+                    &fx.stack_paths,
+                    None,
+                    &fx.data_dir,
+                    &fx.icons,
+                    &fx.hashes,
+                );
+                let outcome = match result {
+                    Ok(CoreInstallOutcome::ResourcePack { outcome, .. }) => format!("{outcome:?}"),
+                    other => format!("{other:?}"),
+                };
+                let options = std::fs::read_to_string(fx.game_dir.join("options.txt")).unwrap();
+                let _ = tx.send((outcome, options, leftovers(&fx.game_dir).len()));
+            });
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(2)),
+                Ok((
+                    "Collision { name: \"fresh-1.9.zip\" }".to_string(),
+                    "version:4707\nresourcePacks:[]\n".to_string(),
+                    0,
+                )),
+                "reuse_existing={reuse_existing}, kind={kind}",
+            );
+        }
+    }
+}
