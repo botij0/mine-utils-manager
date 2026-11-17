@@ -1196,3 +1196,55 @@ fn ambiguous_import_is_refused_before_copy() {
     assert!(!world.paths.datapacks_dir().join("Caf�").exists());
     assert_eq!(std::fs::read(bad).unwrap(), b"bad");
 }
+
+#[test]
+fn replace_preserves_datapack_reference_and_same_name_bytes() {
+    for disabled in [false, true] {
+        let world = temp_world(&["vanilla"], &[]);
+        let old = install_pack(&world, "cool");
+        let initial = if disabled {
+            lists(&["vanilla", "file/other"], &["file/cool", "file/last"])
+        } else {
+            lists(&["vanilla", "file/cool", "file/other"], &[])
+        };
+        let bytes = std::fs::read(world.paths.level_dat_path()).unwrap();
+        std::fs::write(
+            world.paths.level_dat_path(),
+            level_dat::render_with(&bytes, &initial.0, &initial.1).unwrap(),
+        )
+        .unwrap();
+        let new = datapack_source(world._dir.path(), "cool-new");
+        data_stack::import_datapack_with(
+            &world.paths,
+            &new,
+            mine_utils_core::ImportChoice::Replace,
+            &world.icons,
+            &world.hashes,
+            &RecordingTrash::new(),
+            &PassGuard,
+        )
+        .unwrap();
+        let expected = if disabled {
+            lists(&["vanilla", "file/other"], &["file/cool-new", "file/last"])
+        } else {
+            lists(&["vanilla", "file/cool-new", "file/other"], &[])
+        };
+        assert_eq!(view(&world.paths), expected);
+        let _ = old;
+    }
+    let world = temp_world(&["vanilla"], &[]);
+    let source = install_pack(&world, "same");
+    std::fs::write(source.join("data/new.json"), b"new").unwrap();
+    let before = std::fs::read(world.paths.level_dat_path()).unwrap();
+    data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &RecordingTrash::new(),
+        &PassGuard,
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), before);
+}
