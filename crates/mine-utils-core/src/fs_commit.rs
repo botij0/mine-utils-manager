@@ -220,6 +220,32 @@ fn rename_noreplace_unsupported(err: &std::io::Error) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn strict_restore_is_unsupported_and_import_does_not_replace_on_other_platforms() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("holding");
+        let dest = root.path().join("original");
+        std::fs::write(&source, b"held bytes").unwrap();
+        for occupied in [false, true] {
+            if occupied {
+                std::fs::write(&dest, b"installed bytes").unwrap();
+            }
+            assert_eq!(strict_no_replace(&source, &dest).unwrap_err().kind(), ErrorKind::Unsupported);
+            assert_eq!(std::fs::read(&source).unwrap(), b"held bytes");
+            if occupied {
+                assert_eq!(atomic_no_replace(&source, &dest).unwrap_err().kind(), ErrorKind::AlreadyExists);
+                assert_eq!(std::fs::read(&dest).unwrap(), b"installed bytes");
+            } else {
+                assert!(!dest.exists());
+            }
+        }
+        std::fs::remove_file(&dest).unwrap();
+        atomic_no_replace(&source, &dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"held bytes");
+        assert!(!source.exists());
+    }
+
     #[cfg(unix)]
     fn entry_summary(path: &Path) -> String {
         let Ok(entry) = std::fs::symlink_metadata(path) else {
