@@ -12,6 +12,8 @@ const THEMES: { value: Theme; label: string }[] = [
   { value: 'dark', label: 'Dark' },
 ];
 
+const SETTINGS_WRITE_TIMEOUT_MS = 15_000;
+
 const pendingWrites = new WeakMap<IpcClient, Promise<void>>();
 
 interface SettingsPageProps {
@@ -44,7 +46,12 @@ export default function SettingsPage({
   const [error, setError] = useState<ClientError | null>(null);
   const orderedClient = useMemo(() => {
     function enqueue<T>(action: () => Promise<T>): Promise<T> {
-      const result = (pendingWrites.get(client) ?? Promise.resolve()).then(action);
+      const result = (pendingWrites.get(client) ?? Promise.resolve()).then(() =>
+        new Promise<T>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('Settings write timed out. It may still finish in the background.')), SETTINGS_WRITE_TIMEOUT_MS);
+          action().then(resolve, reject).finally(() => clearTimeout(timer));
+        }),
+      );
       pendingWrites.set(client, result.then(() => {}, () => {}));
       return result;
     }
