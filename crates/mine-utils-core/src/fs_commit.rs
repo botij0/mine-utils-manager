@@ -41,11 +41,6 @@ pub(crate) fn strict_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()>
             }
         }
     }
-    #[cfg(windows)]
-    {
-        return std::fs::rename(temp, dest);
-    }
-    #[cfg(not(windows))]
     Err(std::io::Error::new(
         ErrorKind::Unsupported,
         "atomic no-replace rename is unsupported on this filesystem",
