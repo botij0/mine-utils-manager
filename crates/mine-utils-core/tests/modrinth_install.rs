@@ -2110,3 +2110,57 @@ fn finish_target_swaps_collide_without_blocking() {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn finish_with_fifo_parent_returns_without_blocking() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::time::Duration;
+
+    let fx = fixture();
+    let bytes = resource_zip();
+    let (client, _) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    RESOURCE_URL,
+                    RESOURCE_FILE,
+                    &sha512_hex(&bytes),
+                    &[WORLD_VERSION],
+                ),
+            )
+            .with(RESOURCE_URL, bytes),
+    );
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .unwrap();
+    let packs = fx.game_dir.join("resourcepacks");
+    std::fs::rename(&packs, fx._dir.path().join("moved")).unwrap();
+    let path = std::ffi::CString::new(packs.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let error = finish_modrinth_install(
+            prepared,
+            &fx.stack_paths,
+            None,
+            &fx.data_dir,
+            &fx.icons,
+            &fx.hashes,
+        )
+        .unwrap_err();
+        let _ = tx.send(error.code().to_string());
+    });
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(2)),
+        Ok("io".to_string())
+    );
+}
