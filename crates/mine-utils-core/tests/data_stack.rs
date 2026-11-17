@@ -1201,7 +1201,7 @@ fn ambiguous_import_is_refused_before_copy() {
 fn replace_preserves_datapack_reference_and_same_name_bytes() {
     for disabled in [false, true] {
         let world = temp_world(&["vanilla"], &[]);
-        let old = install_pack(&world, "cool");
+        install_pack(&world, "cool");
         let initial = if disabled {
             lists(&["vanilla", "file/other"], &["file/cool", "file/last"])
         } else {
@@ -1230,7 +1230,6 @@ fn replace_preserves_datapack_reference_and_same_name_bytes() {
             lists(&["vanilla", "file/cool-new", "file/other"], &[])
         };
         assert_eq!(view(&world.paths), expected);
-        let _ = old;
     }
     let world = temp_world(&["vanilla"], &[]);
     let source = install_pack(&world, "same");
