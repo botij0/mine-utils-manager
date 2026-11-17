@@ -71,6 +71,12 @@ pub fn discover_game_dirs(home: &Path) -> Vec<GameDir> {
     add_candidate(
         &mut found,
         &mut seen,
+        home.join(".var/app/com.mojang.Minecraft/.minecraft"),
+        DiscoverySource::Flatpak,
+    );
+    add_candidate(
+        &mut found,
+        &mut seen,
         home.join(".var/app/com.mojang.Minecraft/data/minecraft"),
         DiscoverySource::Flatpak,
     );
@@ -80,13 +86,26 @@ pub fn discover_game_dirs(home: &Path) -> Vec<GameDir> {
             DiscoverySource::PrismLauncher,
         ),
         (
+            home.join(".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances"),
+            DiscoverySource::PrismLauncher,
+        ),
+        (
             home.join(".local/share/multimc/instances"),
             DiscoverySource::MultiMc,
         ),
     ];
     for (instances, source) in launchers {
         for instance in instance_dirs(&instances) {
-            add_candidate(&mut found, &mut seen, instance.join(".minecraft"), source);
+            let minecraft = instance.join("minecraft");
+            let legacy = instance.join(".minecraft");
+            let path = if source == DiscoverySource::PrismLauncher
+                && (minecraft.exists() || !legacy.exists())
+            {
+                minecraft
+            } else {
+                legacy
+            };
+            add_candidate(&mut found, &mut seen, path, source);
         }
     }
     found
@@ -238,6 +257,39 @@ mod tests {
         assert_eq!(found[1].source, DiscoverySource::Flatpak);
         assert_eq!(found[2].source, DiscoverySource::MultiMc);
         assert_eq!(found[3].source, DiscoverySource::MultiMc);
+    }
+
+    #[test]
+    fn discovers_prism_roots_and_flatpak_migration_once() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path();
+        for path in [
+            ".local/share/PrismLauncher/instances/one/minecraft",
+            ".local/share/PrismLauncher/instances/both/minecraft",
+            ".local/share/PrismLauncher/instances/both/.minecraft",
+            ".local/share/PrismLauncher/instances/legacy/.minecraft",
+            ".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/flat/minecraft",
+            ".var/app/com.mojang.Minecraft/.minecraft",
+        ] {
+            make_game_dir(home, path, "saves");
+        }
+        let migration = home.join(".var/app/com.mojang.Minecraft/data");
+        std::fs::create_dir_all(&migration).unwrap();
+        std::os::unix::fs::symlink(
+            home.join(".var/app/com.mojang.Minecraft/.minecraft"),
+            migration.join("minecraft"),
+        )
+        .unwrap();
+
+        let found = discover_game_dirs(home);
+        let expected = [
+            (".var/app/com.mojang.Minecraft/.minecraft", DiscoverySource::Flatpak),
+            (".local/share/PrismLauncher/instances/both/minecraft", DiscoverySource::PrismLauncher),
+            (".local/share/PrismLauncher/instances/legacy/.minecraft", DiscoverySource::PrismLauncher),
+            (".local/share/PrismLauncher/instances/one/minecraft", DiscoverySource::PrismLauncher),
+            (".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/flat/minecraft", DiscoverySource::PrismLauncher),
+        ].map(|(path, source)| GameDir { path: std::fs::canonicalize(home.join(path)).unwrap(), source });
+        assert_eq!(found, expected);
     }
 
     #[test]
