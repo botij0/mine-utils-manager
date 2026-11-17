@@ -4,10 +4,7 @@ use std::path::Path;
 pub(crate) fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
     let metadata = std::fs::symlink_metadata(path)?;
     if !metadata.file_type().is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "not a regular file",
-        ));
+        return Err(not_regular());
     }
     let mut bytes = Vec::new();
     open_regular(path)?.take(cap + 1).read_to_end(&mut bytes)?;
@@ -38,17 +35,21 @@ pub(crate) fn open_regular(path: &Path) -> io::Result<std::fs::File> {
                 }
             })?;
         if !file.metadata()?.file_type().is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "not a regular file",
-            ));
+            return Err(not_regular());
         }
         Ok(file)
     }
     #[cfg(not(unix))]
     {
+        if !std::fs::symlink_metadata(path)?.file_type().is_file() {
+            return Err(not_regular());
+        }
         std::fs::File::open(path)
     }
+}
+
+fn not_regular() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "not a regular file")
 }
 
 #[cfg(test)]
