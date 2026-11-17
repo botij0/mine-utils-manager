@@ -1853,3 +1853,109 @@ mod cancellation {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn resourcepacks_link_refuses_before_requests() {
+    let fx = fixture();
+    let outside = fx._dir.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::remove_dir(fx.game_dir.join("resourcepacks")).unwrap();
+    std::os::unix::fs::symlink(&outside, fx.game_dir.join("resourcepacks")).unwrap();
+    let bytes = resource_zip();
+    let (client, api) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    RESOURCE_URL,
+                    RESOURCE_FILE,
+                    &sha512_hex(&bytes),
+                    &[WORLD_VERSION],
+                ),
+            )
+            .with(RESOURCE_URL, bytes),
+    );
+    let result = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    );
+    assert!(result.is_err(), "requests: {:?}", api.calls());
+    assert_eq!(api.calls().len(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn special_target_entries_collide_without_cdn() {
+    use std::os::unix::ffi::OsStrExt;
+    for kind in ["directory", "fifo", "symlink", "oversized"] {
+        let fx = fixture();
+        let dest = fx.game_dir.join("resourcepacks").join(RESOURCE_FILE);
+        match kind {
+            "directory" => std::fs::create_dir(&dest).unwrap(),
+            "fifo" => {
+                let path = std::ffi::CString::new(dest.as_os_str().as_bytes()).unwrap();
+                assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+            }
+            "symlink" => {
+                let target = fx._dir.path().join("target");
+                std::fs::write(&target, resource_zip()).unwrap();
+                std::os::unix::fs::symlink(target, &dest).unwrap();
+            }
+            "oversized" => {
+                let f = std::fs::File::create(&dest).unwrap();
+                f.set_len(501 * 1024 * 1024).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let bytes = resource_zip();
+        let (client, api) = client(
+            MockApi::new()
+                .with(
+                    &versions_url(),
+                    versions_json(
+                        RESOURCE_URL,
+                        RESOURCE_FILE,
+                        &sha512_hex(&bytes),
+                        &[WORLD_VERSION],
+                    ),
+                )
+                .with(RESOURCE_URL, bytes),
+        );
+        let prepared = prepare_modrinth_install(
+            &client,
+            &fx.game_dir,
+            None,
+            PROJECT,
+            VERSION,
+            RESOURCE_FILE,
+            "resourcepack",
+        )
+        .unwrap();
+        let outcome = finish_modrinth_install(
+            prepared,
+            &fx.stack_paths,
+            None,
+            &fx.data_dir,
+            &fx.icons,
+            &fx.hashes,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                outcome,
+                CoreInstallOutcome::ResourcePack {
+                    outcome: mine_utils_core::ImportOutcome::Collision { .. },
+                    ..
+                }
+            ),
+            "{kind}: {outcome:?}"
+        );
+        assert_eq!(api.cdn_calls().len(), 0, "{kind}: {:?}", api.calls());
+    }
+}
