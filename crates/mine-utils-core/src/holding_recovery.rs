@@ -51,7 +51,9 @@ pub(crate) fn reject_symlink_folder(folder: &Path) -> Result<(), AppError> {
 }
 
 pub(crate) fn list(folder: &Path) -> Result<Vec<HoldingEntry>, AppError> {
-    reject_symlink_folder(folder)?;
+    if std::fs::symlink_metadata(folder).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Ok(Vec::new());
+    }
     let entries = match std::fs::read_dir(folder) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
