@@ -21,6 +21,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 reqwest.workspace = true
 url.workspace = true
+same-file = "1"
 sha2 = "0.10"
 hex = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }

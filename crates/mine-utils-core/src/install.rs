@@ -427,6 +427,7 @@ pub fn finish_modrinth_install(
         prepared.filename.clone(),
     );
     let kind = prepared.kind;
+    let parent = same_file::Handle::from_path(&prepared.target_dir)?;
     match kind {
         SearchKind::ResourcePack => {
             game_lock::ensure_writable(stack_paths.game_dir())?;
@@ -456,7 +457,7 @@ pub fn finish_modrinth_install(
                     // a stray file with no provenance. An `Existing` file is
                     // never removed: it predates this install.
                     if fresh {
-                        let _ = std::fs::remove_file(&dest);
+                        download::remove_file_in_parent(&dest, &parent);
                     }
                     return Err(err);
                 }
@@ -499,7 +500,7 @@ pub fn finish_modrinth_install(
                 },
                 Err(err) => {
                     if fresh {
-                        let _ = std::fs::remove_file(&dest);
+                        download::remove_file_in_parent(&dest, &parent);
                     }
                     return Err(err);
                 }

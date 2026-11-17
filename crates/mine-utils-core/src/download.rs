@@ -270,8 +270,8 @@ impl ZipRoot {
 
 /// A verified temp file inside the target directory. Commit it with
 /// [`VerifiedDownload::commit`] (or [`commit_verified`]); dropping it
-/// without committing deletes the temp, so a failed install never leaves a
-/// `.tmp` behind. The temp ends in `.tmp` so pack scans skip it.
+/// without committing removes the temp while its parent directory is unchanged.
+/// A moved parent can leave a `.tmp` behind; pack scans skip these files.
 #[derive(Debug)]
 pub struct VerifiedDownload {
     /// The temp file. Lives in the target dir, so the commit is atomic.
@@ -282,13 +282,23 @@ pub struct VerifiedDownload {
     pub bytes: u64,
     committed: bool,
     temp_file: std::fs::File,
+    parent: same_file::Handle,
 }
 
 impl Drop for VerifiedDownload {
     fn drop(&mut self) {
         if !self.committed {
-            let _ = std::fs::remove_file(&self.temp_path);
+            remove_file_in_parent(&self.temp_path, &self.parent);
         }
+    }
+}
+
+pub(crate) fn remove_file_in_parent(path: &Path, parent: &same_file::Handle) {
+    let Some(dir) = path.parent() else { return };
+    if std::fs::symlink_metadata(dir).is_ok_and(|entry| entry.is_dir())
+        && same_file::Handle::from_path(dir).is_ok_and(|current| current == *parent)
+    {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -532,6 +542,9 @@ pub fn download_verified_controlled<T: Transport + 'static>(
         reason: format!("cannot use {}: {err}", target_dir.display()),
     })?;
     sweep_download_temps(target_dir);
+    let parent = same_file::Handle::from_path(target_dir).map_err(|err| DownloadError::Io {
+        reason: format!("cannot open {}: {err}", target_dir.display()),
+    })?;
     let temp = temp_path_for(target_dir, filename);
     let temp_file = std::fs::OpenOptions::new()
         .write(true)
@@ -546,6 +559,7 @@ pub fn download_verified_controlled<T: Transport + 'static>(
         bytes: 0,
         committed: false,
         temp_file,
+        parent,
     };
     #[cfg(unix)]
     if let Err(err) = lock_download_temp(&verified.temp_file, libc::LOCK_EX) {
