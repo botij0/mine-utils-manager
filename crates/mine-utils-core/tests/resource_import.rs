@@ -90,6 +90,52 @@ fn replace_preserves_reference_indices_in_both_options_lists() {
     );
 }
 
+#[test]
+fn replace_onto_a_resource_pack_already_listed_keeps_one_entry_at_the_old_index() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.paths.options_path(),
+        "music:0.4\nresourcePacks:[\"vanilla\",\"file/Faithful\",\"fabric\",\"file/Faithful-1.21\"]\nincompatibleResourcePacks:[\"fabric\",\"file/Faithful\"]\n",
+    )
+    .unwrap();
+    let outcome = resource_stack::import_pack_safely(
+        &fixture.paths,
+        &fixture.source,
+        ImportChoice::Replace,
+        &fixture.icons,
+        &HashCache::new(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, ImportOutcome::Imported { .. }));
+    assert_eq!(
+        std::fs::read_to_string(fixture.paths.options_path()).unwrap(),
+        "music:0.4\nresourcePacks:[\"vanilla\",\"file/Faithful-1.21\",\"fabric\"]\nincompatibleResourcePacks:[\"fabric\",\"file/Faithful-1.21\"]\n"
+    );
+}
+
+#[test]
+fn replace_onto_an_incompatible_pack_already_listed_keeps_one_entry_at_the_old_index() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.paths.options_path(),
+        "music:0.4\nresourcePacks:[\"vanilla\",\"file/Faithful\",\"fabric\"]\nincompatibleResourcePacks:[\"file/Faithful-1.21\",\"fabric\",\"file/Faithful\"]\n",
+    )
+    .unwrap();
+    let outcome = resource_stack::import_pack_safely(
+        &fixture.paths,
+        &fixture.source,
+        ImportChoice::Replace,
+        &fixture.icons,
+        &HashCache::new(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, ImportOutcome::Imported { .. }));
+    assert_eq!(
+        std::fs::read_to_string(fixture.paths.options_path()).unwrap(),
+        "music:0.4\nresourcePacks:[\"vanilla\",\"file/Faithful-1.21\",\"fabric\"]\nincompatibleResourcePacks:[\"fabric\",\"file/Faithful-1.21\"]\n"
+    );
+}
+
 struct FailingGuard {
     calls: Cell<usize>,
     fail_at: usize,
