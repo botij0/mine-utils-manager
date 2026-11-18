@@ -383,6 +383,24 @@ mod tests {
     }
 
     #[test]
+    fn malformed_datapacks_is_an_error_card() {
+        let bytes = level_dat_bytes(Some("1.12.2"), false);
+        let mut root = level_dat::parse_nbt(&level_dat::gunzip(&bytes).unwrap()).unwrap();
+        if let fastnbt::Value::Compound(ref mut root) = root {
+            if let Some(fastnbt::Value::Compound(data)) = root.get_mut("Data") {
+                data.insert(
+                    "DataPacks".to_string(),
+                    fastnbt::Value::String("bad".to_string()),
+                );
+            }
+        }
+        let bytes = level_dat::gzip(&fastnbt::to_bytes(&root).unwrap());
+        let (dir, icons) = game_with(&[("bad", Some(bytes))]);
+        let worlds = scan_worlds(&dir.path().join("game"), &icons);
+        assert_eq!(worlds[0].issue.as_ref().unwrap().code, "level_dat");
+    }
+
+    #[test]
     fn missing_icon_is_none_not_an_error() {
         let (dir, icons) = game_with(&[("noicon", Some(level_dat_bytes(Some("1.21.10"), true)))]);
         let worlds = scan_worlds(&dir.path().join("game"), &icons);
