@@ -1060,7 +1060,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn symlinked_options_refuse_toggle_and_restore() {
+    fn symlinked_options_refuse_read_toggle_and_restore() {
         let (dir, paths) = fixture_stack();
         let target = dir.path().join("shared-options.txt");
         let original = b"resourcePacks:[\"vanilla\"]\n";
@@ -1072,7 +1072,10 @@ mod tests {
             .unwrap()
             .file_name;
 
-        assert_eq!(load(&paths).unwrap().entries[0].value(), "vanilla");
+        assert_eq!(
+            load(&paths).unwrap_err().to_string(),
+            "io error: not a regular file"
+        );
         let err = set_enabled(&paths, "a.zip", true).unwrap_err();
         assert_eq!(err.code(), "world");
         assert!(err.to_string().contains("symlink"));
