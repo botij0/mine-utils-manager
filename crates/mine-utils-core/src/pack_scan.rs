@@ -1062,7 +1062,6 @@ mod tests {
                         .len(),
                     0
                 );
-                println!("during transaction: holding entries 0");
                 std::fs::write(&rival, b"rival").unwrap();
                 atomic_no_replace(tmp, dest)
             },
@@ -1085,7 +1084,6 @@ mod tests {
         let listing = scan_packs(&resourcepacks, &icons).unwrap();
         assert_eq!(listing.count, 1);
         assert_eq!(listing.holding_entries.len(), 0);
-        println!("after transaction: holding entries 0; error directs restart");
         assert_eq!(
             find_duplicate(
                 &resourcepacks,
