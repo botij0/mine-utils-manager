@@ -312,7 +312,7 @@ fn import_pack_with_services(
         ImportPlan::ReplaceDestination => Some(destination.clone()),
     };
 
-    let tmp = unique_temp_path(&root, &file_name);
+    let tmp = unique_temp_path(&root, "mine-utils-copy");
     let copy_result = if is_dir {
         copy_dir(&source, &tmp)
     } else {
@@ -328,24 +328,18 @@ fn import_pack_with_services(
     }
 
     let mut held = if let Some(target) = &removal {
-        let holding = unique_temp_path(
-            &root,
-            &format!(
-                "mine-utils-replace-{}",
-                target.file_name().unwrap().to_string_lossy()
-            ),
-        );
         let result = (|| {
             validate_delete_target(target, &root)?;
             services.hooks.before_write()?;
-            atomic_no_replace(target, &holding)?;
-            Ok::<_, AppError>(())
+            HeldPack::create(target, &root)
         })();
-        if let Err(err) = result {
-            let _ = remove_any(&tmp);
-            return Err(err);
+        match result {
+            Ok(holding) => Some(holding),
+            Err(err) => {
+                let _ = remove_any(&tmp);
+                return Err(err);
+            }
         }
-        Some((target, holding))
     } else {
         None
     };
@@ -357,13 +351,13 @@ fn import_pack_with_services(
         installed = true;
         let mut bytes_read = 0;
         let pack = inspect_entry(&destination, location, icons, &mut bytes_read)?;
-        if let Some((old, holding)) = &mut held {
-            services.hooks.replaced(old, &destination)?;
+        if let Some(holding) = &mut held {
+            services.hooks.replaced(&holding.original, &destination)?;
             services.hooks.before_write()?;
-            if *old != &destination && atomic_no_replace(holding, old).is_ok() {
-                holding.clone_from(old);
+            if holding.original != destination {
+                let _ = holding.restore();
             }
-            services.trash.move_to_trash(holding)?;
+            services.trash.move_to_trash(holding.trash_path())?;
         }
         Ok::<_, AppError>(pack)
     })();
@@ -376,20 +370,18 @@ fn import_pack_with_services(
                 context.push(format!("New pack installed at {}", destination.display()));
             }
             let mut recovery_failed = false;
-            if let Some((old, holding)) = &held {
-                let restore = if holding == *old {
-                    Ok(())
-                } else {
-                    atomic_no_replace(holding, old)
-                };
-                match restore {
-                    Ok(()) => context.push(format!("Original pack retained at {}", old.display())),
+            if let Some(holding) = &mut held {
+                match holding.restore() {
+                    Ok(()) => context.push(format!(
+                        "Original pack retained at {}",
+                        holding.original.display()
+                    )),
                     Err(restore) => {
                         recovery_failed = true;
                         context.push(format!(
                             "Original pack retained at {}. Could not restore {}: {restore}. Restart Mine Utils to restore the holding entry",
-                            holding.display(),
-                            old.display()
+                            holding.path.display(),
+                            holding.original.display()
                         ));
                     }
                 }
@@ -498,6 +490,46 @@ fn remove_any(path: &Path) -> std::io::Result<()> {
         std::fs::remove_file(path)
     } else {
         Ok(())
+    }
+}
+
+struct HeldPack {
+    original: PathBuf,
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl HeldPack {
+    fn create(original: &Path, root: &Path) -> Result<Self, AppError> {
+        let directory = unique_temp_path(root, "mine-utils-replace");
+        std::fs::create_dir(&directory)?;
+        let path = directory.join(original.file_name().unwrap());
+        if let Err(err) = atomic_no_replace(original, &path) {
+            let _ = std::fs::remove_dir(&directory);
+            return Err(err.into());
+        }
+        Ok(Self {
+            original: original.to_owned(),
+            directory,
+            path,
+        })
+    }
+
+    fn restore(&mut self) -> std::io::Result<()> {
+        if self.path != self.original {
+            crate::fs_commit::strict_no_replace(&self.path, &self.original)?;
+            self.path.clone_from(&self.original);
+            let _ = std::fs::remove_dir(&self.directory);
+        }
+        Ok(())
+    }
+
+    fn trash_path(&self) -> &Path {
+        if self.path == self.original {
+            &self.original
+        } else {
+            &self.directory
+        }
     }
 }
 

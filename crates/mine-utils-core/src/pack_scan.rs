@@ -1073,7 +1073,7 @@ mod tests {
             .find(|path| is_temp_name(path))
             .unwrap();
         assert_eq!(
-            std::fs::read(&holding).unwrap(),
+            std::fs::read(holding.join("Pack.zip")).unwrap(),
             std::fs::read(&old).unwrap()
         );
         assert_eq!(std::fs::read(&rival).unwrap(), b"rival");
@@ -1208,6 +1208,7 @@ mod tests {
                     .map(|e| e.unwrap().path())
                     .find(|p| is_temp_name(p))
                     .unwrap()
+                    .join("Faithful")
             } else {
                 old
             };
@@ -1225,32 +1226,40 @@ mod tests {
 
     #[test]
     fn replace_long_filename_succeeds() {
-        let (root, _cache_root, icons, hashes, trash) = setup();
-        let resourcepacks = root.path().join("resourcepacks");
-        std::fs::create_dir_all(&resourcepacks).unwrap();
-        let name = format!("{}.zip", "a".repeat(216));
-        let source = root.path().join("incoming").join(&name);
-        simple_zip(&source, 34, None);
-        import_pack_with(
-            &source,
-            &resourcepacks,
-            &icons,
-            ImportChoice::Default,
-            &hashes,
-            &trash,
-        )
-        .unwrap();
-        let result = import_pack_with(
-            &source,
-            &resourcepacks,
-            &icons,
-            ImportChoice::Replace,
-            &hashes,
-            &trash,
-        )
-        .unwrap();
-        assert!(matches!(result, ImportOutcome::Imported { .. }));
-        assert_eq!(trash.calls().len(), 1);
+        for length in [220, 255] {
+            let (root, _cache_root, icons, hashes, trash) = setup();
+            let resourcepacks = root.path().join("resourcepacks");
+            std::fs::create_dir_all(&resourcepacks).unwrap();
+            let name = format!("{}.zip", "a".repeat(length - 4));
+            let source = root.path().join("incoming").join(&name);
+            simple_zip(&source, 34, None);
+            import_pack_with(
+                &source,
+                &resourcepacks,
+                &icons,
+                ImportChoice::Default,
+                &hashes,
+                &trash,
+            )
+            .unwrap();
+            let result = import_pack_with(
+                &source,
+                &resourcepacks,
+                &icons,
+                ImportChoice::Replace,
+                &hashes,
+                &trash,
+            )
+            .unwrap();
+            assert!(matches!(result, ImportOutcome::Imported { .. }));
+            assert_eq!(trash.calls().len(), 1);
+            let holding = &trash.calls()[0];
+            assert!(holding.file_name().unwrap().len() < 100);
+            assert_eq!(
+                std::fs::read(resourcepacks.join(&name)).unwrap(),
+                std::fs::read(&source).unwrap()
+            );
+        }
     }
 
     #[test]

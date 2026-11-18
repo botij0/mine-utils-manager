@@ -923,8 +923,8 @@ fn replace_commits_the_new_datapack_before_trashing_the_holding_folder() {
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with(".mine-utils-replace-cool-pack."),
-            holding.join("data/new.json").exists(),
+                .starts_with(".mine-utils-replace."),
+            holding.join("cool-pack/data/new.json").exists(),
         ));
         std::fs::remove_dir_all(holding).unwrap();
         Ok(())
