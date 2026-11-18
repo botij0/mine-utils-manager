@@ -270,8 +270,8 @@ impl ZipRoot {
 
 /// A verified temp file inside the target directory. Commit it with
 /// [`VerifiedDownload::commit`] (or [`commit_verified`]); dropping it
-/// without committing removes the temp while its file and parent identities match.
-/// A moved parent can leave a `.tmp` behind; pack scans skip these files.
+/// without committing removes only the owned file. Unix cleanup uses the retained
+/// directory handle, including when the parent has moved.
 #[derive(Debug)]
 pub struct VerifiedDownload {
     /// The temp file. Lives in the target dir, so the commit is atomic.
@@ -328,6 +328,26 @@ impl DownloadFileIdentity {
     }
 
     pub(crate) fn remove(&self, path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+
+            let Some(name) = path.file_name() else { return };
+            let Ok(current) =
+                open_regular_at(&self.parent, name).and_then(same_file::Handle::from_file)
+            else {
+                return;
+            };
+            if current != self.file {
+                return;
+            }
+            let Ok(name) = download_entry_name(name) else {
+                return;
+            };
+            // SAFETY: parent retains a valid directory fd; name is one NUL-terminated component.
+            unsafe { libc::unlinkat(self.parent.as_file().as_raw_fd(), name.as_ptr(), 0) };
+        }
+        #[cfg(not(unix))]
         if self.matches(path) {
             let _ = std::fs::remove_file(path);
         }
@@ -339,6 +359,43 @@ impl DownloadFileIdentity {
             file: same_file::Handle::from_file(self.file.as_file().try_clone()?)?,
         })
     }
+}
+
+#[cfg(unix)]
+fn download_entry_name(name: &std::ffi::OsStr) -> std::io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+
+    std::ffi::CString::new(name.as_bytes()).map_err(std::io::Error::other)
+}
+
+#[cfg(unix)]
+fn open_regular_at(
+    parent: &same_file::Handle,
+    name: &std::ffi::OsStr,
+) -> std::io::Result<std::fs::File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    let name = download_entry_name(name)?;
+    // SAFETY: parent retains a valid directory fd; name is one NUL-terminated component.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_file().as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: openat returned a new fd that this File now owns.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "download temp is not a regular file",
+        ));
+    }
+    Ok(file)
 }
 
 impl VerifiedDownload {
@@ -401,7 +458,10 @@ fn temp_path_for(target_dir: &Path, filename: &str) -> PathBuf {
 
 #[cfg(unix)]
 fn sweep_download_temps(target_dir: &Path) {
-    if !is_local_download_filesystem(target_dir) {
+    let Ok(parent) = directory_handle(target_dir) else {
+        return;
+    };
+    if !is_local_download_filesystem(&parent) {
         return;
     }
     let Ok(entries) = std::fs::read_dir(target_dir) else {
@@ -443,26 +503,21 @@ fn sweep_download_temps(target_dir: &Path) {
         if !kind.is_file() {
             continue;
         }
-        if let Err(err) = sweep_download_temp(&entry.path()) {
+        if let Err(err) = sweep_download_temp(&parent, &entry.file_name()) {
             log::debug!("keeping download temp {}: {err}", entry.path().display());
         }
     }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn is_local_download_filesystem(target_dir: &Path) -> bool {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let Ok(path) = CString::new(target_dir.as_os_str().as_bytes()) else {
-        return false;
-    };
+fn is_local_download_filesystem(parent: &same_file::Handle) -> bool {
+    use std::os::fd::AsRawFd;
     let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
-    // SAFETY: path is NUL-terminated and stat points to writable storage.
-    if unsafe { libc::statfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+    // SAFETY: parent retains a valid fd and stat points to writable storage.
+    if unsafe { libc::fstatfs(parent.as_file().as_raw_fd(), stat.as_mut_ptr()) } != 0 {
         return false;
     }
-    // SAFETY: a successful statfs initialized stat.
+    // SAFETY: a successful fstatfs initialized stat.
     let stat = unsafe { stat.assume_init() };
     #[cfg(target_os = "linux")]
     return is_local_linux_filesystem(stat.f_type as u32);
@@ -488,24 +543,16 @@ fn is_local_linux_filesystem(fs_type: u32) -> bool {
 }
 
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-fn is_local_download_filesystem(_target_dir: &Path) -> bool {
+fn is_local_download_filesystem(_parent: &same_file::Handle) -> bool {
     false
 }
 
 #[cfg(unix)]
-fn sweep_download_temp(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+fn sweep_download_temp(parent: &same_file::Handle, name: &std::ffi::OsStr) -> std::io::Result<()> {
     use std::time::Duration;
 
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)?;
+    let file = open_regular_at(parent, name)?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Ok(());
-    }
     lock_download_temp(&file, libc::LOCK_EX | libc::LOCK_NB)?;
     let old = metadata
         .modified()?
@@ -514,10 +561,11 @@ fn sweep_download_temp(path: &Path) -> std::io::Result<()> {
     if !old {
         return Ok(());
     }
-    let current = std::fs::symlink_metadata(path)?;
-    if current.is_file() && current.dev() == metadata.dev() && current.ino() == metadata.ino() {
-        std::fs::remove_file(path)?;
-    }
+    let identity = DownloadFileIdentity {
+        parent: same_file::Handle::from_file(parent.as_file().try_clone()?)?,
+        file: same_file::Handle::from_file(file)?,
+    };
+    identity.remove(Path::new(name));
     Ok(())
 }
 
@@ -958,11 +1006,15 @@ mod identity_tests {
                     b"unrelated sentinel",
                     "{swap}"
                 );
-                assert_eq!(
-                    std::fs::read(original).unwrap(),
-                    b"downloaded bytes",
-                    "{swap}"
-                );
+                if cfg!(unix) && swap == "parent" {
+                    assert!(!original.exists());
+                } else {
+                    assert_eq!(
+                        std::fs::read(original).unwrap(),
+                        b"downloaded bytes",
+                        "{swap}"
+                    );
+                }
             }
         }
     }
