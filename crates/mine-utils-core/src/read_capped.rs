@@ -4,10 +4,7 @@ use std::path::Path;
 pub(crate) fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
     let metadata = std::fs::symlink_metadata(path)?;
     if !metadata.file_type().is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "not a regular file",
-        ));
+        return Err(not_regular());
     }
     let mut bytes = Vec::new();
     open_regular(path)?.take(cap + 1).read_to_end(&mut bytes)?;
@@ -21,6 +18,8 @@ pub(crate) fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
 }
 
 pub(crate) fn open_regular(path: &Path) -> io::Result<std::fs::File> {
+    #[cfg(test)]
+    before_open(path);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -36,16 +35,43 @@ pub(crate) fn open_regular(path: &Path) -> io::Result<std::fs::File> {
                 }
             })?;
         if !file.metadata()?.file_type().is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "not a regular file",
-            ));
+            return Err(not_regular());
         }
         Ok(file)
     }
     #[cfg(not(unix))]
     {
+        if !std::fs::symlink_metadata(path)?.file_type().is_file() {
+            return Err(not_regular());
+        }
         std::fs::File::open(path)
+    }
+}
+
+fn not_regular() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "not a regular file")
+}
+
+#[cfg(test)]
+type SwapHook = Box<dyn FnOnce(&Path)>;
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_OPEN: std::cell::RefCell<Option<SwapHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `hook` once, on this thread, right before the next `open_regular`
+/// opens its path, so a test can replace the entry after any earlier check.
+#[cfg(test)]
+pub(crate) fn swap_before_next_open(hook: impl FnOnce(&Path) + 'static) {
+    BEFORE_OPEN.set(Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn before_open(path: &Path) {
+    if let Some(hook) = BEFORE_OPEN.take() {
+        hook(path);
     }
 }
 

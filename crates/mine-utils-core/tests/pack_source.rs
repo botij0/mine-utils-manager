@@ -280,3 +280,64 @@ fn symlink_cards_serialize_the_offending_path() {
         linked.to_str().unwrap()
     );
 }
+
+#[cfg(unix)]
+fn mkfifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn folder_metadata_and_icon_that_are_not_regular_files_are_skipped_without_blocking() {
+    let root = tempfile::tempdir().unwrap();
+    let packs = root.path().join("packs");
+    let fifo_meta = packs.join("FifoMeta");
+    folder(&fifo_meta, META);
+    std::fs::remove_file(fifo_meta.join("pack.mcmeta")).unwrap();
+    mkfifo(&fifo_meta.join("pack.mcmeta"));
+    let dir_meta = packs.join("DirMeta");
+    folder(&dir_meta, META);
+    std::fs::remove_file(dir_meta.join("pack.mcmeta")).unwrap();
+    std::fs::create_dir(dir_meta.join("pack.mcmeta")).unwrap();
+    let fifo_icon = packs.join("FifoIcon");
+    folder(&fifo_icon, META);
+    mkfifo(&fifo_icon.join("pack.png"));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let icons = root.path().join("icons");
+    std::thread::spawn(move || {
+        let cards = scan_packs(&packs, &IconCache::new(&icons)).unwrap().packs;
+        let _ = tx.send(
+            cards
+                .into_iter()
+                .map(|card| {
+                    (
+                        card.name,
+                        card.error.map(|error| error.code),
+                        card.icon.is_some(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+    });
+    let rows = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("scan must not block on a FIFO");
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "DirMeta".to_string(),
+                Some("pack_missing_meta".to_string()),
+                false
+            ),
+            ("FifoIcon".to_string(), None, false),
+            (
+                "FifoMeta".to_string(),
+                Some("pack_missing_meta".to_string()),
+                false
+            ),
+        ]
+    );
+}
