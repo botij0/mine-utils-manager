@@ -923,8 +923,8 @@ fn replace_commits_the_new_datapack_before_trashing_the_holding_folder() {
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with(".mine-utils-replace-cool-pack."),
-            holding.join("data/new.json").exists(),
+                .starts_with(".mine-utils-replace."),
+            holding.join("cool-pack/data/new.json").exists(),
         ));
         std::fs::remove_dir_all(holding).unwrap();
         Ok(())
@@ -1493,5 +1493,54 @@ fn replace_rollback_restores_the_rebased_level_dat_bytes() {
     assert_eq!(
         view(&world.paths),
         lists(&["vanilla"], &["file/cool", "file/race-6.zip"])
+    );
+}
+
+#[test]
+fn replace_long_datapack_name_preserves_original_in_a_bounded_holding() {
+    let world = temp_world(&["vanilla"], &[]);
+    let name = "a".repeat(220);
+    let source = install_pack(&world, &name);
+    std::fs::write(source.join("data/new.json"), b"new content").unwrap();
+    let trash = FnTrash(|holding: &Path| {
+        assert!(holding.file_name().unwrap().len() < 100);
+        assert_eq!(
+            std::fs::read(holding.join(&name).join("pack.mcmeta")).unwrap(),
+            br#"{"pack": {"pack_format": 48, "description": "temp"}}"#
+        );
+        assert!(!holding.join(&name).join("data/new.json").exists());
+        std::fs::remove_dir_all(holding).unwrap();
+        Ok(())
+    });
+    let outcome = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &trash,
+        &PassGuard,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome,
+        data_stack::DatapackImportOutcome::Imported {
+            filename: name.clone()
+        }
+    );
+    assert_eq!(
+        std::fs::read(
+            world
+                .paths
+                .datapacks_dir()
+                .join(&name)
+                .join("data/new.json")
+        )
+        .unwrap(),
+        b"new content"
+    );
+    assert_eq!(
+        view(&world.paths),
+        lists(&["vanilla", &format!("file/{name}")], &[])
     );
 }

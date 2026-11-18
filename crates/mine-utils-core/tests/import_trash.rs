@@ -69,17 +69,19 @@ fn system_trash_fixture() {
     let trashed = &entries[0];
     let name = trashed.file_name().unwrap().to_str().unwrap();
     let original_path = if filename == "Faithful.zip" {
-        assert!(
-            name.starts_with(".mine-utils-replace-Faithful.zip."),
-            "{name}"
-        );
+        assert!(name.starts_with(".mine-utils-replace."), "{name}");
         assert!(name.ends_with(".tmp"), "{name}");
         packs.join(name)
     } else {
         assert_eq!(name, "Faithful.zip");
         old
     };
-    assert_eq!(std::fs::read(trashed).unwrap(), before);
+    let trashed_pack = if filename == "Faithful.zip" {
+        trashed.join("Faithful.zip")
+    } else {
+        trashed.to_owned()
+    };
+    assert_eq!(std::fs::read(trashed_pack).unwrap(), before);
     assert_eq!(std::fs::read(packs.join(filename)).unwrap(), before);
     let info = std::fs::read_to_string(
         data_home

@@ -284,3 +284,184 @@ fn vanished_holdings_and_pack_folders_report_the_named_entry_is_gone() {
         }
     }
 }
+
+const DIRECTORY_HOLDING: &str = ".mine-utils-replace.4294967295-123-0.tmp";
+
+#[test]
+fn directory_holdings_restore_full_names_for_resources_and_datapacks() {
+    for datapack in [false, true] {
+        for pack_directory in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let folder = root.path().join(if datapack {
+                "saves/World/datapacks"
+            } else {
+                "resourcepacks"
+            });
+            let holding = folder.join(DIRECTORY_HOLDING);
+            std::fs::create_dir_all(&holding).unwrap();
+            let name = format!("{}.zip", "a".repeat(216));
+            let child = holding.join(&name);
+            if pack_directory {
+                std::fs::create_dir(&child).unwrap();
+                std::fs::write(child.join("pack.mcmeta"), b"original").unwrap();
+            } else {
+                std::fs::write(&child, b"original").unwrap();
+            }
+            let references = root.path().join(if datapack {
+                "saves/World/level.dat"
+            } else {
+                "options.txt"
+            });
+            std::fs::write(&references, b"unchanged references").unwrap();
+            let listing = if datapack {
+                data_stack::scan_datapacks(&folder, &IconCache::new(root.path())).unwrap()
+            } else {
+                scan_packs(&folder, &IconCache::new(root.path())).unwrap()
+            };
+            assert_eq!(
+                serde_json::to_value(listing).unwrap()["holding_entries"],
+                serde_json::json!([
+                    {"holdingName": DIRECTORY_HOLDING, "originalName": name}
+                ])
+            );
+            let restore = || {
+                if datapack {
+                    let world =
+                        mine_utils_core::WorldPaths::for_world(root.path(), "World").unwrap();
+                    let paths = mine_utils_core::DataPaths::for_world(
+                        &world,
+                        root.path(),
+                        Default::default(),
+                    );
+                    mine_utils_core::holding_recovery::restore_datapack_holding(
+                        &paths,
+                        DIRECTORY_HOLDING,
+                    )
+                } else {
+                    mine_utils_core::holding_recovery::restore_resource_holding(
+                        &paths(root.path()),
+                        DIRECTORY_HOLDING,
+                    )
+                }
+            };
+            let destination = folder.join(&name);
+            std::fs::write(&destination, b"rival").unwrap();
+            assert!(restore()
+                .unwrap_err()
+                .to_string()
+                .contains("original name must be free"));
+            assert_eq!(std::fs::read(&destination).unwrap(), b"rival");
+            std::fs::remove_file(&destination).unwrap();
+            restore().unwrap();
+            let restored = if pack_directory {
+                destination.join("pack.mcmeta")
+            } else {
+                destination
+            };
+            assert_eq!(std::fs::read(restored).unwrap(), b"original");
+            assert!(!holding.exists());
+            assert_eq!(std::fs::read(references).unwrap(), b"unchanged references");
+        }
+    }
+}
+
+#[test]
+fn invalid_directory_holdings_are_skipped_and_never_touched() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("resourcepacks");
+    std::fs::create_dir(&folder).unwrap();
+    for (index, children) in [0, 2, 1].into_iter().enumerate() {
+        let name = format!(".mine-utils-replace.4294967295-123-{index}.tmp");
+        let holding = folder.join(&name);
+        std::fs::create_dir(&holding).unwrap();
+        for child in 0..children {
+            std::fs::write(holding.join(format!("child{child}")), b"keep").unwrap();
+        }
+        if children == 1 {
+            std::fs::rename(
+                holding.join("child0"),
+                holding.join(".mine-utils-copy.5-123-0.tmp"),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            mine_utils_core::holding_recovery::restore_resource_holding(&paths(root.path()), &name)
+                .unwrap_err()
+                .code(),
+            "pack_broken_archive"
+        );
+        assert_eq!(std::fs::read_dir(&holding).unwrap().count(), children);
+    }
+    std::fs::write(folder.join(HOLDING), b"legacy").unwrap();
+    let listing = scan_packs(&folder, &IconCache::new(root.path())).unwrap();
+    assert_eq!(listing.holding_entries.len(), 1);
+    assert_eq!(listing.holding_entries[0].holding_name, HOLDING);
+}
+
+#[cfg(unix)]
+#[test]
+fn directory_holdings_reject_symlink_children_and_hide_current_process() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("resourcepacks");
+    let holding = folder.join(DIRECTORY_HOLDING);
+    std::fs::create_dir_all(&holding).unwrap();
+    let outside = root.path().join("outside");
+    std::fs::write(&outside, b"outside").unwrap();
+    std::os::unix::fs::symlink(&outside, holding.join("Pack.zip")).unwrap();
+    assert_eq!(
+        mine_utils_core::holding_recovery::restore_resource_holding(
+            &paths(root.path()),
+            DIRECTORY_HOLDING
+        )
+        .unwrap_err()
+        .code(),
+        "pack_symlink"
+    );
+    let active = format!(".mine-utils-replace.{}-123-0.tmp", std::process::id());
+    std::fs::create_dir(folder.join(&active)).unwrap();
+    std::fs::write(folder.join(&active).join("Pack.zip"), b"active").unwrap();
+    assert_eq!(
+        mine_utils_core::holding_recovery::restore_resource_holding(&paths(root.path()), &active)
+            .unwrap_err()
+            .code(),
+        "pack_broken_archive"
+    );
+    std::fs::write(folder.join(HOLDING), b"legacy").unwrap();
+    let listing = scan_packs(&folder, &IconCache::new(root.path())).unwrap();
+    assert_eq!(listing.holding_entries.len(), 1);
+    assert_eq!(listing.holding_entries[0].holding_name, HOLDING);
+    assert_eq!(std::fs::read(outside).unwrap(), b"outside");
+    assert_eq!(
+        std::fs::read(folder.join(active).join("Pack.zip")).unwrap(),
+        b"active"
+    );
+}
+
+#[test]
+fn replace_prefixed_pack_and_copy_temp_are_not_holdings() {
+    use std::io::Write;
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("resourcepacks");
+    std::fs::create_dir(&folder).unwrap();
+    let mut zip = zip::ZipWriter::new(
+        std::fs::File::create(folder.join("mine-utils-replace-X.zip")).unwrap(),
+    );
+    zip.start_file("pack.mcmeta", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(br#"{"pack":{"pack_format":34,"description":"valid"}}"#)
+        .unwrap();
+    zip.start_file("assets/test.txt", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"pack").unwrap();
+    zip.finish().unwrap();
+    std::fs::write(
+        folder.join(".mine-utils-copy.4294967295-123-0.tmp"),
+        b"partial copy",
+    )
+    .unwrap();
+    let listing = scan_packs(&folder, &IconCache::new(root.path())).unwrap();
+    assert_eq!(listing.count, 1);
+    assert_eq!(listing.packs[0].name, "mine-utils-replace-X");
+    assert!(listing.packs[0].error.is_none());
+    assert!(listing.holding_entries.is_empty());
+}

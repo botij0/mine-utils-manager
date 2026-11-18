@@ -1073,7 +1073,7 @@ mod tests {
             .find(|path| is_temp_name(path))
             .unwrap();
         assert_eq!(
-            std::fs::read(&holding).unwrap(),
+            std::fs::read(holding.join("Pack.zip")).unwrap(),
             std::fs::read(&old).unwrap()
         );
         assert_eq!(std::fs::read(&rival).unwrap(), b"rival");
@@ -1134,6 +1134,73 @@ mod tests {
         println!(
             "injected commit failure; original bytes restored at {}; trash calls 0",
             original.display()
+        );
+    }
+
+    #[test]
+    fn replace_commit_failure_restores_the_original_when_rename_is_unsupported() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let source = root.path().join("incoming/Pack.zip");
+        simple_zip(&source, 34, None);
+        let original = resourcepacks.join("Pack.zip");
+        std::fs::copy(&source, &original).unwrap();
+        let before = std::fs::read(&original).unwrap();
+
+        crate::fs_commit::FORCE_UNSUPPORTED.with(|flag| flag.set(true));
+        let result = import_pack_with_commit(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Replace,
+            &hashes,
+            &trash,
+            |_, _| Err(std::io::Error::other("injected commit failure")),
+        );
+        crate::fs_commit::FORCE_UNSUPPORTED.with(|flag| flag.set(false));
+
+        assert_eq!(result.unwrap_err().code(), "io");
+        assert_eq!(std::fs::read(&original).ok(), Some(before));
+        assert_eq!(trash.calls(), Vec::<PathBuf>::new());
+        assert_eq!(
+            Vec::from_iter(pack_names(&resourcepacks).unwrap()),
+            ["Pack.zip"]
+        );
+    }
+
+    #[test]
+    fn replace_duplicate_trashes_the_original_name_when_rename_is_unsupported() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let source = root.path().join("incoming/New.zip");
+        simple_zip(&source, 34, None);
+        let original = resourcepacks.join("Old.zip");
+        std::fs::copy(&source, &original).unwrap();
+        let before = std::fs::read(&original).unwrap();
+
+        crate::fs_commit::FORCE_UNSUPPORTED.with(|flag| flag.set(true));
+        let result = import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Replace,
+            &hashes,
+            &trash,
+        );
+        crate::fs_commit::FORCE_UNSUPPORTED.with(|flag| flag.set(false));
+
+        assert!(matches!(result.unwrap(), ImportOutcome::Imported { .. }));
+        assert_eq!(trash.calls(), [original]);
+        assert_eq!(std::fs::read(trash.dir.join("0-Old.zip")).unwrap(), before);
+        assert_eq!(
+            std::fs::read(resourcepacks.join("New.zip")).unwrap(),
+            std::fs::read(&source).unwrap()
+        );
+        assert_eq!(
+            Vec::from_iter(pack_names(&resourcepacks).unwrap()),
+            ["New.zip"]
         );
     }
 
@@ -1208,6 +1275,7 @@ mod tests {
                     .map(|e| e.unwrap().path())
                     .find(|p| is_temp_name(p))
                     .unwrap()
+                    .join("Faithful")
             } else {
                 old
             };
@@ -1219,6 +1287,44 @@ mod tests {
             assert_eq!(
                 std::fs::read(resourcepacks.join(filename).join("pack.mcmeta")).unwrap(),
                 mcmeta(34, None, "Faithful")
+            );
+        }
+    }
+
+    #[test]
+    fn replace_long_filename_succeeds() {
+        for length in [220, 255] {
+            let (root, _cache_root, icons, hashes, trash) = setup();
+            let resourcepacks = root.path().join("resourcepacks");
+            std::fs::create_dir_all(&resourcepacks).unwrap();
+            let name = format!("{}.zip", "a".repeat(length - 4));
+            let source = root.path().join("incoming").join(&name);
+            simple_zip(&source, 34, None);
+            import_pack_with(
+                &source,
+                &resourcepacks,
+                &icons,
+                ImportChoice::Default,
+                &hashes,
+                &trash,
+            )
+            .unwrap();
+            let result = import_pack_with(
+                &source,
+                &resourcepacks,
+                &icons,
+                ImportChoice::Replace,
+                &hashes,
+                &trash,
+            )
+            .unwrap();
+            assert!(matches!(result, ImportOutcome::Imported { .. }));
+            assert_eq!(trash.calls().len(), 1);
+            let holding = &trash.calls()[0];
+            assert!(holding.file_name().unwrap().len() < 100);
+            assert_eq!(
+                std::fs::read(resourcepacks.join(&name)).unwrap(),
+                std::fs::read(&source).unwrap()
             );
         }
     }

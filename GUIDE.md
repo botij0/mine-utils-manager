@@ -99,7 +99,7 @@ During Replace, Mine Utils holds the old pack under a hidden sibling name until 
 
 Replacing a resource pack with a differently named duplicate keeps its position in both `options.txt` pack lists.
 
-When the replacement has a different filename, the trash entry keeps the original filename if that name is still free. For a same-name replacement, look for `.mine-utils-replace-<original-name>.<pid>-<stamp>-<counter>.tmp` in the trash. Restore that entry outside the pack folder, rename it to the original filename, then import it. A zip needs its `.zip` extension back. If an import error says the new pack is installed, check the refreshed pack list and stack before retrying. The error also names the saved original.
+When the replacement has a different filename, the trash entry keeps the original filename if that name is still free. For a same-name replacement, look for a `.mine-utils-replace.<pid>-<stamp>-<counter>.tmp` folder in the trash. Restore that folder outside the pack folder, then import the pack inside it. The child keeps its original filename and extension. Older trash entries use `.mine-utils-replace-<original-name>.<pid>-<stamp>-<counter>.tmp`; restore those outside the pack folder and rename them to the original filename before importing. If an import error says the new pack is installed, check the refreshed pack list and stack before retrying. The error also names the saved original.
 
 ### Find and inspect packs
 
@@ -302,8 +302,10 @@ For file locations and implementation details, see [ARCHITECTURE.md](ARCHITECTUR
 
 ## Recover an interrupted Replace
 
-If Mine Utils stops during Replace, the original pack can remain under a hidden
-`.mine-utils-replace-<original>.<pid>-<stamp>-<counter>.tmp` name.
+If Mine Utils stops during Replace, the original pack can remain inside a hidden
+`.mine-utils-replace.<pid>-<stamp>-<counter>.tmp` folder under its unchanged filename.
+Recovery also accepts older flat `.mine-utils-replace-<original>.<pid>-<stamp>-<counter>.tmp` entries.
+Folders with no child, multiple children, or a symlink child are skipped without changes.
 Packs and the selected world's datapack panel show a recovery notice with the
 original filename. Select **Restore** to move the held file or folder back.
 

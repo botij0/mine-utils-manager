@@ -436,9 +436,10 @@ fn same_name_post_commit_guard_error_names_the_holding_path() {
             path.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with(".mine-utils-replace-")
+                .starts_with(".mine-utils-replace.")
         })
-        .unwrap();
+        .unwrap()
+        .join("Faithful");
     assert_eq!(
         std::fs::read(holding.join("pack.mcmeta")).unwrap(),
         br#"{"pack":{"pack_format":34,"description":"Faithful"}}"#

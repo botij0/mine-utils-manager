@@ -18,7 +18,7 @@ struct Trash(PathBuf);
 impl TrashService for Trash {
     fn move_to_trash(&self, path: &Path) -> Result<(), PackError> {
         let name = path.file_name().unwrap().to_string_lossy();
-        let name = if name.starts_with(".mine-utils-replace-") {
+        let name = if name.starts_with(".mine-utils-replace.") {
             "held-original"
         } else {
             &name
