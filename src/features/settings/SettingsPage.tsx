@@ -44,7 +44,7 @@ export default function SettingsPage({
   gameGuardChecking = false,
   refreshGameRunning = () => {},
 }: SettingsPageProps) {
-  const [error, setError] = useState<ClientError | null>(null);
+  const [error, setError] = useState<ClientError | SettingsWriteTimeoutError | null>(null);
   const failedTheme = useRef<Theme | null>(null);
   const [folderRevision, setFolderRevision] = useState(0);
   const orderedClient = useMemo(() => {
@@ -82,9 +82,10 @@ export default function SettingsPage({
     try {
       onConfigChanged(await orderedClient.setTheme(theme));
     } catch (err) {
-      const next = toAppError(err);
-      if (isSettingsWriteTimeout(next) && !failedTheme.current) failedTheme.current = theme;
-      setError((current) => (current && isSettingsWriteTimeout(current) ? current : next));
+      const timedOut = isSettingsWriteTimeout(err);
+      const next = timedOut ? err : toAppError(err);
+      if (timedOut && !failedTheme.current) failedTheme.current = theme;
+      setError((current) => (isSettingsWriteTimeout(current) ? current : next));
     }
   }
 

@@ -16,23 +16,21 @@ export type DataStackEntry = Wire.StackEntry;
 export type StackGuard = Pick<Wire.GameGuard, 'running' | 'stale_locks' | 'detection_supported'>;
 export type PackIssueCode = Wire.PackIssue['code'];
 
-export type ClientErrorCode = Wire.ErrorCode | 'unknown' | 'settings_write_timeout';
+export type ClientErrorCode = Wire.ErrorCode | 'unknown';
 export type ClientError = Omit<Wire.AppError, 'code'> & {
   code: ClientErrorCode;
   rawCode?: string;
 };
 
 export class SettingsWriteTimeoutError extends Error {
-  readonly code = 'settings_write_timeout' as const;
-
   constructor() {
     super('Settings write timed out. It may still finish in the background.');
     this.name = 'SettingsWriteTimeoutError';
   }
 }
 
-export function isSettingsWriteTimeout(error: Pick<ClientError, 'code'>): boolean {
-  return error.code === 'settings_write_timeout';
+export function isSettingsWriteTimeout(error: unknown): error is SettingsWriteTimeoutError {
+  return error instanceof SettingsWriteTimeoutError;
 }
 
 export class IpcError extends Error implements ClientError {

@@ -107,9 +107,6 @@ export function toAppError(err: unknown): IpcError {
   if (err instanceof IpcError) return err;
   if (typeof err === 'object' && err !== null && 'code' in err && 'message' in err) {
     if (typeof err.code === 'string' && typeof err.message === 'string') {
-      if (err.code === 'settings_write_timeout') {
-        return new IpcError(err.code, err.message);
-      }
       const code = ERROR_CODES.find((code) => code === err.code) ?? 'unknown';
       return new IpcError(code, err.message, code === 'unknown' ? err.code : undefined);
     }
