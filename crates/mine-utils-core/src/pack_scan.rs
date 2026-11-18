@@ -1224,6 +1224,36 @@ mod tests {
     }
 
     #[test]
+    fn replace_long_filename_succeeds() {
+        let (root, _cache_root, icons, hashes, trash) = setup();
+        let resourcepacks = root.path().join("resourcepacks");
+        std::fs::create_dir_all(&resourcepacks).unwrap();
+        let name = format!("{}.zip", "a".repeat(216));
+        let source = root.path().join("incoming").join(&name);
+        simple_zip(&source, 34, None);
+        import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Default,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+        let result = import_pack_with(
+            &source,
+            &resourcepacks,
+            &icons,
+            ImportChoice::Replace,
+            &hashes,
+            &trash,
+        )
+        .unwrap();
+        assert!(matches!(result, ImportOutcome::Imported { .. }));
+        assert_eq!(trash.calls().len(), 1);
+    }
+
+    #[test]
     fn duplicate_offers_skip_and_replace() {
         let (root, _cache_root, icons, hashes, trash) = setup();
         let resourcepacks = root.path().join("resourcepacks");
