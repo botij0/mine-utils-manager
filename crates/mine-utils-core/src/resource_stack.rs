@@ -149,6 +149,35 @@ pub(crate) mod stack_core {
         pub secondary: &'a [String],
     }
 
+    /// Rename `old` to `new` inside one array. When that array already lists
+    /// `new`, the first `old` becomes `new` at its index and the other copies
+    /// of either name go. Each array is handled alone, because a resource pack
+    /// can be listed in both arrays at once.
+    fn rename_in_list(list: &mut Vec<String>, old: &str, new: &str) -> bool {
+        if !list.iter().any(|value| value == old) {
+            return false;
+        }
+        if list.iter().any(|value| value == new) {
+            let mut kept = false;
+            list.retain_mut(|value| {
+                if *value == old && !kept {
+                    *value = new.to_owned();
+                    kept = true;
+                    true
+                } else {
+                    *value != old && *value != new
+                }
+            });
+            return true;
+        }
+        let mut changed = false;
+        for value in list.iter_mut().filter(|value| **value == old) {
+            *value = new.to_owned();
+            changed = true;
+        }
+        changed
+    }
+
     /// The mutation vocabulary both stacks share. The per-kind meaning of each
     /// operation lives in [`Rules`].
     #[derive(Debug, Clone)]
@@ -175,14 +204,12 @@ pub(crate) mod stack_core {
                 Change::Rename { old, new } => {
                     let old = file_value(old)?;
                     let new = file_value(new)?;
-                    let mut changed = false;
-                    for value in lists.primary.iter_mut().chain(lists.secondary.iter_mut()) {
-                        if *value == old && *value != new {
-                            value.clone_from(&new);
-                            changed = true;
-                        }
+                    if old == new {
+                        return Ok(false);
                     }
-                    Ok(changed)
+                    let primary = rename_in_list(&mut lists.primary, &old, &new);
+                    let secondary = rename_in_list(&mut lists.secondary, &old, &new);
+                    Ok(primary || secondary)
                 }
                 Change::ReplaceData { old, new } => {
                     let old = file_value(old)?;
