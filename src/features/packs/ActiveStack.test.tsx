@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { BackupInfo, ResourceStack } from '../../lib/types';
+import type { BackupInfo, GameRunning, ResourceStack } from '../../lib/types';
 import { makeFakeClient, type FakeClient, type FakeClientOptions } from '../../test/fake-ipc';
 import { pack, resourceStack } from '../../test/fake-packs';
 import BackupsPanel from '../settings/BackupsPanel';
@@ -37,7 +37,7 @@ describe('ActiveStack', () => {
       replaced = true;
       return { status: 'imported', pack: PACKS[1] };
     };
-    render(<PacksPage client={client} />);
+    render(<PacksPage client={client} gameRunning={null} />);
     const user = userEvent.setup();
     expect(await screen.findByRole('listitem', { name: 'Alpha' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Import pack' }));
@@ -48,7 +48,7 @@ describe('ActiveStack', () => {
   });
 
   it('shows the stack top-first with locked foreign entries', async () => {
-    render(<PacksPage client={stackClient()} />);
+    render(<PacksPage client={stackClient()} gameRunning={null} />);
 
     const list = await screen.findByRole('list', { name: 'Stack order' });
     const names = within(list)
@@ -69,7 +69,7 @@ describe('ActiveStack', () => {
   it('toggles a pack off and offers undo, which toggles it back', async () => {
     const user = userEvent.setup();
     const client = stackClient();
-    render(<PacksPage client={client} />);
+    render(<PacksPage client={client} gameRunning={null} />);
 
     await screen.findByRole('list', { name: 'Stack order' });
     await user.click(within(card('Alpha')).getByRole('checkbox'));
@@ -93,7 +93,7 @@ describe('ActiveStack', () => {
   it('reorders with the up and down buttons and sends the load order', async () => {
     const user = userEvent.setup();
     const client = stackClient();
-    render(<PacksPage client={client} />);
+    render(<PacksPage client={client} gameRunning={null} />);
 
     await screen.findByRole('list', { name: 'Stack order' });
     await user.click(
@@ -121,7 +121,7 @@ describe('ActiveStack', () => {
       resource: ['vanilla', 'file/Gone.zip'],
       packs: [],
     });
-    render(<PacksPage client={client} />);
+    render(<PacksPage client={client} gameRunning={null} />);
 
     const missing = await screen.findByRole('listitem', { name: 'Gone.zip' });
     expect(missing).toHaveTextContent('Gone.zip is not in resourcepacks');
@@ -134,7 +134,7 @@ describe('ActiveStack', () => {
 
   it('announces a keyboard drag by pack name and position', async () => {
     const user = userEvent.setup();
-    render(<PacksPage client={stackClient()} />);
+    render(<PacksPage client={stackClient()} gameRunning={null} />);
 
     await screen.findByRole('list', { name: 'Stack order' });
     const handle = within(card('Alpha')).getByRole('button', { name: 'Drag Alpha' });
@@ -169,16 +169,15 @@ describe('ActiveStack', () => {
 
   it('blocks every write and names the lock while the game runs', async () => {
     const user = userEvent.setup();
-    const client = stackClient({
-      running: {
-        kind: 'session_lock',
-        detail: '/home/demo/.minecraft/saves/world/session.lock is locked by pid 4242',
-        lock_path: '/home/demo/.minecraft/saves/world/session.lock',
-        pid: 4242,
-        command: null,
-      },
-    });
-    render(<PacksPage client={client} />);
+    const lock: GameRunning = {
+      kind: 'session_lock',
+      detail: '/home/demo/.minecraft/saves/world/session.lock is locked by pid 4242',
+      lock_path: '/home/demo/.minecraft/saves/world/session.lock',
+      pid: 4242,
+      command: null,
+    };
+    const client = stackClient({ running: lock });
+    render(<PacksPage client={client} gameRunning={lock} />);
 
     const banner = await screen.findByRole('alert');
     expect(banner).toHaveTextContent('Minecraft is running');
@@ -200,7 +199,7 @@ describe('ActiveStack', () => {
     const client = stackClient({
       staleLocks: ['/home/demo/.minecraft/saves/world/session.lock'],
     });
-    render(<PacksPage client={client} />);
+    render(<PacksPage client={client} gameRunning={null} />);
 
     const note = await screen.findByRole('status', { name: 'Stale session lock' });
     expect(note).toHaveTextContent('stale session lock');
@@ -214,7 +213,7 @@ describe('ActiveStack', () => {
       (_, index) => `/home/demo/.minecraft/saves/world-${index}/session.lock`,
     );
     const client = stackClient({ staleLocks });
-    render(<PacksPage client={client} />);
+    render(<PacksPage client={client} gameRunning={null} />);
 
     const note = await screen.findByRole('status', { name: 'Stale session lock' });
     expect(note).toHaveTextContent(

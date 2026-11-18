@@ -81,8 +81,31 @@ describe('WorldsPage', () => {
     expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
   });
 
+  it('holds writes with the checking text until the first guard answer, even when the stored world says running', async () => {
+    const running: GameRunning = { kind: 'process', detail: 'pid 42 runs java', lock_path: null, pid: 42, command: 'java' };
+    const stored = pageClient();
+    const client = pageClient({
+      listWorlds: async () => [world({ running })],
+      listDatapacks: async (name: string) => {
+        const listing = await stored.listDatapacks(name);
+        return { ...listing, stack: { ...listing.stack, running } };
+      },
+    });
+    const { rerender } = render(<WorldsPage client={client} />);
+
+    const importZip = await screen.findByRole('button', { name: 'Import zip' });
+    expect(importZip).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
+    expect(screen.getByText(/^Checking whether Minecraft is running; writes are paused/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Minecraft is running/)).not.toBeInTheDocument();
+
+    rerender(<WorldsPage client={client} gameRunning={null} />);
+    expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Import folder' })).toBeEnabled();
+  });
+
   it('lists worlds with icons and versions', async () => {
-    render(<WorldsPage client={pageClient()} />);
+    render(<WorldsPage client={pageClient()} gameRunning={null} />);
     expect(await screen.findAllByText('Survival 1.17')).toHaveLength(2);
     expect(screen.getByText('Creative Flat')).toBeInTheDocument();
     expect(screen.getAllByText('1.21.10', { selector: '.world-rail-version' })).toHaveLength(2);
@@ -96,7 +119,7 @@ describe('WorldsPage', () => {
         }),
       ],
     });
-    render(<WorldsPage client={client} />);
+    render(<WorldsPage client={client} gameRunning={null} />);
     expect(
       await screen.findByText(
         /Minecraft 26\.9 is newer than this build knows \(newest known: 26\.3\)\. Datapack compatibility is not checked\./,
@@ -110,7 +133,7 @@ describe('WorldsPage', () => {
         world({ version: { name: '1.2.3-odd', data_format: null, newest_known_version: null } }),
       ],
     });
-    render(<WorldsPage client={client} />);
+    render(<WorldsPage client={client} gameRunning={null} />);
     expect(
       await screen.findByText(
         /Mine Utils does not know the data format of Minecraft 1\.2\.3-odd\. Datapack compatibility is not checked\./,
@@ -119,13 +142,13 @@ describe('WorldsPage', () => {
   });
 
   it('renders datapacks with a compatibility warning', async () => {
-    render(<WorldsPage client={pageClient()} />);
+    render(<WorldsPage client={pageClient()} gameRunning={null} />);
     await screen.findAllByText('Survival 1.17');
     expect(await screen.findByText('May not load on this world')).toBeInTheDocument();
   });
 
   it('keeps foreign entries locked', async () => {
-    render(<WorldsPage client={pageClient()} />);
+    render(<WorldsPage client={pageClient()} gameRunning={null} />);
     await screen.findAllByText('Survival 1.17');
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     const locks = within(grid).getAllByText('Locked');
@@ -134,7 +157,7 @@ describe('WorldsPage', () => {
 
   it('hides write controls for a corrupt level.dat', async () => {
     const user = userEvent.setup();
-    render(<WorldsPage client={pageClient()} />);
+    render(<WorldsPage client={pageClient()} gameRunning={null} />);
     await user.click(await screen.findByRole('button', { name: /Broken World/ }));
     expect(await screen.findByText(/This world is read-only/)).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Datapack stack' })).not.toBeInTheDocument();
@@ -151,7 +174,7 @@ describe('WorldsPage', () => {
       packs: { packs: [bad, valid], count: 2, bytes_read: 0, elapsed_ms: 0 },
       stack: stack({ enabled: [], disabled: [stackEntry('file/Caf�.zip')] }),
     }) });
-    render(<WorldsPage client={client} />);
+    render(<WorldsPage client={client} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     await user.click(within(grid).getByRole('button', { name: 'Caf�.zip, broken' }));
     expect(within(screen.getByRole('region', { name: 'Datapack details' })).getByRole('button', { name: 'Delete' })).toBeDisabled();
@@ -180,7 +203,7 @@ describe('WorldsPage', () => {
         }),
       }),
     });
-    render(<WorldsPage client={lockedClient} />);
+    render(<WorldsPage client={lockedClient} gameRunning={null} />);
     expect(await screen.findByText(/is locked/)).toBeInTheDocument();
     const enable = await screen.findByRole('button', { name: 'Enable a.zip' });
     expect(enable).toBeDisabled();
@@ -194,7 +217,7 @@ describe('WorldsPage', () => {
         disabled: [{ kind: 'file', value: 'file/a.zip', filename: 'a.zip' }],
       }),
     );
-    render(<WorldsPage client={pageClient({ setDatapackEnabled: setEnabled })} />);
+    render(<WorldsPage client={pageClient({ setDatapackEnabled: setEnabled })} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     await user.click(within(grid).getByRole('button', { name: 'Disable a.zip' }));
     await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('Survival 1_17', 'a.zip', false));
@@ -213,7 +236,7 @@ describe('WorldsPage', () => {
         }),
       }),
     });
-    render(<WorldsPage client={dupClient} />);
+    render(<WorldsPage client={dupClient} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     expect(within(grid).getAllByRole('button', { name: 'dup.zip, enabled' })).toHaveLength(2);
   });
@@ -234,7 +257,7 @@ describe('WorldsPage', () => {
         }),
       }),
     });
-    render(<WorldsPage client={orderClient} />);
+    render(<WorldsPage client={orderClient} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     // Top-first display: b.zip is first, so "Move b.zip down" swaps it below a.zip.
     await user.click(within(grid).getByRole('button', { name: 'Move b.zip down' }));
@@ -282,7 +305,7 @@ describe('WorldsPage', () => {
         stack: stack({ enabled: [{ kind: 'foreign', value: 'vanilla' }], disabled: [] }),
       }),
     });
-    render(<WorldsPage client={handClient} />);
+    render(<WorldsPage client={handClient} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     expect(within(grid).getByRole('button', { name: 'hand.zip, disabled' })).toBeInTheDocument();
     await user.click(within(grid).getByRole('button', { name: 'Enable hand.zip' }));
@@ -307,7 +330,7 @@ describe('WorldsPage', () => {
         }),
       }),
     });
-    render(<WorldsPage client={missingClient} />);
+    render(<WorldsPage client={missingClient} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     expect(within(grid).getByText('File missing from datapacks')).toBeInTheDocument();
     expect(within(grid).getByRole('button', { name: 'Enable gone.zip' })).toBeDisabled();
@@ -331,7 +354,7 @@ describe('WorldsPage', () => {
         }),
       }),
     });
-    render(<WorldsPage client={brokenClient} />);
+    render(<WorldsPage client={brokenClient} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     expect(within(grid).getByText('Broken datapack')).toBeInTheDocument();
     expect(within(grid).getByText('broken.zip is not readable')).toBeInTheDocument();
@@ -357,7 +380,7 @@ describe('WorldsPage', () => {
         }),
       }),
     });
-    render(<WorldsPage client={brokenClient} />);
+    render(<WorldsPage client={brokenClient} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     const cards = within(grid).getAllByRole('listitem');
     expect(cards).toHaveLength(2);
@@ -389,7 +412,7 @@ describe('WorldsPage', () => {
         }),
       }),
     });
-    render(<WorldsPage client={client} />);
+    render(<WorldsPage client={client} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     expect(within(grid).getByRole('button', { name: 'Disable a.zip' })).toBeEnabled();
     expect(within(grid).getByRole('button', { name: 'Enable b.zip' })).toBeEnabled();
@@ -413,7 +436,7 @@ describe('WorldsPage', () => {
         }),
       }),
     });
-    render(<WorldsPage client={actionable} />);
+    render(<WorldsPage client={actionable} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     // An enabled corrupt pack is still a live entry: it keeps Disable.
     expect(within(grid).getByRole('button', { name: 'Disable broken.zip' })).toBeEnabled();
@@ -437,7 +460,7 @@ describe('WorldsPage', () => {
         }),
       }),
     });
-    render(<WorldsPage client={badgeClient} />);
+    render(<WorldsPage client={badgeClient} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     expect(within(grid).getByText('Broken datapack')).toBeInTheDocument();
     expect(within(grid).queryByRole('button', { name: /^Enable( |$)/ })).not.toBeInTheDocument();
@@ -476,7 +499,7 @@ describe('WorldsPage', () => {
         }),
       }),
     });
-    render(<WorldsPage client={linkClient} />);
+    render(<WorldsPage client={linkClient} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     await user.click(within(grid).getByRole('button', { name: 'linked.zip, broken' }));
     expect(
@@ -508,7 +531,7 @@ describe('WorldsPage', () => {
         }),
       }),
     });
-    render(<WorldsPage client={staleWhileLocked} />);
+    render(<WorldsPage client={staleWhileLocked} gameRunning={null} />);
     expect(await screen.findByText(/is locked/)).toBeInTheDocument();
     // The stale note claims writes are allowed; it must not show while the
     // world lock pauses every write.
@@ -525,7 +548,7 @@ describe('WorldsPage', () => {
         throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
       },
     });
-    render(<WorldsPage client={staleClient} />);
+    render(<WorldsPage client={staleClient} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     await user.click(within(grid).getByRole('button', { name: 'Disable a.zip' }));
     expect(await screen.findByText(/the stack changed on disk/)).toBeInTheDocument();
@@ -548,7 +571,7 @@ describe('WorldsPage', () => {
       }
       throw new IpcError('level_dat', 'the requested order is not a reorder of the current stack');
     });
-    render(<WorldsPage client={pageClient({ listDatapacks: listSpy, reorderDatapacks: reorder })} />);
+    render(<WorldsPage client={pageClient({ listDatapacks: listSpy, reorderDatapacks: reorder })} gameRunning={null} />);
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     await within(grid).findByRole('button', { name: 'Move b.zip down' });
     // The game adds c.zip while the page still shows a.zip and b.zip.
@@ -574,7 +597,7 @@ describe('WorldsPage', () => {
       listDatapacks: (name: string) =>
         name === 'Creative Flat' ? creativeListing : inner.listDatapacks(name),
     });
-    render(<WorldsPage client={switching} />);
+    render(<WorldsPage client={switching} gameRunning={null} />);
     // The old world's card is actionable before the switch.
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     expect(within(grid).getByRole('button', { name: 'a.zip, enabled' })).toBeInTheDocument();

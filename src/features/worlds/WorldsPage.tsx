@@ -158,13 +158,17 @@ export default function WorldsPage({
   const selectedRow = rows.find((row) => (row.pack?.error?.code === 'pack_non_utf8_name' ? row.pack.id : row.filename) === selectedFilename) ?? null;
 
   // Writes stop while the game runs, while this world is locked, while the
-  // file is unreadable, while the app-level guard check failed, or while the
-  // shown rows belong to a previous selection (a switch is still listing).
-  const running = gameRunning !== undefined ? gameRunning : (stack?.running ?? null);
+  // file is unreadable, while the app-level guard check failed or has not
+  // answered yet, or while the shown rows belong to a previous selection (a
+  // switch is still listing). The stored stack value is not a guard answer.
+  const guardPending = gameRunning === undefined;
+  const guardUnknown = gameGuardUnknown || guardPending;
+  const guardChecking = gameGuardChecking || (guardPending && !gameGuardUnknown);
+  const running = gameRunning ?? null;
   const locked = stack?.world_locked ?? selected?.world_locked ?? null;
   const readOnly = selected?.issue !== null && selected?.issue !== undefined;
   const listingStale = listingWorld !== selected?.dir_name;
-  const writesBlocked = running !== null || locked !== null || readOnly || gameGuardUnknown || listingStale;
+  const writesBlocked = running !== null || locked !== null || readOnly || guardUnknown || listingStale;
   const noGameDir = error?.code === 'no_active_game_dir' || packsError?.code === 'no_active_game_dir';
 
   const refreshAfterWriteError = (err: unknown) => {
@@ -300,8 +304,8 @@ export default function WorldsPage({
                 <WorldHeader
                   world={selected}
                   gameRunning={gameRunning}
-                  gameGuardUnknown={gameGuardUnknown}
-                  gameGuardChecking={gameGuardChecking}
+                  gameGuardUnknown={guardUnknown}
+                  gameGuardChecking={guardChecking}
                   staleLocks={locked || running ? [] : (stack?.stale_locks ?? [])}
                   refreshGameRunning={refreshGameRunning}
                   onRefresh={refreshAfterGuard}
@@ -333,7 +337,7 @@ export default function WorldsPage({
                   <button
                     type="button"
                     className="button button-primary"
-                    disabled={!selected || readOnly || busy || running !== null || gameGuardUnknown || listingStale}
+                    disabled={!selected || readOnly || busy || running !== null || guardUnknown || listingStale}
                     title={readOnly ? 'This world is read-only' : undefined}
                     onClick={() => void handleImportPick(false)}
                   >
@@ -342,7 +346,7 @@ export default function WorldsPage({
                   <button
                     type="button"
                     className="button"
-                    disabled={!selected || readOnly || busy || running !== null || gameGuardUnknown || listingStale}
+                    disabled={!selected || readOnly || busy || running !== null || guardUnknown || listingStale}
                     title={readOnly ? 'This world is read-only' : undefined}
                     onClick={() => void handleImportPick(true)}
                   >

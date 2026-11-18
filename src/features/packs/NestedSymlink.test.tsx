@@ -20,7 +20,7 @@ const nested = pack('Linked', {
 describe('nested symlink pack details', () => {
   it('removes an enabled nested-folder reference without offering to enable it through Undo', async () => {
     const client = makeFakeClient({ packs: [nested], resource: ['vanilla', 'file/Linked'] });
-    render(<PacksPage client={client} />);
+    render(<PacksPage client={client} gameRunning={null} />);
     await userEvent.click(await screen.findByRole('button', { name: /^Linked,/ }));
     await userEvent.click(screen.getByRole('checkbox', { name: 'Enabled in the active stack' }));
     expect(await screen.findByText('Linked disabled')).toBeInTheDocument();
