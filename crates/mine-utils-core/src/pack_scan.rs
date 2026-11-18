@@ -1055,6 +1055,14 @@ mod tests {
             &hashes,
             &trash,
             |tmp, dest| {
+                assert_eq!(
+                    scan_packs(&resourcepacks, &icons)
+                        .unwrap()
+                        .holding_entries
+                        .len(),
+                    0
+                );
+                println!("during transaction: holding entries 0");
                 std::fs::write(&rival, b"rival").unwrap();
                 atomic_no_replace(tmp, dest)
             },
@@ -1074,7 +1082,10 @@ mod tests {
         assert_eq!(err.code(), "io");
         assert!(err.to_string().contains(&holding.display().to_string()));
         assert!(err.to_string().contains("Restart Mine Utils to restore"));
-        assert_eq!(scan_packs(&resourcepacks, &icons).unwrap().count, 1);
+        let listing = scan_packs(&resourcepacks, &icons).unwrap();
+        assert_eq!(listing.count, 1);
+        assert_eq!(listing.holding_entries.len(), 0);
+        println!("after transaction: holding entries 0; error directs restart");
         assert_eq!(
             find_duplicate(
                 &resourcepacks,

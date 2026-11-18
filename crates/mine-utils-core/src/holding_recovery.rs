@@ -155,3 +155,27 @@ fn restore_error(err: std::io::Error, source: &Path, destination: &Path) -> AppE
     };
     AppError::from(err).with_context(message)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_reports_manual_rename_when_atomic_rename_is_unsupported() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("resourcepacks");
+        std::fs::create_dir(&folder).unwrap();
+        let name = ".mine-utils-replace-Pack.zip.4294967295-123-0.tmp";
+        let source = folder.join(name);
+        let destination = folder.join("Pack.zip");
+        std::fs::write(&source, b"original").unwrap();
+        let paths =
+            StackPaths::for_game_dir(root.path(), &root.path().join("data"), Default::default());
+        crate::fs_commit::FORCE_UNSUPPORTED.with(|flag| flag.set(true));
+        let err = restore_resource_holding(&paths, name).unwrap_err();
+        crate::fs_commit::FORCE_UNSUPPORTED.with(|flag| flag.set(false));
+        assert_eq!(err.to_string(), format!("io error: atomic no-replace rename is unsupported on this filesystem. To restore manually, rename {} by hand to {} without replacing an existing entry", source.display(), destination.display()));
+        assert_eq!(std::fs::read(source).unwrap(), b"original");
+        assert!(!destination.exists());
+    }
+}

@@ -14,14 +14,22 @@ pub(crate) fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()>
     }
 }
 
-pub(crate) fn strict_no_replace(_temp: &Path, _dest: &Path) -> std::io::Result<()> {
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+pub(crate) fn strict_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FORCE_UNSUPPORTED.with(|flag| flag.get()) {
+        return Err(std::io::Error::new(
+            ErrorKind::Unsupported,
+            "atomic no-replace rename is unsupported on this filesystem",
+        ));
+    }
     #[cfg(target_os = "linux")]
     {
         // renameat2 with AT_FDCWD renames by path. RENAME_NOREPLACE makes
         // an existing destination fail with EEXIST instead of replacing it.
         const RENAME_NOREPLACE: libc::c_uint = 1;
-        let temp_c = std::ffi::CString::new(_temp.as_os_str().as_encoded_bytes());
-        let dest_c = std::ffi::CString::new(_dest.as_os_str().as_encoded_bytes());
+        let temp_c = std::ffi::CString::new(temp.as_os_str().as_encoded_bytes());
+        let dest_c = std::ffi::CString::new(dest.as_os_str().as_encoded_bytes());
         if let (Ok(temp_c), Ok(dest_c)) = (temp_c, dest_c) {
             // SAFETY: plain integers and NUL-terminated path pointers; no
             // memory is retained by the kernel after the call returns.
@@ -683,4 +691,9 @@ mod tests {
             ]
         );
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FORCE_UNSUPPORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
