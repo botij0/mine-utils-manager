@@ -1073,6 +1073,7 @@ mod tests {
         assert_eq!(trash.calls(), Vec::<PathBuf>::new());
         assert_eq!(err.code(), "io");
         assert!(err.to_string().contains(&holding.display().to_string()));
+        assert!(err.to_string().contains("Restart Mine Utils to restore"));
         assert_eq!(scan_packs(&resourcepacks, &icons).unwrap().count, 1);
         assert_eq!(
             find_duplicate(
