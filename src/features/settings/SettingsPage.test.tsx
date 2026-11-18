@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Config } from '../../lib/types';
 import { defaultConfig } from '../../lib/types';
 import SettingsPage from './SettingsPage';
@@ -39,6 +39,33 @@ describe('SettingsPage', () => {
     release();
     await screen.findByText('/tmp/saves/one');
     await waitFor(() => expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked());
+  });
+
+  it('recovers from a timed out write and ignores its late reply', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeFakeClient([]);
+      const add = client.addGameDir;
+      let release!: () => void;
+      const delayed = new Promise<void>((resolve) => { release = resolve; });
+      client.addGameDir = async (path) => {
+        const result = await add(path);
+        await delayed;
+        return result;
+      };
+      render(<Harness client={client} />);
+      await act(async () => {});
+      fireEvent.change(screen.getByLabelText('Game dir path'), { target: { value: '/tmp/saves/one' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+      fireEvent.click(screen.getByRole('radio', { name: 'Dark' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+      expect(screen.getByRole('alert')).toHaveTextContent('Settings write timed out');
+      expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked();
+      await act(async () => { release(); });
+      expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps an added dir when the theme changes', async () => {
