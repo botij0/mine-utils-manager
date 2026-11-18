@@ -187,3 +187,34 @@ fn backup_reads_cap_both_restore_sources_and_current_files() {
     );
     assert_eq!(std::fs::read(&level).unwrap(), level_bytes);
 }
+
+#[test]
+fn provenance_write_limit_preserves_the_readable_store() {
+    let root = tempfile::tempdir().unwrap();
+    let entry = provenance::ProvenanceEntry {
+        project_id: "project".into(),
+        version_id: "version".into(),
+        file_name: "pack.zip".into(),
+    };
+    provenance::record(root.path(), "existing", entry.clone()).unwrap();
+    let before = std::fs::read(provenance::provenance_file(root.path())).unwrap();
+    let too_large = provenance::ProvenanceEntry {
+        file_name: "x".repeat(16 * 1024 * 1024),
+        ..entry.clone()
+    };
+    assert_eq!(
+        provenance::record(root.path(), "new", too_large)
+            .unwrap_err()
+            .to_string(),
+        "provenance record unavailable: provenance record is too large"
+    );
+    assert_eq!(
+        std::fs::read(provenance::provenance_file(root.path())).unwrap(),
+        before
+    );
+    assert_eq!(
+        provenance::lookup(root.path(), "existing").unwrap(),
+        Some(entry)
+    );
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+}
