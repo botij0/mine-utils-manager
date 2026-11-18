@@ -620,7 +620,9 @@ impl LevelDatRollback {
         let Some(written) = self.written else {
             return Ok(());
         };
-        if std::fs::read(paths.level_dat_path())? != written {
+        if crate::read_capped::read_capped(paths.level_dat_path(), level_dat::MAX_LEVEL_DAT_BYTES)?
+            != written
+        {
             return Err(std::io::Error::other(
                 "level.dat changed since the import write; left it unchanged",
             ));
