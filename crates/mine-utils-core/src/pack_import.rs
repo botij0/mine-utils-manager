@@ -331,6 +331,7 @@ fn import_pack_with_services(
         let result = (|| {
             validate_delete_target(target, &root)?;
             services.hooks.before_write()?;
+            crate::holding_recovery::remove_empty(resourcepacks);
             HeldPack::create(target, &root)
         })();
         match result {
