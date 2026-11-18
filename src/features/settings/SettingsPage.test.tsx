@@ -88,6 +88,10 @@ describe('SettingsPage', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
       expect(screen.getByRole('alert')).toHaveTextContent('Settings write timed out');
       expect(screen.getByText('/tmp/saves/two')).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText('Game dir path'), { target: { value: '/tmp/saves/three' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+      await act(async () => {});
+      expect(screen.getByRole('alert')).toHaveTextContent('Settings write timed out');
       await act(async () => { release(); });
       expect(screen.getByText('/tmp/saves/one')).toBeInTheDocument();
       expect(screen.getByRole('alert')).toHaveTextContent('Settings write timed out');
@@ -111,6 +115,9 @@ describe('SettingsPage', () => {
       fireEvent.click(screen.getByRole('radio', { name: 'Dark' }));
       await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
       expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked();
+      expect(screen.getByRole('alert')).toHaveTextContent('Settings write timed out');
+      fireEvent.click(screen.getByRole('radio', { name: 'System' }));
+      await act(async () => {});
       expect(screen.getByRole('alert')).toHaveTextContent('Settings write timed out');
       await act(async () => { release(); });
     } finally { vi.useRealTimers(); }

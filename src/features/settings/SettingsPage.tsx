@@ -1,7 +1,7 @@
 import type { Config, GameRunning, Theme } from '../../lib/types';
 import type { IpcClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { ClientError } from '../../lib/types';
 import GameDirSettings from '../game-dirs/GameDirSettings';
 import BackupsPanel from './BackupsPanel';
@@ -44,6 +44,7 @@ export default function SettingsPage({
   refreshGameRunning = () => {},
 }: SettingsPageProps) {
   const [error, setError] = useState<ClientError | null>(null);
+  const failedTheme = useRef<Theme | null>(null);
   const [folderRevision, setFolderRevision] = useState(0);
   const orderedClient = useMemo(() => {
     function enqueue<T>(action: () => Promise<T>, folderWrite = false): Promise<T> {
@@ -73,11 +74,16 @@ export default function SettingsPage({
   }, [client]);
 
   async function handleTheme(theme: Theme) {
-    setError(null);
+    if (!failedTheme.current || failedTheme.current === theme) {
+      failedTheme.current = null;
+      setError(null);
+    }
     try {
       onConfigChanged(await orderedClient.setTheme(theme));
     } catch (err) {
-      setError((current) => current?.message.startsWith('Settings write timed out.') ? current : toAppError(err));
+      const next = toAppError(err);
+      if (next.message.startsWith('Settings write timed out.') && !failedTheme.current) failedTheme.current = theme;
+      setError((current) => current?.message.startsWith('Settings write timed out.') ? current : next);
     }
   }
 
@@ -102,7 +108,7 @@ export default function SettingsPage({
         {error ? (
           <p className="error" role="alert">
             {error.message}
-            <button type="button" onClick={() => setError(null)}>Dismiss</button>
+            <button type="button" onClick={() => { failedTheme.current = null; setError(null); }}>Dismiss</button>
           </p>
         ) : null}
       </section>

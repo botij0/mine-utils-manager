@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { toAppError } from '../../lib/ipc';
 import type { IpcClient } from '../../lib/ipc';
@@ -21,6 +21,20 @@ export default function GameDirSettings({
   const [entries, setEntries] = useState<GameDirEntry[]>([]);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<ClientError | null>(null);
+  const failedAction = useRef<string | null>(null);
+
+  function beginAction(action: string) {
+    if (!failedAction.current || failedAction.current === action) {
+      failedAction.current = null;
+      setError(null);
+    }
+  }
+
+  function reportError(err: unknown, action: string) {
+    const next = toAppError(err);
+    if (next.message.startsWith('Settings write timed out.') && !failedAction.current) failedAction.current = action;
+    setError((current) => current?.message.startsWith('Settings write timed out.') ? current : next);
+  }
 
   useEffect(() => {
     client
@@ -33,36 +47,39 @@ export default function GameDirSettings({
     event.preventDefault();
     const path = draft.trim();
     if (!path) return;
-    setError(null);
+    const action = `add:${path}`;
+    beginAction(action);
     try {
       const state = await client.addGameDir(path);
       setEntries(state.entries);
       onConfigChanged(state.config);
       setDraft('');
     } catch (err) {
-      setError((current) => current?.message.startsWith('Settings write timed out.') ? current : toAppError(err));
+      reportError(err, action);
     }
   }
 
   async function handleRemove(path: string) {
-    setError(null);
+    const action = `remove:${path}`;
+    beginAction(action);
     try {
       const state = await client.removeGameDir(path);
       setEntries(state.entries);
       onConfigChanged(state.config);
     } catch (err) {
-      setError((current) => current?.message.startsWith('Settings write timed out.') ? current : toAppError(err));
+      reportError(err, action);
     }
   }
 
   async function handleSelect(path: string) {
-    setError(null);
+    const action = `select:${path}`;
+    beginAction(action);
     try {
       const state = await client.setActiveGameDir(path);
       setEntries(state.entries);
       onConfigChanged(state.config);
     } catch (err) {
-      setError((current) => current?.message.startsWith('Settings write timed out.') ? current : toAppError(err));
+      reportError(err, action);
     }
   }
 
@@ -94,7 +111,7 @@ export default function GameDirSettings({
       {error ? (
         <p className="error" role="alert">
           {error.message}
-          <button type="button" onClick={() => setError(null)}>Dismiss</button>
+          <button type="button" onClick={() => { failedAction.current = null; setError(null); }}>Dismiss</button>
         </p>
       ) : null}
     </section>
