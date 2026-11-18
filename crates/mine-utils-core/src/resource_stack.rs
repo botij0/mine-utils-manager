@@ -149,33 +149,25 @@ pub(crate) mod stack_core {
         pub secondary: &'a [String],
     }
 
-    /// Rename `old` to `new` inside one array. When that array already lists
-    /// `new`, the first `old` becomes `new` at its index and the other copies
-    /// of either name go. Each array is handled alone, because a resource pack
-    /// can be listed in both arrays at once.
+    /// Rename `old` to `new` inside one array. The first `old` becomes `new` at
+    /// its index, and every other copy of either name goes, so `new` is listed
+    /// once whether or not it was listed before. Each array is handled alone,
+    /// because a resource pack can be listed in both arrays at once.
     fn rename_in_list(list: &mut Vec<String>, old: &str, new: &str) -> bool {
         if !list.iter().any(|value| value == old) {
             return false;
         }
-        if list.iter().any(|value| value == new) {
-            let mut kept = false;
-            list.retain_mut(|value| {
-                if *value == old && !kept {
-                    *value = new.to_owned();
-                    kept = true;
-                    true
-                } else {
-                    *value != old && *value != new
-                }
-            });
-            return true;
-        }
-        let mut changed = false;
-        for value in list.iter_mut().filter(|value| **value == old) {
-            *value = new.to_owned();
-            changed = true;
-        }
-        changed
+        let mut kept = false;
+        list.retain_mut(|value| {
+            if *value == old && !kept {
+                *value = new.to_owned();
+                kept = true;
+                true
+            } else {
+                *value != old && *value != new
+            }
+        });
+        true
     }
 
     /// The mutation vocabulary both stacks share. The per-kind meaning of each
