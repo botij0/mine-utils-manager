@@ -517,7 +517,7 @@ impl HeldPack {
 
     fn restore(&mut self) -> std::io::Result<()> {
         if self.path != self.original {
-            crate::fs_commit::strict_no_replace(&self.path, &self.original)?;
+            atomic_no_replace(&self.path, &self.original)?;
             self.path.clone_from(&self.original);
             let _ = std::fs::remove_dir(&self.directory);
         }

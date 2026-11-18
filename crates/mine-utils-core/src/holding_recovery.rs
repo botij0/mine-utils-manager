@@ -175,7 +175,7 @@ fn restore(
     crate::fs_commit::strict_no_replace(&source, &destination)
         .map_err(|err| restore_error(err, &source, &destination))?;
     if directory_holding {
-        std::fs::remove_dir(folder.join(name))?;
+        let _ = std::fs::remove_dir(folder.join(name));
     }
     Ok(())
 }
