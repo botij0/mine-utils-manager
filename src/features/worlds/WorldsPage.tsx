@@ -71,6 +71,7 @@ export default function WorldsPage({
   >(null);
   const [importPath, setImportPath] = useState<string | null>(null);
   const [lockedNotice, setLockedNotice] = useState<string | null>(null);
+  const [referenceNotice, setReferenceNotice] = useState<string | null>(null);
   // The selection at the time an import started: an outcome that lands after
   // a world switch applies to the wrong world, so it is dropped.
   const selectedDirRef = useRef<string | null>(null);
@@ -214,10 +215,19 @@ export default function WorldsPage({
   };
 
   const handleDelete = async (path: string) => {
+    const world = selectedDirRef.current;
+    const worldName = selected?.level_name ?? selected?.dir_name ?? 'this world';
     clearActionError();
+    setReferenceNotice(null);
     try {
-      await deleteDatapack(path);
+      const outcome = await deleteDatapack(path);
+      if (selectedDirRef.current !== world) return;
       setSelectedFilename(null);
+      if (!outcome.removedReferences) {
+        setReferenceNotice(
+          `${packFilename({ path })} was moved to the trash, but ${worldName} still references it.`,
+        );
+      }
     } catch (err) {
       refreshAfterWriteError(err);
     }
@@ -297,6 +307,7 @@ export default function WorldsPage({
               select(dirName);
               setSelectedFilename(null);
               setLockedNotice(null);
+              setReferenceNotice(null);
               setImportPrompt(null);
               setImportError(null);
             }}
@@ -316,6 +327,11 @@ export default function WorldsPage({
                 {lockedNotice ? (
                   <p className="banner" role="status">
                     {lockedNotice}
+                  </p>
+                ) : null}
+                {referenceNotice ? (
+                  <p className="banner" role="status">
+                    {referenceNotice}
                   </p>
                 ) : null}
                 {actionError ? (

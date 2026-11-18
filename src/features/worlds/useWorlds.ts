@@ -345,6 +345,10 @@ export function useWorlds(
           await refreshListing();
         }
         return outcome;
+      } catch (err) {
+        // The new pack can already be in datapacks when this rejects.
+        if (isCurrentRequest(world, request)) await refreshListing();
+        throw err;
       } finally {
         if (mounted.current && request === requestId.current) {
           setBusy(false);
@@ -369,6 +373,8 @@ export function useWorlds(
       } catch (err) {
         if (!isCurrentRequest(world, request)) throw err;
         setActionError(toAppError(err));
+        // Disable can already be in level.dat when trash or a later check rejects.
+        await refreshListing();
         throw err;
       } finally {
         if (isCurrentRequest(world, request)) setBusy(false);
