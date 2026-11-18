@@ -589,10 +589,18 @@ fn import_datapack(
     icons: &IconCache,
     hashes: &HashCache,
 ) -> Result<DatapackImportOutcome, AppError> {
-    // `dest` is a direct child of the world's `datapacks`, so a fresh commit
-    // imports as a no-op; enabling (or the locked-disabled outcome) happens
-    // inside through the PR-04 path.
-    data_stack::import_datapack(paths, dest, ImportChoice::Default, icons, hashes)
+    let outcome = data_stack::import_datapack(paths, dest, ImportChoice::Default, icons, hashes)?;
+    if let DatapackImportOutcome::Imported { filename } = outcome {
+        return match data_stack::set_enabled(paths, &filename, true) {
+            Ok(_) => Ok(DatapackImportOutcome::Imported { filename }),
+            Err(AppError::GameRunning { running }) => Ok(DatapackImportOutcome::Locked {
+                filename,
+                detail: running.detail,
+            }),
+            Err(err) => Err(err),
+        };
+    }
+    Ok(outcome)
 }
 
 fn record_provenance(
