@@ -36,6 +36,14 @@ jobs:
       - run: cargo run --locked -p mine-utils-core --features wire-types --bin generate-wire-types -- --check
       - run: cargo test -p mine-utils-core
 
+  windows-core:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked -p mine-utils-core
+
   tauri:
     runs-on: ubuntu-24.04
     steps:

@@ -19,7 +19,7 @@ use crate::game_lock;
 use crate::level_dat;
 use crate::modrinth::{validate_modrinth_id, ModrinthClient, ModrinthError, SearchKind, Transport};
 use crate::options_txt::OptionsError;
-use crate::pack::{ImportChoice, ImportOutcome};
+use crate::pack::{ImportChoice, ImportOutcome, PackError};
 use crate::provenance::{self, ProvenanceEntry};
 use crate::resource_stack::{self, StackPaths};
 use crate::world::WorldPaths;
@@ -136,7 +136,9 @@ pub fn prepare_modrinth_install_controlled<T: Transport + 'static>(
             if !options.is_file() {
                 return Err(AppError::Options(OptionsError::Missing { path: options }));
             }
-            (game_dir.join("resourcepacks"), None)
+            let target = game_dir.join("resourcepacks");
+            reject_resourcepacks_link(&target)?;
+            (target, None)
         }
         SearchKind::Datapack => {
             let name = world.ok_or_else(|| ModrinthError::Parse {
@@ -227,9 +229,18 @@ pub fn prepare_modrinth_install_controlled<T: Transport + 'static>(
     };
     let dest = target_dir.join(filename);
     crate::pack_scan::reject_ambiguous_name(&dest, &target_dir)?;
-    let source = if dest.is_file() {
-        match hash_file(&dest)? {
-            hashes if hashes.sha512_eq(&file.hashes.sha512) => {
+    let metadata = match std::fs::symlink_metadata(&dest) {
+        Ok(metadata) => Some(metadata),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err.into()),
+    };
+    let source = if let Some(metadata) = metadata {
+        match if metadata.is_file() && metadata.len() <= crate::modrinth::MAX_DOWNLOAD_BYTES {
+            hash_file_bounded(&dest)?
+        } else {
+            None
+        } {
+            Some(hashes) if hashes.sha512_eq(&file.hashes.sha512) => {
                 // Identical bytes already in place: reuse them, no download.
                 // The expected hash rides along so `finish` can re-hash and
                 // refuse a swap that landed between the two phases.
@@ -298,6 +309,48 @@ fn missing_file_reason(
     )
 }
 
+fn reject_resourcepacks_link(path: &Path) -> Result<(), AppError> {
+    if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(PackError::Symlink {
+            path: path.to_path_buf(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn hash_file_bounded(path: &Path) -> Result<Option<FileHashes>, AppError> {
+    let file = match crate::read_capped::open_regular(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidData => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    if file.metadata()?.len() > crate::modrinth::MAX_DOWNLOAD_BYTES {
+        return Ok(None);
+    }
+    let mut reader = file.take(crate::modrinth::MAX_DOWNLOAD_BYTES + 1);
+    let mut sha512 = Sha512::new();
+    let mut sha256 = Sha256::new();
+    let mut chunk = [0u8; 64 * 1024];
+    let mut count = 0u64;
+    loop {
+        let n = reader.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        count += n as u64;
+        if count > crate::modrinth::MAX_DOWNLOAD_BYTES {
+            return Ok(None);
+        }
+        sha512.update(&chunk[..n]);
+        sha256.update(&chunk[..n]);
+    }
+    Ok(Some(FileHashes {
+        sha512: hex::encode(sha512.finalize()),
+        sha256: hex::encode(sha256.finalize()),
+    }))
+}
+
 fn supported_list(version: &crate::modrinth::ModrinthVersion) -> String {
     if version.game_versions.is_empty() {
         return "no game versions".to_string();
@@ -322,28 +375,6 @@ impl FileHashes {
                 .zip(expected.to_ascii_lowercase().bytes())
                 .all(|(a, b)| a == b)
     }
-}
-
-/// Hash an installed file with both digests the install commit needs.
-/// Stays separate from `pack_import`'s single-SHA-256 loop: one pass must feed
-/// both hashes, so sharing would cost a second read or a threaded signal.
-fn hash_file(path: &Path) -> Result<FileHashes, AppError> {
-    let mut file = std::fs::File::open(path).map_err(AppError::from)?;
-    let mut sha512 = Sha512::new();
-    let mut sha256 = Sha256::new();
-    let mut chunk = [0u8; 64 * 1024];
-    loop {
-        let n = file.read(&mut chunk).map_err(AppError::from)?;
-        if n == 0 {
-            break;
-        }
-        sha512.update(&chunk[..n]);
-        sha256.update(&chunk[..n]);
-    }
-    Ok(FileHashes {
-        sha512: hex::encode(sha512.finalize()),
-        sha256: hex::encode(sha256.finalize()),
-    })
 }
 
 /// Read a world's game version from its `level.dat`. `None` when the file is
@@ -375,8 +406,10 @@ pub fn finish_modrinth_install(
     match kind {
         SearchKind::ResourcePack => {
             game_lock::ensure_writable(stack_paths.game_dir())?;
-            let (dest, sha256, fresh) = match commit_source(prepared)? {
-                Committed::Ready(dest, sha256, fresh) => (dest, sha256, fresh),
+            reject_resourcepacks_link(&prepared.target_dir)?;
+            download::directory_handle(&prepared.target_dir)?;
+            let (dest, sha256, identity) = match commit_source(prepared)? {
+                Committed::Ready(dest, sha256, identity) => (dest, sha256, identity),
                 Committed::Collision { name } => {
                     return Ok(CoreInstallOutcome::ResourcePack {
                         outcome: ImportOutcome::Collision { name },
@@ -396,11 +429,8 @@ pub fn finish_modrinth_install(
                     outcome => outcome,
                 },
                 Err(err) => {
-                    // A fresh commit that fails validation must not linger as
-                    // a stray file with no provenance. An `Existing` file is
-                    // never removed: it predates this install.
-                    if fresh {
-                        let _ = std::fs::remove_file(&dest);
+                    if let Some(identity) = identity {
+                        identity.remove(&dest);
                     }
                     return Err(err);
                 }
@@ -422,8 +452,9 @@ pub fn finish_modrinth_install(
             let paths = data_paths.ok_or_else(|| AppError::World {
                 reason: "a datapack install needs a target world".to_string(),
             })?;
-            let (dest, sha256, fresh) = match commit_source(prepared)? {
-                Committed::Ready(dest, sha256, fresh) => (dest, sha256, fresh),
+            download::directory_handle(&prepared.target_dir)?;
+            let (dest, sha256, identity) = match commit_source(prepared)? {
+                Committed::Ready(dest, sha256, identity) => (dest, sha256, identity),
                 Committed::Collision { name } => {
                     return Ok(CoreInstallOutcome::Datapack {
                         outcome: DatapackImportOutcome::Collision { name },
@@ -442,8 +473,8 @@ pub fn finish_modrinth_install(
                     outcome => outcome,
                 },
                 Err(err) => {
-                    if fresh {
-                        let _ = std::fs::remove_file(&dest);
+                    if let Some(identity) = identity {
+                        identity.remove(&dest);
                     }
                     return Err(err);
                 }
@@ -469,12 +500,12 @@ pub fn finish_modrinth_install(
 /// collision. An `Existing` dest is re-hashed immediately before reuse: if
 /// the bytes changed between prepare and finish, the install fails instead
 /// of recording provenance for the wrong bytes. Returns the final path, its
-/// SHA-256, whether the commit was fresh this run, or the collision.
+/// SHA-256, ownership of a fresh commit, or the collision.
 /// A second filename with identical bytes is an intentional second copy under
 /// the API filename (not a `Duplicate`): the picker installs by filename and
 /// the import path treats a direct child as the pack itself.
 enum Committed {
-    Ready(PathBuf, String, bool),
+    Ready(PathBuf, String, Option<download::DownloadFileIdentity>),
     Collision { name: String },
 }
 
@@ -490,29 +521,27 @@ fn commit_source(prepared: PreparedInstall) -> Result<Committed, AppError> {
         PreparedSource::Collision => Ok(Committed::Collision { name: filename }),
         PreparedSource::Existing { sha256, sha512 } => {
             let dest = target_dir.join(&filename);
-            let current = hash_file(&dest)?;
+            let Some(current) = hash_file_bounded(&dest)? else {
+                return Ok(Committed::Collision { name: filename });
+            };
             if !current.sha512_eq(&sha512) {
                 return Err(AppError::Download(DownloadError::HashMismatch {
                     expected: sha512,
                     actual: current.sha512,
                 }));
             }
-            Ok(Committed::Ready(dest, sha256, false))
+            Ok(Committed::Ready(dest, sha256, None))
         }
         PreparedSource::Downloaded(verified) => {
             let sha256 = verified.sha256.clone();
-            match verified.commit(&target_dir, &filename) {
-                Ok(dest) => Ok(Committed::Ready(dest, sha256, true)),
+            match verified.commit_with_identity(&target_dir, &filename) {
+                Ok((dest, identity)) => Ok(Committed::Ready(dest, sha256, Some(identity))),
                 Err(DownloadError::Exists { .. }) => {
                     // Lost a race: reuse identical bytes, else collide. The
                     // temp was cleaned up by `Drop` on the failed commit.
                     let dest = target_dir.join(&filename);
-                    if std::fs::symlink_metadata(&dest).is_ok_and(|entry| !entry.is_file()) {
-                        return Ok(Committed::Collision { name: filename });
-                    }
-                    let hashes = hash_file(&dest)?;
-                    if hashes.sha256 == sha256 {
-                        Ok(Committed::Ready(dest, sha256, false))
+                    if hash_file_bounded(&dest)?.is_some_and(|hashes| hashes.sha256 == sha256) {
+                        Ok(Committed::Ready(dest, sha256, None))
                     } else {
                         Ok(Committed::Collision { name: filename })
                     }
