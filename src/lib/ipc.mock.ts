@@ -12,6 +12,7 @@ import type {
   GameDirEntry,
   GameDirState,
   GameGuard,
+  HoldingEntry,
   ImportChoice,
   ImportOutcome,
   LevelBackupInfo,
@@ -290,10 +291,18 @@ function makeState(config: Config): GameDirState {
   return { config, entries: listing(config) };
 }
 
+const demoHolding: HoldingEntry = {
+  holdingName: '.mine-utils-replace-Recovered.zip.4294967295-123-0.tmp',
+  originalName: 'Recovered.zip',
+};
+let resourceHoldings = [demoHolding];
+const datapackHoldings = new Map<string, HoldingEntry[]>();
+
 function packListing(): PackListing {
   return {
     packs: mockPacks.map((pack) => ({ ...pack })),
     count: mockPacks.length,
+    holding_entries: [...resourceHoldings],
     bytes_read: mockPacks.reduce((total, pack) => total + pack.bytes_read, 0),
     elapsed_ms: 3.2,
   };
@@ -359,6 +368,29 @@ export const mockClient: IpcClient = {
       );
     }
     return mockGameGuard();
+  },
+  async restoreResourceHolding(holdingName) {
+    await delay();
+    assertActiveGameDir();
+    const holding = resourceHoldings.find((entry) => entry.holdingName === holdingName);
+    if (!holding) throw new IpcError('pack_not_found', 'Holding entry no longer exists');
+    if (mockPacks.some((pack) => pack.path.endsWith(`/${holding.originalName}`))) {
+      throw new IpcError('pack_name_collision', `${holding.originalName} already exists`);
+    }
+    mockPacks.push(makePack(holding.originalName, 'resource', { min: null, max: null }, 'Unknown', 'Recovered pack', null));
+    resourceHoldings = resourceHoldings.filter((entry) => entry !== holding);
+  },
+  async restoreDatapackHolding(world, holdingName) {
+    await delay();
+    mockAssertDatapackWritable(world);
+    const holdings = datapackHoldings.get(world) ?? [demoHolding];
+    const holding = holdings.find((entry) => entry.holdingName === holdingName);
+    if (!holding) throw new IpcError('pack_not_found', 'Holding entry no longer exists');
+    if (mockDatapackListing(world).packs.packs.some((pack) => pack.path.endsWith(`/${holding.originalName}`))) {
+      throw new IpcError('pack_name_collision', `${holding.originalName} already exists`);
+    }
+    mockWorldPacks[world].push({ filename: holding.originalName, kind: 'data', minFormat: 48, maxFormat: 48, gameLabel: '1.21' });
+    datapackHoldings.set(world, holdings.filter((entry) => entry !== holding));
   },
   async listResourcePacks() {
     await delay();
@@ -773,6 +805,8 @@ export function resetMockStack() {
   mockStack = { resource: [...INITIAL_STACK.resource], incompatible: [] };
   mockBackups = [...INITIAL_BACKUPS];
   mockGameState = 'none';
+  resourceHoldings = [demoHolding];
+  datapackHoldings.clear();
   mockWorldStacks = JSON.parse(JSON.stringify(INITIAL_WORLD_STACKS)) as typeof INITIAL_WORLD_STACKS;
   mockLevelBackups = [...INITIAL_LEVEL_BACKUPS];
   mockLockedWorld = null;
@@ -997,6 +1031,7 @@ function mockDatapackListing(world: string): DatapackListing {
     packs: {
       packs,
       count: packs.length,
+      holding_entries: [...(datapackHoldings.get(world) ?? [demoHolding])],
       bytes_read: packs.reduce((total, pack) => total + pack.bytes_read, 0),
       elapsed_ms: 2.1,
     },

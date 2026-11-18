@@ -37,6 +37,7 @@ import type {
 export interface PackClient {
   listResourcePacks(): Promise<PackListing>;
   importResourcePack(path: string, choice?: ImportChoice): Promise<ImportOutcome>;
+  restoreResourceHolding(holdingName: string): Promise<void>;
   deleteResourcePack(path: string): Promise<void>;
   getResourceStack(): Promise<ResourceStack>;
   setResourcePackEnabled(filename: string, enabled: boolean): Promise<ResourceStack>;
@@ -52,6 +53,7 @@ export interface WorldsClient {
   setLastWorld(path: string): Promise<void>;
   listDatapacks(world: string): Promise<DatapackListing>;
   importDatapack(world: string, path: string, choice?: ImportChoice): Promise<DatapackImportOutcome>;
+  restoreDatapackHolding(world: string, holdingName: string): Promise<void>;
   deleteDatapack(world: string, path: string): Promise<DatapackDeleteOutcome>;
   removeDatapackReference(world: string, filename: string): Promise<DataStack>;
   setDatapackEnabled(world: string, filename: string, enabled: boolean): Promise<DataStack>;
@@ -186,6 +188,7 @@ const tauriClient: IpcClient = {
     });
     return outcomeWithIconUrl(outcome);
   },
+  restoreResourceHolding: (holdingName) => call<void>('restore_resource_holding', { holdingName }),
   deleteResourcePack: (path) => call<void>('delete_resource_pack', { path }),
   getResourceStack: () => call<ResourceStack>('get_resource_stack'),
   setResourcePackEnabled: (filename, enabled) =>
@@ -215,6 +218,7 @@ const tauriClient: IpcClient = {
       path,
       choice: choice ?? 'default',
     }),
+  restoreDatapackHolding: (world, holdingName) => call<void>('restore_datapack_holding', { world, holdingName }),
   deleteDatapack: (world, path) =>
     call<DatapackDeleteOutcome>('delete_datapack', { world, path }),
   removeDatapackReference: (world, filename) =>
@@ -290,6 +294,7 @@ export const ipc: IpcClient = {
   getGameGuard: () => pick().getGameGuard(),
   listResourcePacks: () => pick().listResourcePacks(),
   importResourcePack: (path, choice) => pick().importResourcePack(path, choice),
+  restoreResourceHolding: (holdingName) => pick().restoreResourceHolding(holdingName),
   deleteResourcePack: (path) => pick().deleteResourcePack(path),
   getResourceStack: () => pick().getResourceStack(),
   setResourcePackEnabled: (filename, enabled) =>
@@ -301,6 +306,7 @@ export const ipc: IpcClient = {
   listWorlds: () => pick().listWorlds(),
   listDatapacks: (world) => pick().listDatapacks(world),
   importDatapack: (world, path, choice) => pick().importDatapack(world, path, choice),
+  restoreDatapackHolding: (world, holdingName) => pick().restoreDatapackHolding(world, holdingName),
   deleteDatapack: (world, path) => pick().deleteDatapack(world, path),
   removeDatapackReference: (world, filename) =>
     pick().removeDatapackReference(world, filename),

@@ -3,6 +3,7 @@ import { formatVersionLabel } from '../../lib/format';
 import type { WorldsClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import type {
+  HoldingEntry,
   DataSnapshot,
   DataStack,
   DatapackImportOutcome,
@@ -21,6 +22,8 @@ export interface WorldsState {
   selected: World | null;
   select: (dirName: string) => void;
   packs: Pack[];
+  holdings: HoldingEntry[];
+  restoreHolding: (holdingName: string) => Promise<void>;
   packsLoading: boolean;
   packsError: IpcError | null;
   stack: DataStack | null;
@@ -100,6 +103,7 @@ export function useWorlds(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<IpcError | null>(null);
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [holdings, setHoldings] = useState<HoldingEntry[]>([]);
   const [packs, setPacks] = useState<Pack[]>([]);
   const [packsLoading, setPacksLoading] = useState(false);
   const [packsError, setPacksError] = useState<IpcError | null>(null);
@@ -138,6 +142,7 @@ export function useWorlds(
     setSelectedName(null);
     setWorlds([]);
     setPacks([]);
+    setHoldings([]);
     setStack(null);
     setListingWorld(null);
     setError(null);
@@ -205,6 +210,7 @@ export function useWorlds(
   const refreshListing = useCallback(async () => {
     if (!selectedName || selectedRef.current !== selectedName) {
       setPacks([]);
+      setHoldings([]);
       setStack(null);
       setListingWorld(null);
       return;
@@ -225,12 +231,14 @@ export function useWorlds(
       if (!isCurrentRequest(world, request) || listingId !== listingRequest.current) return;
       loadedListing.current = JSON.stringify([reloadSignal, world]);
       setPacks(listing.packs.packs);
+      setHoldings(listing.packs.holding_entries);
       setStack(listing.stack);
       setListingWorld(world);
     } catch (err) {
       if (!isCurrentRequest(world, request) || listingId !== listingRequest.current) return;
       const appError = toAppError(err);
       setPacks([]);
+      setHoldings([]);
       setStack(null);
       setListingWorld(world);
       setPacksError(appError);
@@ -259,6 +267,7 @@ export function useWorlds(
     requestId.current += 1;
     setActionError(null);
     setPacks([]);
+    setHoldings([]);
     setStack(null);
     setListingWorld(null);
     setPacksError(null);
@@ -389,9 +398,26 @@ export function useWorlds(
     [client, selectedName, refreshListing, beginAction, isCurrentRequest],
   );
 
+  const restoreHolding = useCallback(async (holdingName: string) => {
+    if (!selectedName) return;
+    const world = selectedName;
+    const request = beginAction();
+    try {
+      await client.restoreDatapackHolding(world, holdingName);
+    } catch (err) {
+      if (isCurrentRequest(world, request)) setActionError(toAppError(err));
+      throw err;
+    } finally {
+      if (isCurrentRequest(world, request)) await refreshListing();
+      if (isCurrentRequest(world, request)) setBusy(false);
+    }
+  }, [client, selectedName, beginAction, isCurrentRequest, refreshListing]);
+
   const clearActionError = useCallback(() => setActionError(null), []);
 
   return {
+    holdings,
+    restoreHolding,
     worlds,
     loading,
     error,

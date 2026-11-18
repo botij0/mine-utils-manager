@@ -575,6 +575,7 @@ describe('PacksPage', () => {
       async importResourcePack() {
         throw new IpcError('no_active_game_dir', 'no active game dir');
       },
+      async restoreResourceHolding() {},
       async deleteResourcePack() {
         throw new IpcError('pack_not_found', 'no packs');
       },
@@ -748,3 +749,42 @@ function stackNames(): Array<string | null> {
     .getAllByRole('listitem')
     .map((item) => item.getAttribute('aria-label'));
 }
+
+it('restores an interrupted Replace and refreshes the pack listing', async () => {
+  const client = makeFakeClient();
+  let restored = false;
+  const listing = await client.listResourcePacks();
+  client.listResourcePacks = async () => ({
+    ...listing,
+    packs: restored ? [VANILLA_PACK] : [],
+    holding_entries: restored ? [] : [{ holdingName: '.mine-utils-replace-Vanilla.zip.42-123-0.tmp', originalName: 'Vanilla.zip' }],
+  });
+  client.restoreResourceHolding = async (name) => {
+    expect(name).toBe('.mine-utils-replace-Vanilla.zip.42-123-0.tmp');
+    restored = true;
+  };
+  renderPage(client);
+  await userEvent.click(await screen.findByRole('button', { name: 'Restore Vanilla.zip' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore Vanilla.zip' })).not.toBeInTheDocument());
+  expect(await screen.findByText('Vanilla')).toBeInTheDocument();
+});
+
+it.each(['pack_not_found', 'io', 'pack_symlink'] as const)('reloads after Restore fails with %s', async (code) => {
+  const client = makeFakeClient();
+  let attempted = false;
+  const listing = await client.listResourcePacks();
+  client.listResourcePacks = async () => ({
+    ...listing,
+    packs: attempted ? [VANILLA_PACK] : [],
+    holding_entries: attempted ? [] : [{ holdingName: '.mine-utils-replace-Vanilla.zip.42-123-0.tmp', originalName: 'Vanilla.zip' }],
+  });
+  client.restoreResourceHolding = async () => {
+    attempted = true;
+    throw new IpcError(code, 'The leftover Replace entry is gone at /resourcepacks/holding');
+  };
+  renderPage(client);
+  await userEvent.click(await screen.findByRole('button', { name: 'Restore Vanilla.zip' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('The leftover Replace entry is gone at /resourcepacks/holding');
+  expect(await screen.findByText('Vanilla')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Restore Vanilla.zip' })).not.toBeInTheDocument();
+});

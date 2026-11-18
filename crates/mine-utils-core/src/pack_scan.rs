@@ -22,6 +22,7 @@ pub use crate::pack_source::{MAX_ICON_BYTES, MAX_META_BYTES, MAX_ZIP_ENTRIES};
 pub struct PackListing {
     pub packs: Vec<Pack>,
     pub count: usize,
+    pub holding_entries: Vec<crate::holding_recovery::HoldingEntry>,
     /// Total bytes read across the listing. Each pack carries its own delta.
     pub bytes_read: u64,
     pub elapsed_ms: f64,
@@ -32,6 +33,7 @@ pub struct PackListing {
 /// Broken entries become error cards so one bad pack
 /// never hides the rest.
 pub fn scan_packs(resourcepacks: &Path, icons: &IconCache) -> Result<PackListing, AppError> {
+    let holding_entries = crate::holding_recovery::list(resourcepacks)?;
     let started = Instant::now();
     let mut packs = Vec::new();
     let mut bytes_read = 0u64;
@@ -105,6 +107,7 @@ pub fn scan_packs(resourcepacks: &Path, icons: &IconCache) -> Result<PackListing
 
     Ok(PackListing {
         count: packs.len(),
+        holding_entries,
         packs,
         bytes_read,
         elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,

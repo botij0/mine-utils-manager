@@ -45,6 +45,7 @@ export type GameDirState = { config: Config, entries: Array<GameDirEntry>, };
 export type GameGuard = { running: GameRunning | null, stale_locks: Array<string>, detection_supported: boolean, process_probe_available: boolean, };
 export type GameRunning = { kind: GameRunningKind, detail: string, lock_path: string | null, pid: number | null, command: string | null, };
 export type GameRunningKind = "session_lock" | "process";
+export type HoldingEntry = { holdingName: string, originalName: string, };
 export type ImportChoice = "default" | "replace" | "skip";
 export type ImportOutcome = { "status": "imported", pack: Pack, } | { "status": "duplicate", name: string, sha256: string, existing: string, } | { "status": "collision", name: string, } | { "status": "skipped" };
 export type LevelBackupInfo = { file_name: string, world: string, bytes: number, display: string, };
@@ -63,7 +64,7 @@ export type Pack = { id: string, name: string, path: string, location: PackLocat
 export type PackIcon = { sha256: string, path: string, };
 export type PackIssue = { code: string, message: string, symlink_path?: string, };
 export type PackKind = "resource" | "data" | "both" | "unknown";
-export type PackListing = { packs: Array<Pack>, count: number,
+export type PackListing = { packs: Array<Pack>, count: number, holding_entries: Array<HoldingEntry>,
 /**
  * Total bytes read across the listing. Each pack carries its own delta.
  */

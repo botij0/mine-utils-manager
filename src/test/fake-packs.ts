@@ -158,7 +158,7 @@ export function datapackListing(files: string[]): DatapackListing {
   return {
     packs: {
       packs: files.map((name) => datapack(name)),
-      count: files.length,
+      count: files.length, holding_entries: [],
       bytes_read: 0,
       elapsed_ms: 0,
     },

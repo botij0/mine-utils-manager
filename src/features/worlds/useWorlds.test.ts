@@ -118,7 +118,7 @@ describe('useWorlds', () => {
       },
     });
     const lockedClient = { ...worldsClient(), listDatapacks: async () => ({
-      packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+      packs: { packs: [], count: 0, holding_entries: [], bytes_read: 0, elapsed_ms: 0 },
       stack: locked,
     }) };
     const hook = renderHook(() => useWorlds(lockedClient));
@@ -198,7 +198,7 @@ describe('useWorlds', () => {
       listDatapacks: async (name: string) => {
         if (name === 'Creative Flat') return creativeListing;
         return {
-          packs: { packs: [datapack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
+          packs: { packs: [datapack('a.zip')], count: 1, holding_entries: [], bytes_read: 128, elapsed_ms: 1 },
           stack: stack(),
         };
       },
@@ -219,7 +219,7 @@ describe('useWorlds', () => {
     expect(result.current.busy).toBe(false);
     await act(async () => {
       resolveCreative({
-        packs: { packs: [datapack('c.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
+        packs: { packs: [datapack('c.zip')], count: 1, holding_entries: [], bytes_read: 128, elapsed_ms: 1 },
         stack: stack({
           enabled: [{ kind: 'foreign', value: 'vanilla' }],
           disabled: [{ kind: 'file', value: 'file/c.zip', filename: 'c.zip' }],
@@ -248,7 +248,7 @@ describe('useWorlds', () => {
       listDatapacks: async (name: string) => {
         if (name === 'Survival 1_17') return survivalListing;
         return {
-          packs: { packs: [], count: 0, bytes_read: 0, elapsed_ms: 0 },
+          packs: { packs: [], count: 0, holding_entries: [], bytes_read: 0, elapsed_ms: 0 },
           stack: creativeStack,
         };
       },
@@ -262,7 +262,7 @@ describe('useWorlds', () => {
     });
     await act(async () => {
       resolveSurvival({
-        packs: { packs: [datapack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
+        packs: { packs: [datapack('a.zip')], count: 1, holding_entries: [], bytes_read: 128, elapsed_ms: 1 },
         stack: stack(),
       });
       await survivalListing;

@@ -239,6 +239,8 @@ pub enum PackError {
     UnknownKind { name: String },
     #[error("{name} is not a readable pack: {reason}")]
     BrokenArchive { name: String, reason: String },
+    #[error("{name} is not an inactive leftover Replace entry in this folder")]
+    InvalidHolding { name: String },
     #[error("{name} is missing pack.mcmeta")]
     MissingMeta { name: String },
     #[error("{path} is a symlink; pack sources must be real files and dirs")]
@@ -268,7 +270,9 @@ impl PackError {
         match self {
             PackError::NonUtf8Name { .. } => crate::ErrorCode::PackNonUtf8Name,
             PackError::UnknownKind { .. } => crate::ErrorCode::PackUnknownKind,
-            PackError::BrokenArchive { .. } => crate::ErrorCode::PackBrokenArchive,
+            PackError::BrokenArchive { .. } | PackError::InvalidHolding { .. } => {
+                crate::ErrorCode::PackBrokenArchive
+            }
             PackError::MissingMeta { .. } => crate::ErrorCode::PackMissingMeta,
             PackError::Symlink { .. } => crate::ErrorCode::PackSymlink,
             PackError::Duplicate { .. } => crate::ErrorCode::PackDuplicate,

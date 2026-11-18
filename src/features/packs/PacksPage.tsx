@@ -9,6 +9,7 @@ import {
   matchesSearch,
 } from '../../lib/format';
 import ActiveStack from './ActiveStack';
+import HoldingRecovery from './HoldingRecovery';
 import GameRunningBanner from './GameRunningBanner';
 import ImportSheet from './ImportSheet';
 import type { ImportPrompt } from './ImportSheet';
@@ -60,6 +61,8 @@ export default function PacksPage({
 }: PacksPageProps) {
   const {
     packs,
+    holdings,
+    restoreHolding,
     stats,
     loading,
     busy,
@@ -340,6 +343,10 @@ export default function PacksPage({
         </div>
       </div>
 
+      <HoldingRecovery entries={holdings} disabled={busy || writesBlocked} onRestore={(name) => {
+        setActionError(null);
+        void restoreHolding(name).catch(refreshAfterGuard);
+      }} />
       {actionError ? (
         <p className="error" role="alert">
           {actionError}

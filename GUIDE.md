@@ -299,3 +299,20 @@ Reads remain available, but writes pause. Mine Utils detects a running game thro
 | **The app reports an unreadable config** | Mine Utils preserves a copy of the bad config when possible, reports its path in a startup warning, and starts with defaults. Select your game folder again after reviewing the warning. |
 
 For file locations and implementation details, see [ARCHITECTURE.md](ARCHITECTURE.md). For demo and development commands, see [DEVELOPMENT.md](DEVELOPMENT.md).
+
+## Recover an interrupted Replace
+
+If Mine Utils stops during Replace, the original pack can remain under a hidden
+`.mine-utils-replace-<original>.<pid>-<stamp>-<counter>.tmp` name.
+Packs and the selected world's datapack panel show a recovery notice with the
+original filename. Select **Restore** to move the held file or folder back.
+
+The original name must be free. If another pack already uses it, recovery refuses
+without replacing either entry. Move that pack out of the folder before retrying.
+Close Minecraft before restoring. Recovery refuses symlinked folders and entries.
+Entries owned by the current app process stay hidden because Replace may still
+be using them. Restart Mine Utils to recover an entry left by that process.
+
+Restore changes only the filename. It leaves `options.txt` and `level.dat`
+unchanged because their references may already point at the original name.
+Recovery refuses filesystems without atomic no-replace rename support.

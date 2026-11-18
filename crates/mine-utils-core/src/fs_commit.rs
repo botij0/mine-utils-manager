@@ -6,13 +6,22 @@ use std::path::Path;
 /// filesystem that supports the flag the exists-then-rename race cannot
 /// happen.
 pub(crate) fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()> {
+    match strict_no_replace(temp, dest) {
+        #[cfg(target_os = "linux")]
+        Err(err) if rename_noreplace_unsupported(&err) => no_replace_fallback(temp, dest),
+        Err(err) if err.kind() == ErrorKind::Unsupported => no_replace_fallback(temp, dest),
+        result => result,
+    }
+}
+
+pub(crate) fn strict_no_replace(_temp: &Path, _dest: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         // renameat2 with AT_FDCWD renames by path. RENAME_NOREPLACE makes
         // an existing destination fail with EEXIST instead of replacing it.
         const RENAME_NOREPLACE: libc::c_uint = 1;
-        let temp_c = std::ffi::CString::new(temp.as_os_str().as_encoded_bytes());
-        let dest_c = std::ffi::CString::new(dest.as_os_str().as_encoded_bytes());
+        let temp_c = std::ffi::CString::new(_temp.as_os_str().as_encoded_bytes());
+        let dest_c = std::ffi::CString::new(_dest.as_os_str().as_encoded_bytes());
         if let (Ok(temp_c), Ok(dest_c)) = (temp_c, dest_c) {
             // SAFETY: plain integers and NUL-terminated path pointers; no
             // memory is retained by the kernel after the call returns.
@@ -29,12 +38,15 @@ pub(crate) fn atomic_no_replace(temp: &Path, dest: &Path) -> std::io::Result<()>
                 return Ok(());
             }
             let err = std::io::Error::last_os_error();
-            if !rename_noreplace_unsupported(&err) {
+            if !rename_noreplace_unsupported(&err) || err.kind() == ErrorKind::PermissionDenied {
                 return Err(err);
             }
         }
     }
-    no_replace_fallback(temp, dest)
+    Err(std::io::Error::new(
+        ErrorKind::Unsupported,
+        "atomic no-replace rename is unsupported on this filesystem",
+    ))
 }
 
 /// A hard link (same directory, so same filesystem) is the atomic
@@ -204,6 +216,38 @@ fn rename_noreplace_unsupported(err: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn strict_restore_is_unsupported_and_import_does_not_replace_on_other_platforms() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("holding");
+        let dest = root.path().join("original");
+        std::fs::write(&source, b"held bytes").unwrap();
+        for occupied in [false, true] {
+            if occupied {
+                std::fs::write(&dest, b"installed bytes").unwrap();
+            }
+            assert_eq!(
+                strict_no_replace(&source, &dest).unwrap_err().kind(),
+                ErrorKind::Unsupported
+            );
+            assert_eq!(std::fs::read(&source).unwrap(), b"held bytes");
+            if occupied {
+                assert_eq!(
+                    atomic_no_replace(&source, &dest).unwrap_err().kind(),
+                    ErrorKind::AlreadyExists
+                );
+                assert_eq!(std::fs::read(&dest).unwrap(), b"installed bytes");
+            } else {
+                assert!(!dest.exists());
+            }
+        }
+        std::fs::remove_file(&dest).unwrap();
+        atomic_no_replace(&source, &dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"held bytes");
+        assert!(!source.exists());
+    }
 
     #[cfg(unix)]
     fn entry_summary(path: &Path) -> String {

@@ -186,7 +186,7 @@ describe('App', () => {
     client.listDatapacks = async () => ({
       packs: {
         packs: [datapack('a.zip'), datapack('b.zip')],
-        count: 2,
+        count: 2, holding_entries: [],
         bytes_read: 128,
         elapsed_ms: 1,
       },
@@ -757,7 +757,7 @@ describe('App', () => {
     client.getResourceStack = async () => stackResponse(null);
     client.listWorlds = async () => [world()];
     client.listDatapacks = async () => ({
-      packs: { packs: [datapack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1 },
+      packs: { packs: [datapack('a.zip')], count: 1, bytes_read: 128, elapsed_ms: 1, holding_entries: [] },
       stack: stack(),
     });
     const calls = holdGuardCalls(client);
@@ -1104,7 +1104,7 @@ describe('App', () => {
     const user = userEvent.setup();
     const client = await shellClient();
     await client.addGameDir('/dir-b/.minecraft');
-    client.listResourcePacks = async () => ({ packs: [worldPack('Alpha')], count: 1, bytes_read: 0, elapsed_ms: 0 });
+    client.listResourcePacks = async () => ({ packs: [worldPack('Alpha')], count: 1, holding_entries: [], bytes_read: 0, elapsed_ms: 0 });
     const list = client.listResourcePacks;
     client.listResourcePacks = () => client.config.active_game_dir === '/dir-b/.minecraft'
       ? new Promise(() => {}) : list();
@@ -1128,7 +1128,7 @@ describe('App', () => {
     const user = userEvent.setup();
     const client = await shellClient();
     await client.addGameDir('/dir-b/.minecraft');
-    const listing = { packs: [worldPack('Old pack')], count: 1, bytes_read: 0, elapsed_ms: 0 };
+    const listing = { packs: [worldPack('Old pack')], count: 1, holding_entries: [], bytes_read: 0, elapsed_ms: 0 };
     let releasePacks = () => {};
     let releaseStack = () => {};
     client.listResourcePacks = () => client.config.active_game_dir === '/dir-b/.minecraft'
