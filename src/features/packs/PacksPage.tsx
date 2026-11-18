@@ -108,9 +108,9 @@ export default function PacksPage({
     (err: unknown) => {
       const appError = toAppError(err);
       setActionError(appError.message);
-      if (appError.code !== 'game_running') return;
-      // The backend just saw the game; refresh both sources so the banner and
-      // every disabled control appear now instead of at the next poll.
+      if (appError.code !== 'game_running' && appError.code !== 'stale_stack') return;
+      // The backend just saw the game or a changed stack; refresh both sources
+      // now instead of at the next poll.
       void refreshStack();
       void refreshGameRunning();
     },

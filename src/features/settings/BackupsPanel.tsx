@@ -132,6 +132,26 @@ export default function BackupsPanel({
     };
   }, [client, activeGameDir, active]);
 
+  /** A refused restore has already written its pre-restore copy, so the list is re-read. */
+  const reloadOptionsBackups = async () => {
+    try {
+      setBackups(await client.listOptionsBackups());
+    } catch (err) {
+      setError(toAppError(err));
+    }
+  };
+
+  const reloadLevelBackups = async (dirName: string) => {
+    try {
+      const fresh = await client.listLevelBackups(dirName);
+      setLevelGroups((groups) =>
+        groups.map((group) => (group.dirName === dirName ? { ...group, backups: fresh } : group)),
+      );
+    } catch (err) {
+      setLevelError(toAppError(err));
+    }
+  };
+
   const handleLevelRestore = async (dirName: string, label: string, file: string) => {
     const key = `${dirName}/${file}`;
     setLevelRestoring(key);
@@ -151,6 +171,7 @@ export default function BackupsPanel({
       const appError = toAppError(err);
       setLevelError(appError);
       if (appError.code === 'game_running') void refreshGameRunning();
+      if (appError.code === 'stale_stack') await reloadLevelBackups(dirName);
     } finally {
       setLevelRestoring(null);
     }
@@ -171,6 +192,7 @@ export default function BackupsPanel({
       const appError = toAppError(err);
       setError(appError);
       if (appError.code === 'game_running') void refreshGameRunning();
+      if (appError.code === 'stale_stack') await reloadOptionsBackups();
     } finally {
       setRestoring(null);
     }
