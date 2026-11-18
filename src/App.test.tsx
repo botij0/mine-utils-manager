@@ -947,7 +947,7 @@ describe('App', () => {
     await user.click(await screen.findByRole('button', { name: /Second World/ }));
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
     await user.click(screen.getByRole('button', { name: 'Worlds' }));
-    expect(await screen.findByRole('button', { name: /Second World/ })).toHaveAttribute('aria-current', 'true');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Second World/ })).toHaveAttribute('aria-current', 'true'));
   });
 
   it('retains Discover search and loaded results across navigation', async () => {
@@ -1181,13 +1181,13 @@ describe('App', () => {
     const datapacks = vi.spyOn(client, 'listDatapacks');
     render(<App client={client} />);
     await user.click(await screen.findByRole('button', { name: 'Worlds' }));
-    expect(await screen.findByRole('button', { name: /Survival 1.17/ })).toHaveAttribute('aria-current', 'true');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Survival 1.17/ })).toHaveAttribute('aria-current', 'true'));
     await screen.findByRole('list', { name: 'Datapack stack' });
     const oldCalls = datapacks.mock.calls.length;
     await user.click(screen.getByRole('button', { name: 'Settings' }));
     await user.click(await screen.findByRole('button', { name: /^Use / }));
     await user.click(screen.getByRole('button', { name: 'Worlds' }));
-    expect(await screen.findByRole('button', { name: /B first/ })).toHaveAttribute('aria-current', 'true');
+    await waitFor(() => expect(screen.getByRole('button', { name: /B first/ })).toHaveAttribute('aria-current', 'true'));
     await waitFor(() => expect(datapacks.mock.calls.slice(oldCalls)).toEqual([['first-b']]));
   });
 

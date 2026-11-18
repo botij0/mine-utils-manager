@@ -108,6 +108,7 @@ describe('WorldsPage', () => {
     expect(screen.getByText(/^Checking whether Minecraft is running; writes are paused/)).toBeInTheDocument();
     expect(screen.queryByText(/^Minecraft is running/)).not.toBeInTheDocument();
 
+    await screen.findByRole('list', { name: 'Datapack stack' });
     rerender(<WorldsPage client={client} gameRunning={null} />);
     expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Import folder' })).toBeEnabled();
@@ -115,7 +116,7 @@ describe('WorldsPage', () => {
 
   it('lists worlds with icons and versions', async () => {
     render(<WorldsPage client={pageClient()} gameRunning={null} />);
-    expect(await screen.findAllByText('Survival 1.17')).toHaveLength(2);
+    await waitFor(() => expect(screen.getAllByText('Survival 1.17')).toHaveLength(2));
     expect(screen.getByText('Creative Flat')).toBeInTheDocument();
     expect(screen.getAllByText('1.21.10', { selector: '.world-rail-version' })).toHaveLength(2);
   });
