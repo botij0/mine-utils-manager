@@ -612,3 +612,140 @@ fn ambiguous_import_is_refused_before_copy() {
     assert!(!root.join("Caf�").exists());
     assert_eq!(std::fs::read(bad).unwrap(), b"bad");
 }
+
+const EMPTY_HOLDING: &str = ".mine-utils-replace.4294967295-123-0.tmp";
+
+fn add_empty_holding(fixture: &Fixture) -> PathBuf {
+    let holding = fixture
+        .paths
+        .game_dir()
+        .join("resourcepacks")
+        .join(EMPTY_HOLDING);
+    std::fs::create_dir(&holding).unwrap();
+    holding
+}
+
+#[cfg(unix)]
+#[test]
+fn replace_removes_only_empty_holdings_left_by_another_process() {
+    let fixture = Fixture::new();
+    let folder = fixture.paths.game_dir().join("resourcepacks");
+    let empty = add_empty_holding(&fixture);
+    let full = folder.join(".mine-utils-replace.4294967295-123-1.tmp");
+    std::fs::create_dir(&full).unwrap();
+    std::fs::write(full.join("Old.zip"), b"keep").unwrap();
+    let outside = fixture.paths.game_dir().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let linked = folder.join(".mine-utils-replace.4294967295-123-2.tmp");
+    std::os::unix::fs::symlink(&outside, &linked).unwrap();
+    let current = folder.join(format!(
+        ".mine-utils-replace.{}-123-3.tmp",
+        std::process::id()
+    ));
+    std::fs::create_dir(&current).unwrap();
+    let legacy = folder.join(".mine-utils-replace-Old.zip.4294967295-123-4.tmp");
+    std::fs::create_dir(&legacy).unwrap();
+    let lookalike = folder.join(".mine-utils-replace.4294967295-123.tmp");
+    std::fs::create_dir(&lookalike).unwrap();
+    let outcome = resource_stack::import_pack_safely_with(
+        &fixture.paths,
+        &fixture.source,
+        ImportChoice::Replace,
+        &fixture.icons,
+        &HashCache::new(),
+        &Trash::default(),
+        &PassGuard,
+    )
+    .unwrap();
+    assert!(matches!(outcome, ImportOutcome::Imported { .. }));
+    assert!(!empty.exists());
+    assert_eq!(std::fs::read(full.join("Old.zip")).unwrap(), b"keep");
+    assert_eq!(std::fs::read_link(&linked).unwrap(), outside);
+    assert!(outside.is_dir());
+    assert!(current.is_dir());
+    assert!(legacy.is_dir());
+    assert!(lookalike.is_dir());
+    let mut expected = vec![
+        ".mine-utils-replace-Old.zip.4294967295-123-4.tmp".to_owned(),
+        ".mine-utils-replace.4294967295-123-1.tmp".to_owned(),
+        ".mine-utils-replace.4294967295-123-2.tmp".to_owned(),
+        ".mine-utils-replace.4294967295-123.tmp".to_owned(),
+        current.file_name().unwrap().to_str().unwrap().to_owned(),
+        "Faithful-1.21".to_owned(),
+    ];
+    expected.sort();
+    assert_eq!(fixture.listing(), expected);
+}
+
+#[test]
+fn a_guard_refusal_leaves_empty_holdings_in_place() {
+    let fixture = Fixture::new();
+    let empty = add_empty_holding(&fixture);
+    let err = resource_stack::import_pack_safely_with(
+        &fixture.paths,
+        &fixture.source,
+        ImportChoice::Replace,
+        &fixture.icons,
+        &HashCache::new(),
+        &Trash::default(),
+        &FailingGuard {
+            calls: Cell::new(0),
+            fail_at: 1,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "game_running");
+    assert!(empty.is_dir());
+}
+
+#[test]
+fn a_plain_import_leaves_empty_holdings_for_the_next_replace() {
+    let fixture = Fixture::new();
+    let empty = add_empty_holding(&fixture);
+    std::fs::rename(
+        fixture.paths.game_dir().join("resourcepacks/Faithful"),
+        fixture.paths.game_dir().join("Faithful-away"),
+    )
+    .unwrap();
+    let outcome = resource_stack::import_pack_safely_with(
+        &fixture.paths,
+        &fixture.source,
+        ImportChoice::Default,
+        &fixture.icons,
+        &HashCache::new(),
+        &Trash::default(),
+        &PassGuard,
+    )
+    .unwrap();
+    assert!(matches!(outcome, ImportOutcome::Imported { .. }));
+    assert!(empty.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn replace_through_a_symlinked_pack_folder_leaves_empty_holdings() {
+    let fixture = Fixture::new();
+    let folder = fixture.paths.game_dir().join("resourcepacks");
+    let real = fixture.paths.game_dir().join("real-resourcepacks");
+    std::fs::rename(&folder, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &folder).unwrap();
+    std::fs::create_dir(real.join(EMPTY_HOLDING)).unwrap();
+    let _ = resource_stack::import_pack_safely_with(
+        &fixture.paths,
+        &fixture.source,
+        ImportChoice::Replace,
+        &fixture.icons,
+        &HashCache::new(),
+        &Trash::default(),
+        &PassGuard,
+    );
+    assert!(real.join(EMPTY_HOLDING).is_dir());
+}
+
+struct PassGuard;
+
+impl WriteGuard for PassGuard {
+    fn ensure_writable(&self, _: &Path) -> Result<(), AppError> {
+        Ok(())
+    }
+}
