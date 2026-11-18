@@ -272,7 +272,7 @@ fn append_line(lines: &mut Vec<Line>, key: &str, value: &[String]) {
 /// Read and parse `options.txt`. A missing file or invalid UTF-8 asks the user
 /// to launch Minecraft once; the app never creates or repairs the file.
 pub fn read_options(path: &Path) -> Result<OptionsTxt, AppError> {
-    let bytes = crate::read_capped::read_capped(path, MAX_OPTIONS_BYTES).map_err(|err| {
+    let bytes = crate::read_capped::read_capped_follow(path, MAX_OPTIONS_BYTES).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             AppError::Options(OptionsError::Missing {
                 path: path.to_path_buf(),

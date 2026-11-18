@@ -77,7 +77,7 @@ pub fn provenance_file(data_dir: &Path) -> std::path::PathBuf {
 
 fn read_all(data_dir: &Path) -> Result<BTreeMap<String, ProvenanceEntry>, ProvenanceError> {
     let path = provenance_file(data_dir);
-    let bytes = match crate::read_capped::read_capped(&path, MAX_PROVENANCE_BYTES) {
+    let bytes = match crate::read_capped::read_capped_follow(&path, MAX_PROVENANCE_BYTES) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(err) => {

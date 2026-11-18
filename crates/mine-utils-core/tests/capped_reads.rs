@@ -86,7 +86,7 @@ fn shared_readers_follow_regular_files_and_keep_their_caps() {
             .to_string(),
         "io error: file is too large"
     );
-    let selected = br#"{"profiles":{"test":{"lastVersionId":"1.21.4"}}}"#;
+    let selected = br#"{"profiles":{"test":{"lastVersionId":"modded","inheritsFrom":"1.21.4"}}}"#;
     std::fs::write(&target, selected).unwrap();
     assert_eq!(
         modrinth::preferred_launcher_version(root.path()),

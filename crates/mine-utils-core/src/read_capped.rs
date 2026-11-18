@@ -6,8 +6,16 @@ pub(crate) fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
     if !metadata.file_type().is_file() {
         return Err(not_regular());
     }
+    read_handle_capped(open_regular(path)?, cap)
+}
+
+pub(crate) fn read_capped_follow(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
+    read_handle_capped(open_with_policy(path, LeafSymlink::Follow)?, cap)
+}
+
+fn read_handle_capped(file: std::fs::File, cap: u64) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    open_regular(path)?.take(cap + 1).read_to_end(&mut bytes)?;
+    file.take(cap + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > cap {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -17,15 +25,28 @@ pub(crate) fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+enum LeafSymlink {
+    Reject,
+    Follow,
+}
+
 pub(crate) fn open_regular(path: &Path) -> io::Result<std::fs::File> {
+    open_with_policy(path, LeafSymlink::Reject)
+}
+
+fn open_with_policy(path: &Path, policy: LeafSymlink) -> io::Result<std::fs::File> {
     #[cfg(test)]
     before_open(path);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
+        let flags = match policy {
+            LeafSymlink::Reject => libc::O_NOFOLLOW | libc::O_NONBLOCK,
+            LeafSymlink::Follow => libc::O_NONBLOCK,
+        };
         let file = std::fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .custom_flags(flags)
             .open(path)
             .map_err(|err| {
                 if err.raw_os_error() == Some(libc::ELOOP) {
@@ -41,10 +62,18 @@ pub(crate) fn open_regular(path: &Path) -> io::Result<std::fs::File> {
     }
     #[cfg(not(unix))]
     {
-        if !std::fs::symlink_metadata(path)?.file_type().is_file() {
+        let metadata = match policy {
+            LeafSymlink::Reject => std::fs::symlink_metadata(path)?,
+            LeafSymlink::Follow => std::fs::metadata(path)?,
+        };
+        if !metadata.file_type().is_file() {
             return Err(not_regular());
         }
-        std::fs::File::open(path)
+        let file = std::fs::File::open(path)?;
+        if !file.metadata()?.file_type().is_file() {
+            return Err(not_regular());
+        }
+        Ok(file)
     }
 }
 

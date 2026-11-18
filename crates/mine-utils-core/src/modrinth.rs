@@ -973,7 +973,7 @@ fn compare_version_part(a: &str, b: &str) -> std::cmp::Ordering {
 /// directory. `None` when nothing usable was selected. Deterministic: the
 /// selected profile wins over any other profile.
 pub fn preferred_launcher_version(game_dir: &std::path::Path) -> Option<String> {
-    let bytes = crate::read_capped::read_capped(
+    let bytes = crate::read_capped::read_capped_follow(
         &game_dir.join("launcher_profiles.json"),
         MAX_API_BODY as u64,
     )
