@@ -1325,3 +1325,58 @@ fn replace_removes_existing_new_reference() {
         lists(&["vanilla", "file/cool-new", "file/other"], &[])
     );
 }
+
+#[test]
+fn failed_replace_retains_old_datapack_reference() {
+    for disabled in [false, true] {
+        let (enabled, disabled_list) = if disabled {
+            (
+                vec!["vanilla"],
+                vec!["file/first", "file/cool", "file/last"],
+            )
+        } else {
+            (
+                vec!["vanilla", "file/cool", "file/last"],
+                vec!["file/first"],
+            )
+        };
+        let world = temp_world(&enabled, &disabled_list);
+        datapack_source(world.paths.datapacks_dir(), "cool");
+        let source = datapack_source(world._dir.path(), "cool-new");
+        data_stack::import_datapack_with(
+            &world.paths,
+            &source,
+            mine_utils_core::ImportChoice::Replace,
+            &world.icons,
+            &world.hashes,
+            &FnTrash(failing_trash),
+            &PassGuard,
+        )
+        .unwrap_err();
+        assert!(world.paths.datapacks_dir().join("cool").exists());
+        assert_eq!(view(&world.paths), lists(&enabled, &disabled_list));
+    }
+}
+
+#[test]
+fn in_place_disabled_datapack_stays_disabled() {
+    for choice in [
+        mine_utils_core::ImportChoice::Default,
+        mine_utils_core::ImportChoice::Replace,
+    ] {
+        let world = temp_world(&["vanilla"], &["file/cool"]);
+        let source = datapack_source(world.paths.datapacks_dir(), "cool");
+        let before = std::fs::read(world.paths.level_dat_path()).unwrap();
+        data_stack::import_datapack_with(
+            &world.paths,
+            &source,
+            choice,
+            &world.icons,
+            &world.hashes,
+            &RecordingTrash::new(),
+            &PassGuard,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), before);
+    }
+}
