@@ -7,8 +7,9 @@
 //! and, for a restore, the restore source. The world directory name is
 //! safe and unique within one game dir.
 //!
-//! A backup is only restorable when it decompresses as gzip and holds NBT with
-//! `Data.DataPacks`. If both world seeds are readable and differ, restore
+//! A backup is only restorable when it decompresses as gzip and holds NBT with a
+//! `Data.Version.Name`. `Data.DataPacks` is optional, so pre-1.13 backups
+//! restore too. If both world seeds are readable and differ, restore
 //! refuses without changing anything. A missing or corrupt current file, or an
 //! unreadable seed, still permits restore.
 
@@ -175,11 +176,11 @@ pub fn list_all(root: &Path) -> Result<Vec<LevelBackupInfo>, AppError> {
 
 /// Restore one backup over `level.dat`. The name must resolve inside the
 /// game dir's own backup folder and belong to this world. The backup bytes
-/// must parse as a `level.dat` with `Data.DataPacks` before anything is
-/// replaced. Different readable world seeds refuse the restore without changing
-/// anything. A missing or corrupt current file, or an unreadable seed, still
-/// permits restore. The current bytes are backed up first, then a guard runs
-/// immediately before the atomic write.
+/// must parse as a `level.dat` before anything is replaced; a backup without
+/// `Data.DataPacks` is accepted. Different readable world seeds refuse the
+/// restore without changing anything. A missing or corrupt current file, or an
+/// unreadable seed, still permits restore. The current bytes are backed up
+/// first, then a guard runs immediately before the atomic write.
 pub fn restore_guarded<F>(
     root: &Path,
     world: &str,
@@ -232,10 +233,11 @@ where
 }
 
 /// A backup is only restorable when it decompresses as gzip and parses as a
-/// `level.dat` with datapack lists. Anything else is rejected before the
-/// current file is touched.
+/// `level.dat`. Datapack lists are optional, since pre-1.13 files have none, but
+/// present lists must be valid. Anything else is rejected before the current
+/// file is touched.
 fn validate_backup_bytes(file_name: &str, bytes: &[u8]) -> Result<(), AppError> {
-    level_dat::parse(bytes)
+    level_dat::parse_lenient(bytes)
         .map_err(|err| backup_error(format!("{file_name} is not a valid level.dat: {err}")))?;
     Ok(())
 }
