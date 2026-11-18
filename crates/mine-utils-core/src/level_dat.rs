@@ -102,7 +102,16 @@ pub fn parse_nbt(raw: &[u8]) -> Result<Value, LevelDatError> {
 pub fn parse(bytes: &[u8]) -> Result<LevelDatView, LevelDatError> {
     let raw = gunzip(bytes)?;
     let value = parse_nbt(&raw)?;
-    view_of(&value)
+    view_of(&value, lists_of)
+}
+
+/// Like [`parse`], but a file with no `Data.DataPacks` reads as empty lists.
+/// Minecraft before 1.13 wrote none, so such a file holds no datapacks. A
+/// present but malformed `DataPacks` still fails.
+pub fn parse_lenient(bytes: &[u8]) -> Result<LevelDatView, LevelDatError> {
+    let raw = gunzip(bytes)?;
+    let value = parse_nbt(&raw)?;
+    view_of(&value, lists_or_empty)
 }
 
 pub(crate) fn world_seed(bytes: &[u8]) -> Option<i64> {
@@ -134,7 +143,11 @@ fn data_of(value: &Value) -> Result<&std::collections::HashMap<String, Value>, L
     }
 }
 
-fn view_of(value: &Value) -> Result<LevelDatView, LevelDatError> {
+type ListsReader = fn(
+    &std::collections::HashMap<String, Value>,
+) -> Result<(Vec<String>, Vec<String>), LevelDatError>;
+
+fn view_of(value: &Value, read_lists: ListsReader) -> Result<LevelDatView, LevelDatError> {
     let data = data_of(value)?;
     let version_name = match data.get("Version") {
         Some(Value::Compound(version)) => match version.get("Name") {
@@ -147,7 +160,7 @@ fn view_of(value: &Value) -> Result<LevelDatView, LevelDatError> {
         Some(Value::String(name)) => Some(name.clone()),
         _ => None,
     };
-    let (enabled, disabled) = lists_of(data)?;
+    let (enabled, disabled) = read_lists(data)?;
     Ok(LevelDatView {
         level_name,
         version_name,
@@ -201,6 +214,16 @@ fn lists_of(
         }
     };
     Ok((enabled, disabled))
+}
+
+fn lists_or_empty(
+    data: &std::collections::HashMap<String, Value>,
+) -> Result<(Vec<String>, Vec<String>), LevelDatError> {
+    if data.contains_key("DataPacks") {
+        lists_of(data)
+    } else {
+        Ok((Vec::new(), Vec::new()))
+    }
 }
 
 /// Replace both datapack lists and re-encode. Every other tag is preserved.
