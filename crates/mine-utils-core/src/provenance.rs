@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 /// read-modify-write, so two installs in different game dirs must not
 /// interleave.
 static PROVENANCE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+const MAX_PROVENANCE_BYTES: u64 = 16 * 1024 * 1024;
+
 static PROVENANCE_TEMPS: AtomicU64 = AtomicU64::new(0);
 
 /// Where an installed file came from.
@@ -75,7 +77,7 @@ pub fn provenance_file(data_dir: &Path) -> std::path::PathBuf {
 
 fn read_all(data_dir: &Path) -> Result<BTreeMap<String, ProvenanceEntry>, ProvenanceError> {
     let path = provenance_file(data_dir);
-    let bytes = match std::fs::read(&path) {
+    let bytes = match crate::read_capped::read_capped_follow(&path, MAX_PROVENANCE_BYTES) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(err) => {
@@ -111,6 +113,11 @@ pub fn record(
     let bytes = serde_json::to_vec_pretty(&all).map_err(|err| ProvenanceError::Io {
         reason: err.to_string(),
     })?;
+    if bytes.len() as u64 > MAX_PROVENANCE_BYTES {
+        return Err(ProvenanceError::Io {
+            reason: "provenance record is too large".into(),
+        });
+    }
     let path = provenance_file(data_dir);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| ProvenanceError::Io {
@@ -127,7 +134,7 @@ pub fn record(
         reason: format!("cannot write {}: {err}", temp.display()),
     })?;
     // fsync the file before it becomes visible under the real name.
-    if let Ok(handle) = std::fs::File::open(&temp) {
+    if let Ok(handle) = crate::read_capped::open_regular(&temp) {
         let _ = handle.sync_all();
     }
     if let Err(err) = std::fs::rename(&temp, &path) {

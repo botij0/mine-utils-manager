@@ -158,6 +158,7 @@ pub(crate) mod core {
         pub source: &'a Path,
         pub target: &'a Path,
         pub file_name: &'a str,
+        pub cap: u64,
     }
 
     /// Restore one validated backup over its target. The current bytes are
@@ -178,10 +179,11 @@ pub(crate) mod core {
         W: FnOnce(&[u8]) -> Result<(), AppError>,
         G: FnOnce() -> Result<(), AppError>,
     {
-        let bytes = std::fs::read(files.source).map_err(|err| scheme.error(format!("{err}")))?;
+        let bytes = crate::read_capped::read_capped(files.source, files.cap)
+            .map_err(|err| scheme.error(format!("{err}")))?;
         validate(files.file_name, &bytes)?;
 
-        let read_target = || match std::fs::read(files.target) {
+        let read_target = || match crate::read_capped::read_capped(files.target, files.cap) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(AppError::Io(err)),
@@ -524,6 +526,7 @@ where
             source: &source,
             target: options_path,
             file_name,
+            cap: crate::options_txt::MAX_OPTIONS_BYTES,
         },
         config,
         &OPTIONS,
@@ -552,7 +555,8 @@ fn validate_backup_bytes(file_name: &str, bytes: &[u8]) -> Result<(), AppError> 
 /// Read one backup after validating it lives in the given backup folder.
 pub fn read(root: &Path, file_name: &str) -> Result<Vec<u8>, AppError> {
     let source = validated_backup(root, file_name)?;
-    std::fs::read(&source).map_err(|err| backup_error(format!("{err}")))
+    crate::read_capped::read_capped(&source, crate::options_txt::MAX_OPTIONS_BYTES)
+        .map_err(|err| backup_error(format!("{err}")))
 }
 
 fn validated_backup(root: &Path, file_name: &str) -> Result<PathBuf, AppError> {

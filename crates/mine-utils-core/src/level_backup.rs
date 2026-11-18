@@ -200,13 +200,14 @@ where
             source: &source,
             target: level_dat_path,
             file_name,
+            cap: level_dat::MAX_LEVEL_DAT_BYTES,
         },
         config,
         &scheme,
         |name| world_of(name) == Some(world),
         |name, bytes| {
             validate_backup_bytes(name, bytes)?;
-            match std::fs::read(level_dat_path) {
+            match crate::read_capped::read_capped(level_dat_path, level_dat::MAX_LEVEL_DAT_BYTES) {
                 Ok(current) => {
                     if matches!(
                         (level_dat::world_seed(&current), level_dat::world_seed(bytes)),

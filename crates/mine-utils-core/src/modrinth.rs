@@ -973,7 +973,11 @@ fn compare_version_part(a: &str, b: &str) -> std::cmp::Ordering {
 /// directory. `None` when nothing usable was selected. Deterministic: the
 /// selected profile wins over any other profile.
 pub fn preferred_launcher_version(game_dir: &std::path::Path) -> Option<String> {
-    let bytes = std::fs::read(game_dir.join("launcher_profiles.json")).ok()?;
+    let bytes = crate::read_capped::read_capped_follow(
+        &game_dir.join("launcher_profiles.json"),
+        MAX_API_BODY as u64,
+    )
+    .ok()?;
     let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     let profiles = json.get("profiles")?.as_object()?;
     let profile = if let Some(selected) = json.get("selectedProfile").and_then(|v| v.as_str()) {

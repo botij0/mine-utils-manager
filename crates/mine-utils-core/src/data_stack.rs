@@ -313,7 +313,8 @@ fn read_stack(
     parse: fn(&[u8]) -> Result<level_dat::LevelDatView, LevelDatError>,
 ) -> Result<DataStack, AppError> {
     reject_link_targets(&paths.world_dir)?;
-    let bytes = std::fs::read(paths.level_dat_path())?;
+    let bytes =
+        crate::read_capped::read_capped(paths.level_dat_path(), level_dat::MAX_LEVEL_DAT_BYTES)?;
     let view = parse(&bytes)?;
     Ok(stack_of(&view, paths))
 }
@@ -619,7 +620,9 @@ impl LevelDatRollback {
         let Some(written) = self.written else {
             return Ok(());
         };
-        if std::fs::read(paths.level_dat_path())? != written {
+        if crate::read_capped::read_capped(paths.level_dat_path(), level_dat::MAX_LEVEL_DAT_BYTES)?
+            != written
+        {
             return Err(std::io::Error::other(
                 "level.dat changed since the import write; left it unchanged",
             ));
@@ -833,7 +836,10 @@ impl stack_core::StackFile for DataFile<'_> {
     }
 
     fn read(&self) -> Result<(Vec<u8>, stack_core::Lists), AppError> {
-        let previous = std::fs::read(self.paths.level_dat_path())?;
+        let previous = crate::read_capped::read_capped(
+            self.paths.level_dat_path(),
+            level_dat::MAX_LEVEL_DAT_BYTES,
+        )?;
         let view = level_dat::parse(&previous)?;
         let lists = stack_core::Lists {
             primary: view.enabled,
@@ -887,7 +893,13 @@ impl stack_core::StackFile for DataFile<'_> {
     }
 
     fn unchanged(&self, previous: &[u8]) -> Result<bool, AppError> {
-        Ok(std::fs::read(self.paths.level_dat_path()).ok().as_deref() == Some(previous))
+        Ok(crate::read_capped::read_capped(
+            self.paths.level_dat_path(),
+            level_dat::MAX_LEVEL_DAT_BYTES,
+        )
+        .ok()
+        .as_deref()
+            == Some(previous))
     }
 
     fn reject(&self, err: stack_core::EntryError) -> AppError {
