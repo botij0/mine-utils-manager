@@ -43,6 +43,20 @@ const LEVEL_BACKUPS: LevelBackupInfo[] = [
   },
 ];
 
+/** The copy a restore writes before it finds the stack changed on disk. */
+const PRE_RESTORE_OPTIONS: BackupInfo = {
+  file_name: '20261026T093000.000000000-options.txt',
+  bytes: 4066,
+  display: '2026-10-26 09:30:00 UTC',
+};
+
+const PRE_RESTORE_LEVEL: LevelBackupInfo = {
+  file_name: '20261026T093000.000000000-Survival 1_17-level.dat',
+  world: 'Survival 1_17',
+  bytes: 10258,
+  display: '2026-10-26 09:30:00 UTC',
+};
+
 function makeClient({
   backups = DEFAULT_BACKUPS,
   error = null as IpcError | null,
@@ -248,6 +262,51 @@ describe('BackupsPanel', () => {
     expect(alert).toHaveTextContent(/Minecraft is running/);
     expect(client.restores).toEqual([]);
     expect(rechecks).toBe(1);
+  });
+
+  it('reloads the options backups after a stale_stack restore so the pre-restore copy shows', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    const listed = [...DEFAULT_BACKUPS];
+    client.listOptionsBackups = async () => [...listed];
+    client.restoreOptionsBackup = async () => {
+      listed.unshift(PRE_RESTORE_OPTIONS);
+      throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+    };
+    render(<BackupsPanel client={client} gameRunning={null} />);
+
+    const optionsTable = (await screen.findAllByRole('table'))[0];
+    await user.click(within(optionsTable).getAllByRole('button', { name: 'Restore' })[0]);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('the stack changed on disk');
+    expect(await within(optionsTable).findByText('2026-10-26 09:30:00 UTC')).toBeInTheDocument();
+    expect(
+      within(optionsTable).getByText('20261026T093000.000000000-options.txt'),
+    ).toBeInTheDocument();
+    expect(within(optionsTable).getAllByRole('button', { name: 'Restore' })).toHaveLength(3);
+  });
+
+  it('reloads the world level.dat backups after a stale_stack restore', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    const listed = [...LEVEL_BACKUPS];
+    client.listAllLevelBackups = async () => [...listed];
+    client.listLevelBackups = async () => [...listed];
+    client.restoreLevelBackup = async () => {
+      listed.unshift(PRE_RESTORE_LEVEL);
+      throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+    };
+    render(<BackupsPanel client={client} gameRunning={null} />);
+
+    const region = await screen.findByRole('region', { name: 'Survival 1_17 backups' });
+    await user.click(within(region).getByRole('button', { name: 'Restore' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('the stack changed on disk');
+    expect(await within(region).findByText('2026-10-26 09:30:00 UTC')).toBeInTheDocument();
+    expect(
+      within(region).getByText('20261026T093000.000000000-Survival 1_17-level.dat'),
+    ).toBeInTheDocument();
+    expect(within(region).getAllByRole('button', { name: 'Restore' })).toHaveLength(2);
   });
 
   it('reloads the table when the active game dir changes, not when the guard object does', async () => {

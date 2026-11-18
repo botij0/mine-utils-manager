@@ -734,6 +734,26 @@ describe('PacksPage', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('the stack changed on disk');
     expect(stackNames()).toEqual(['Brand.zip', 'Autumn.zip', 'Vanilla', 'vanilla']);
   });
+
+  it('reloads the stack after a toggle is refused as stale', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
+    let disk = resourceStack(['vanilla', 'file/Vanilla.zip']);
+    client.getResourceStack = async () => disk;
+    client.setResourcePackEnabled = async () => {
+      throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+    };
+    renderPage(client);
+    await screen.findByRole('list', { name: 'Stack order' });
+    expect(stackNames()).toEqual(['Vanilla', 'vanilla']);
+
+    disk = resourceStack(['vanilla', 'file/Vanilla.zip', 'file/Autumn.zip']);
+    await user.click(screen.getByRole('checkbox', { name: 'Enabled: Vanilla' }));
+    await settle();
+
+    expect(screen.getByRole('alert')).toHaveTextContent('the stack changed on disk');
+    expect(stackNames()).toEqual(['Autumn.zip', 'Vanilla', 'vanilla']);
+  });
 });
 
 /** Flushes the resolved fake calls and the React updates they trigger. */
