@@ -280,3 +280,25 @@ fn sweep_keeps_live_downloads_across_executables_and_pid_namespaces() {
         live_owner_survives("namespace", "verified");
     }
 }
+
+#[test]
+fn sweep_never_follows_a_symlinked_target_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = root.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let foreign = outside.join(".foreign.zip.mine-utils-download-4294967295-1-0.tmp");
+    std::fs::write(&foreign, b"foreign sentinel").unwrap();
+    age(&foreign);
+    let target = root.path().join("resourcepacks");
+    std::os::unix::fs::symlink(&outside, &target).unwrap();
+    let result = download_verified(
+        &ModrinthClient::without_sleep(Cdn),
+        URL,
+        &target,
+        "pack.zip",
+        &hex::encode(Sha512::digest(pack())),
+        ZipRoot::Assets,
+    );
+    assert_eq!(result.unwrap_err().code(), "download_io");
+    assert_eq!(std::fs::read(&foreign).unwrap(), b"foreign sentinel");
+}

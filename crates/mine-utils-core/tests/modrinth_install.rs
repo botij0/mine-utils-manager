@@ -2262,3 +2262,66 @@ fn finish_preserves_foreign_temp_after_directory_or_file_swap() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn datapacks_link_swapped_after_prepare_refuses_finish() {
+    let fx = fixture();
+    let bytes = datapack_zip();
+    let (client, _) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    DATAPACK_URL,
+                    DATAPACK_FILE,
+                    &sha512_hex(&bytes),
+                    &[WORLD_VERSION],
+                ),
+            )
+            .with(DATAPACK_URL, bytes),
+    );
+    let paths = data_paths(&fx);
+    let before = std::fs::read(fx.game_dir.join("saves/alpha/level.dat")).unwrap();
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        Some("alpha"),
+        PROJECT,
+        VERSION,
+        DATAPACK_FILE,
+        "datapack",
+    )
+    .unwrap();
+    let temp_name = std::fs::read_dir(fx.game_dir.join("saves/alpha/datapacks"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .file_name();
+    let packs = fx.game_dir.join("saves/alpha/datapacks");
+    let moved = fx._dir.path().join("moved");
+    std::fs::rename(&packs, &moved).unwrap();
+    let outside = fx._dir.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let sentinel = outside.join(&temp_name);
+    std::fs::write(&sentinel, b"unrelated sentinel").unwrap();
+    std::os::unix::fs::symlink(&outside, &packs).unwrap();
+    let error = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        Some(&paths),
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .unwrap_err();
+    println!("swapped datapacks finish code: {}", error.code());
+    assert_eq!(error.code(), "pack_symlink");
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"unrelated sentinel");
+    assert_eq!(std::fs::read_dir(outside).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read(fx.game_dir.join("saves/alpha/level.dat")).unwrap(),
+        before
+    );
+}

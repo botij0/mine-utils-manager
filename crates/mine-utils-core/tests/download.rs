@@ -680,3 +680,75 @@ fn dropping_download_keeps_a_foreign_file_at_the_temp_path() {
     assert_eq!(std::fs::read(temp).unwrap(), b"unrelated sentinel");
     assert_eq!(std::fs::read(original).unwrap(), bytes);
 }
+
+#[cfg(unix)]
+#[test]
+fn commit_refuses_a_replaced_parent_even_when_the_temp_inode_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("resourcepacks");
+    let moved = dir.path().join("moved");
+    let bytes = zip_bytes(&[("assets/pack.png", b"pack")]);
+    let (client, _) = client_for(bytes.clone());
+    let verified = download_verified(
+        &client,
+        CDN_URL,
+        &target,
+        "pack.zip",
+        &sha512_hex(&bytes),
+        ZipRoot::Assets,
+    )
+    .unwrap();
+    let temp = verified.temp_path.clone();
+    std::fs::rename(&target, &moved).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    std::fs::hard_link(moved.join(temp.file_name().unwrap()), &temp).unwrap();
+    let error = verified.commit(&moved, "pack.zip").unwrap_err();
+    assert_eq!(error.code(), "download_io");
+    assert_eq!(std::fs::read(&temp).unwrap(), bytes);
+    assert!(!moved.join("pack.zip").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn dropped_download_cleans_a_moved_parent_without_touching_foreign_entries() {
+    for replacement in ["directory", "symlink"] {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("resourcepacks");
+        let moved = dir.path().join("moved");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let bytes = zip_bytes(&[("assets/pack.png", b"pack")]);
+        let (client, _) = client_for(bytes.clone());
+        let verified = download_verified(
+            &client,
+            CDN_URL,
+            &target,
+            "pack.zip",
+            &sha512_hex(&bytes),
+            ZipRoot::Assets,
+        )
+        .unwrap();
+        let name = verified.temp_path.file_name().unwrap().to_owned();
+        std::fs::rename(&target, &moved).unwrap();
+        if replacement == "directory" {
+            std::fs::create_dir(&target).unwrap();
+        } else {
+            std::os::unix::fs::symlink(&outside, &target).unwrap();
+        }
+        std::fs::write(target.join(&name), b"foreign replacement").unwrap();
+        std::fs::write(moved.join("foreign.tmp"), b"foreign neighbor").unwrap();
+        drop(verified);
+        assert_eq!(
+            std::fs::read(target.join(&name)).unwrap(),
+            b"foreign replacement"
+        );
+        assert_eq!(
+            std::fs::read(moved.join("foreign.tmp")).unwrap(),
+            b"foreign neighbor"
+        );
+        assert!(
+            !moved.join(&name).exists(),
+            "{replacement}: owned temp must be removed"
+        );
+    }
+}
