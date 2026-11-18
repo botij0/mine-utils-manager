@@ -2249,7 +2249,11 @@ fn finish_preserves_foreign_temp_after_directory_or_file_swap() {
             "{swap}"
         );
         assert!(!packs.join(RESOURCE_FILE).exists(), "{swap}");
-        assert_eq!(std::fs::read(original).unwrap(), bytes, "{swap}");
+        if cfg!(unix) && swap == "parent" {
+            assert!(!original.exists(), "owned temp in moved parent is cleaned");
+        } else {
+            assert_eq!(std::fs::read(original).unwrap(), bytes, "{swap}");
+        }
         assert_eq!(result.unwrap_err().code(), "download_io", "{swap}");
         assert_eq!(
             api.calls(),

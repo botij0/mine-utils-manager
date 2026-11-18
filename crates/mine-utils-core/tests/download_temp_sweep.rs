@@ -302,3 +302,54 @@ fn sweep_never_follows_a_symlinked_target_directory() {
     assert_eq!(result.unwrap_err().code(), "download_io");
     assert_eq!(std::fs::read(&foreign).unwrap(), b"foreign sentinel");
 }
+
+#[test]
+fn next_download_sweeps_an_abandoned_temp_from_a_moved_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("resourcepacks");
+    std::fs::create_dir(&target).unwrap();
+    let mut owner = Owner(
+        Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "download_temp_owner_helper", "--nocapture"])
+            .env("DOWNLOAD_OWNER_DIR", &target)
+            .env("DOWNLOAD_HOLD_PHASE", "verified")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut output = std::io::BufReader::new(owner.0.stdout.take().unwrap());
+    loop {
+        let mut line = String::new();
+        assert_ne!(
+            output.read_line(&mut line).unwrap(),
+            0,
+            "owner exited before pausing"
+        );
+        if line.trim() == "DOWNLOAD_PAUSED" {
+            break;
+        }
+    }
+    let name = listing(&target).pop().unwrap();
+    let moved = root.path().join("moved");
+    std::fs::rename(&target, &moved).unwrap();
+    owner.0.kill().unwrap();
+    owner.0.wait().unwrap();
+    age(&moved.join(&name));
+    let foreign = moved.join("foreign.tmp");
+    std::fs::write(&foreign, b"foreign neighbor").unwrap();
+    age(&foreign);
+    let outside = root.path().join("foreign.zip");
+    std::fs::write(&outside, b"foreign link target").unwrap();
+    age(&outside);
+    let link = moved.join(".link.zip.mine-utils-download-4294967295-1-0.tmp");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let dest = download(&moved, "next.zip")
+        .commit(&moved, "next.zip")
+        .unwrap();
+    assert_eq!(std::fs::read(dest).unwrap(), pack());
+    assert!(!moved.join(name).exists());
+    assert_eq!(std::fs::read(foreign).unwrap(), b"foreign neighbor");
+    assert_eq!(std::fs::read(outside).unwrap(), b"foreign link target");
+    assert!(std::fs::symlink_metadata(link).unwrap().is_symlink());
+}

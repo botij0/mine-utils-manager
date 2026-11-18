@@ -138,7 +138,7 @@ pub fn prepare_modrinth_install_controlled<T: Transport + 'static>(
                 return Err(AppError::Options(OptionsError::Missing { path: options }));
             }
             let target = game_dir.join("resourcepacks");
-            reject_resourcepacks_link(&target)?;
+            reject_pack_directory_link(&target)?;
             (target, None)
         }
         SearchKind::Datapack => {
@@ -310,7 +310,7 @@ fn missing_file_reason(
     )
 }
 
-fn reject_resourcepacks_link(path: &Path) -> Result<(), AppError> {
+fn reject_pack_directory_link(path: &Path) -> Result<(), AppError> {
     if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
         return Err(PackError::Symlink {
             path: path.to_path_buf(),
@@ -407,7 +407,7 @@ pub fn finish_modrinth_install(
     match kind {
         SearchKind::ResourcePack => {
             game_lock::ensure_writable(stack_paths.game_dir())?;
-            reject_resourcepacks_link(&prepared.target_dir)?;
+            reject_pack_directory_link(&prepared.target_dir)?;
             download::directory_handle(&prepared.target_dir)?;
             let (dest, sha256, identity) = match commit_source(prepared)? {
                 Committed::Ready(dest, sha256, identity) => (dest, sha256, identity),
@@ -453,6 +453,7 @@ pub fn finish_modrinth_install(
             let paths = data_paths.ok_or_else(|| AppError::World {
                 reason: "a datapack install needs a target world".to_string(),
             })?;
+            reject_pack_directory_link(&prepared.target_dir)?;
             download::directory_handle(&prepared.target_dir)?;
             let (dest, sha256, identity) = match commit_source(prepared)? {
                 Committed::Ready(dest, sha256, identity) => (dest, sha256, identity),
