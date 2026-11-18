@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { toAppError } from '../../lib/ipc';
 import type { IpcClient } from '../../lib/ipc';
+import { isSettingsWriteTimeout } from '../../lib/types';
 import type { ClientError, Config, GameDirEntry } from '../../lib/types';
 import GameDirPicker from './GameDirPicker';
 
@@ -32,8 +33,8 @@ export default function GameDirSettings({
 
   function reportError(err: unknown, action: string) {
     const next = toAppError(err);
-    if (next.message.startsWith('Settings write timed out.') && !failedAction.current) failedAction.current = action;
-    setError((current) => current?.message.startsWith('Settings write timed out.') ? current : next);
+    if (isSettingsWriteTimeout(next) && !failedAction.current) failedAction.current = action;
+    setError((current) => (current && isSettingsWriteTimeout(current) ? current : next));
   }
 
   useEffect(() => {

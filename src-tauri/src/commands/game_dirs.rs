@@ -1,6 +1,7 @@
 pub use mine_utils_core::wire::GameDirState;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
 
 use super::join_error;
@@ -13,12 +14,40 @@ use mine_utils_core::{
 use tauri::State;
 
 #[derive(Clone)]
+struct ActiveSwitch {
+    next: Arc<AtomicU64>,
+    applied: Arc<AtomicU64>,
+}
+
+impl ActiveSwitch {
+    fn new() -> Self {
+        Self {
+            next: Arc::new(AtomicU64::new(0)),
+            applied: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn issue(&self) -> u64 {
+        self.next.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    fn applied(&self) -> u64 {
+        self.applied.load(Ordering::SeqCst)
+    }
+
+    fn commit(&self, ticket: u64) {
+        self.applied.fetch_max(ticket, Ordering::SeqCst);
+    }
+}
+
+#[derive(Clone)]
 pub struct AppState {
     store: Arc<Mutex<ConfigStore>>,
     committed: Arc<Mutex<Config>>,
     startup_warning: Option<String>,
     first_ipc: Arc<Once>,
     data_dir: PathBuf,
+    active_switch: ActiveSwitch,
 }
 
 impl AppState {
@@ -30,6 +59,7 @@ impl AppState {
             startup_warning,
             first_ipc: Arc::new(Once::new()),
             data_dir,
+            active_switch: ActiveSwitch::new(),
         }
     }
 
@@ -252,13 +282,21 @@ fn set_active_with(
     path: &str,
     canonicalize: impl FnOnce(&Path) -> Result<PathBuf, AppError>,
 ) -> Result<GameDirState, AppError> {
+    let ticket = state.active_switch.issue();
+    let target = canonicalize(Path::new(path))?;
+    let discovered = discover_game_dirs(&home_dir()?);
+    let found = discovered.iter().any(|dir| dir.path == target);
+    let stored = state.lock().config().game_dirs.clone();
+    let merged = merge_game_dirs(discovered, &stored);
+    let entries: Vec<_> = merged.iter().map(entry_for).collect();
+    let active_switch = state.active_switch.clone();
     let (_, config) = state.update(|store| {
-        let target = canonicalize(Path::new(path))?;
-        let discovered = discover_game_dirs(&home_dir()?);
-        let found = discovered.iter().any(|dir| dir.path == target);
-        let merged = merge_game_dirs(discovered, &store.config().game_dirs);
-        let entries: Vec<_> = merged.iter().map(entry_for).collect();
-        store.set_active_game_dir(&target, &entries, found)
+        if ticket < active_switch.applied() {
+            return Ok(());
+        }
+        store.set_active_game_dir(&target, &entries, found)?;
+        active_switch.commit(ticket);
+        Ok(())
     })?;
     state_for(config)
 }

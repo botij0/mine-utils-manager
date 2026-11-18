@@ -2,6 +2,7 @@ import type { Config, GameRunning, Theme } from '../../lib/types';
 import type { IpcClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import { useMemo, useRef, useState } from 'react';
+import { SettingsWriteTimeoutError, isSettingsWriteTimeout } from '../../lib/types';
 import type { ClientError } from '../../lib/types';
 import GameDirSettings from '../game-dirs/GameDirSettings';
 import BackupsPanel from './BackupsPanel';
@@ -53,7 +54,7 @@ export default function SettingsPage({
           let timedOut = false;
           const timer = setTimeout(() => {
             timedOut = true;
-            reject(new Error('Settings write timed out. It may still finish in the background.'));
+            reject(new SettingsWriteTimeoutError());
           }, SETTINGS_WRITE_TIMEOUT_MS);
           action().then(resolve, reject).finally(() => {
             clearTimeout(timer);
@@ -82,8 +83,8 @@ export default function SettingsPage({
       onConfigChanged(await orderedClient.setTheme(theme));
     } catch (err) {
       const next = toAppError(err);
-      if (next.message.startsWith('Settings write timed out.') && !failedTheme.current) failedTheme.current = theme;
-      setError((current) => current?.message.startsWith('Settings write timed out.') ? current : next);
+      if (isSettingsWriteTimeout(next) && !failedTheme.current) failedTheme.current = theme;
+      setError((current) => (current && isSettingsWriteTimeout(current) ? current : next));
     }
   }
 
