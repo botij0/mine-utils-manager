@@ -375,10 +375,11 @@ mod tests {
     }
 
     #[test]
-    fn missing_datapacks_is_an_error_card() {
-        let (dir, icons) = game_with(&[("nopacks", Some(level_dat_bytes(Some("1.21.10"), false)))]);
+    fn missing_datapacks_lists_normally() {
+        let (dir, icons) = game_with(&[("nopacks", Some(level_dat_bytes(Some("1.12.2"), false)))]);
         let worlds = scan_worlds(&dir.path().join("game"), &icons);
-        assert!(worlds[0].issue.is_some());
+        assert_eq!(worlds[0].issue, None);
+        assert_eq!(worlds[0].version.as_ref().unwrap().name, "1.12.2");
     }
 
     #[test]
