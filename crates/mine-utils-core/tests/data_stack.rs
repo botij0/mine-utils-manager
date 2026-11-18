@@ -734,6 +734,56 @@ fn restore_of_a_corrupt_world_works_through_the_backend() {
     assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), first);
 }
 
+/// A pre-1.13 `level.dat` with a seed and no `Data.DataPacks`.
+fn legacy_level_bytes(seed: i64, level_name: &str) -> Vec<u8> {
+    use fastnbt::Value;
+    let data = Value::Compound(
+        [
+            (
+                "Version".to_string(),
+                Value::Compound(
+                    [("Name".to_string(), Value::String("1.12.2".to_string()))]
+                        .into_iter()
+                        .collect(),
+                ),
+            ),
+            (
+                "LevelName".to_string(),
+                Value::String(level_name.to_string()),
+            ),
+            ("RandomSeed".to_string(), Value::Long(seed)),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let root = Value::Compound([("Data".to_string(), data)].into_iter().collect());
+    level_dat::gzip(&fastnbt::to_bytes(&root).unwrap())
+}
+
+#[test]
+fn restore_of_a_pre_datapacks_backup_returns_an_empty_stack() {
+    let world = temp_world(&["vanilla"], &[]);
+    let backup = legacy_level_bytes(42, "Saved");
+    let created = mine_utils_core::level_backup::create(
+        world.paths.backups_root(),
+        "alpha",
+        &backup,
+        world.paths.backups(),
+    )
+    .unwrap()
+    .created
+    .unwrap();
+    std::fs::write(
+        world.paths.level_dat_path(),
+        legacy_level_bytes(42, "Edited"),
+    )
+    .unwrap();
+    let stack = data_stack::restore_backup(&world.paths, &created.file_name).unwrap();
+    assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), backup);
+    assert!(stack.enabled.is_empty());
+    assert!(stack.disabled.is_empty());
+}
+
 #[test]
 fn restore_recreates_a_missing_level_dat() {
     let world = temp_world(&["vanilla"], &[]);

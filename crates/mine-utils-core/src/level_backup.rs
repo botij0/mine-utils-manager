@@ -412,6 +412,106 @@ mod tests {
         assert_eq!(std::fs::read(&level).unwrap(), modern);
     }
 
+    fn compound<const N: usize>(pairs: [(&str, fastnbt::Value); N]) -> fastnbt::Value {
+        fastnbt::Value::Compound(
+            pairs
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value))
+                .collect(),
+        )
+    }
+
+    /// A pre-1.13 `level.dat`: a version name, a seed, and no `Data.DataPacks`.
+    fn legacy_level_dat(seed: i64, level_name: &str) -> Vec<u8> {
+        let version = compound([("Name", fastnbt::Value::String("1.12.2".to_string()))]);
+        let data = compound([
+            ("Version", version),
+            ("LevelName", fastnbt::Value::String(level_name.to_string())),
+            ("RandomSeed", fastnbt::Value::Long(seed)),
+        ]);
+        level_dat::gzip(&fastnbt::to_bytes(&compound([("Data", data)])).unwrap())
+    }
+
+    #[test]
+    fn restore_accepts_a_pre_datapacks_backup_over_a_matching_world() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("backups");
+        let level = dir.path().join("level.dat");
+        let backup = legacy_level_dat(42, "Saved");
+        let name = create(&root, "world", &backup, &config(10))
+            .unwrap()
+            .created
+            .unwrap()
+            .file_name;
+        std::fs::write(&level, legacy_level_dat(42, "Edited")).unwrap();
+        restore_guarded(&root, "world", &level, &name, &config(10), || Ok(())).unwrap();
+        assert_eq!(std::fs::read(&level).unwrap(), backup);
+    }
+
+    #[test]
+    fn restore_refuses_a_pre_datapacks_backup_with_a_different_seed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("backups");
+        let level = dir.path().join("level.dat");
+        let name = create(&root, "world", &legacy_level_dat(42, "Saved"), &config(10))
+            .unwrap()
+            .created
+            .unwrap()
+            .file_name;
+        let current = legacy_level_dat(99, "Edited");
+        std::fs::write(&level, &current).unwrap();
+        let err =
+            restore_guarded(&root, "world", &level, &name, &config(10), || Ok(())).unwrap_err();
+        assert_eq!(err.code(), "world_mismatch");
+        assert_eq!(std::fs::read(&level).unwrap(), current);
+    }
+
+    #[test]
+    fn restore_refuses_a_gzipped_backup_that_is_not_nbt() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("backups");
+        std::fs::create_dir_all(&root).unwrap();
+        let name = "20260101T000000.000000000-world-level.dat";
+        std::fs::write(root.join(name), level_dat::gzip(b"not nbt")).unwrap();
+        let level = dir.path().join("level.dat");
+        let current = legacy_level_dat(42, "Edited");
+        std::fs::write(&level, &current).unwrap();
+        let err =
+            restore_guarded(&root, "world", &level, name, &config(10), || Ok(())).unwrap_err();
+        assert_eq!(err.code(), "level_backup");
+        assert_eq!(std::fs::read(&level).unwrap(), current);
+    }
+
+    #[test]
+    fn restore_refuses_a_backup_whose_datapacks_are_malformed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("backups");
+        let level = dir.path().join("level.dat");
+        let packs = compound([
+            ("Enabled", fastnbt::Value::Int(1)),
+            ("Disabled", fastnbt::Value::List(Vec::new())),
+        ]);
+        let data = compound([
+            (
+                "Version",
+                compound([("Name", fastnbt::Value::String("1.21.10".to_string()))]),
+            ),
+            ("DataPacks", packs),
+        ]);
+        let backup = level_dat::gzip(&fastnbt::to_bytes(&compound([("Data", data)])).unwrap());
+        let name = create(&root, "world", &backup, &config(10))
+            .unwrap()
+            .created
+            .unwrap()
+            .file_name;
+        let current = legacy_level_dat(42, "Edited");
+        std::fs::write(&level, &current).unwrap();
+        let err =
+            restore_guarded(&root, "world", &level, &name, &config(10), || Ok(())).unwrap_err();
+        assert_eq!(err.code(), "level_backup");
+        assert_eq!(std::fs::read(&level).unwrap(), current);
+    }
+
     fn config(keep: u32) -> BackupsConfig {
         BackupsConfig {
             enabled: true,
