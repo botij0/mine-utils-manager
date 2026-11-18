@@ -95,6 +95,7 @@ describe('WorldsPage', () => {
     const client = pageClient({
       listWorlds: async () => [world({ running })],
       listDatapacks: async (name: string) => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
         const listing = await stored.listDatapacks(name);
         return { ...listing, stack: { ...listing.stack, running } };
       },
