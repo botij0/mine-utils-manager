@@ -226,7 +226,7 @@ pub(crate) fn open_zip_capped(
 ) -> Result<zip::ZipArchive<File>, PackError> {
     #[cfg(test)]
     SOURCE_PASSES.with(|counts| counts.borrow_mut().0 += 1);
-    let file = File::open(path).map_err(|err| broken(name, err))?;
+    let file = open_regular(path).map_err(|err| broken(name, err))?;
     let archive = zip::ZipArchive::new(file).map_err(|err| broken(name, err))?;
     if archive.len() > max_entries {
         return Err(broken(
@@ -265,7 +265,7 @@ fn broken(name: &str, reason: impl std::fmt::Display) -> PackError {
 const HASH_CHUNK_BYTES: usize = 64 * 1024;
 
 fn hash_file(path: &Path) -> Result<String, AppError> {
-    let mut file = File::open(path)?;
+    let mut file = open_regular(path)?;
     let mut hasher = Sha256::new();
     feed_hasher(&mut file, &mut hasher)?;
     Ok(hex::encode(hasher.finalize()))

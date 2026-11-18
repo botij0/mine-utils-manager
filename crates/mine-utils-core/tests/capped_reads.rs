@@ -116,3 +116,74 @@ fn remaining_readers_refuse_symlinks_and_fifos_without_blocking() {
         );
     }
 }
+
+#[test]
+fn backup_reads_cap_both_restore_sources_and_current_files() {
+    use mine_utils_core::{backup, level_backup, level_dat};
+    let root = tempfile::tempdir().unwrap();
+    let backups = root.path().join("backups");
+    let config = BackupsConfig::default();
+    let options_bytes = b"resourcePacks:[]\n";
+    let options = root.path().join("options.txt");
+    let saved = backup::create(&backups, options_bytes, &config)
+        .unwrap()
+        .created
+        .unwrap();
+    assert_eq!(
+        backup::read(&backups, &saved.file_name).unwrap(),
+        options_bytes
+    );
+    oversized(&options, 1024 * 1024 + 1);
+    assert_eq!(
+        backup::restore(&backups, &options, &saved.file_name, &config)
+            .unwrap_err()
+            .to_string(),
+        "io error: file is too large"
+    );
+    std::fs::write(&options, options_bytes).unwrap();
+    oversized(&backups.join(&saved.file_name), 1024 * 1024 + 1);
+    assert_eq!(
+        backup::read(&backups, &saved.file_name).unwrap_err().code(),
+        "backup"
+    );
+    assert_eq!(
+        backup::restore(&backups, &options, &saved.file_name, &config)
+            .unwrap_err()
+            .code(),
+        "backup"
+    );
+    assert_eq!(std::fs::read(&options).unwrap(), options_bytes);
+
+    let level_bytes = level_dat::gzip(&fastnbt::to_bytes(&serde_json::json!({"Data": {"Version": {"Name": "1.21.4"}, "DataPacks": {"Enabled": ["vanilla"], "Disabled": []}}})).unwrap());
+    let saved = level_backup::create(&backups, "world", &level_bytes, &config)
+        .unwrap()
+        .created
+        .unwrap();
+    let level = root.path().join("level.dat");
+    std::fs::write(&level, &level_bytes).unwrap();
+    level_backup::restore_guarded(&backups, "world", &level, &saved.file_name, &config, || {
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(std::fs::read(&level).unwrap(), level_bytes);
+    oversized(&level, 64 * 1024 * 1024 + 1);
+    assert_eq!(
+        level_backup::restore_guarded(&backups, "world", &level, &saved.file_name, &config, || Ok(
+            ()
+        ))
+        .unwrap_err()
+        .to_string(),
+        "io error: file is too large"
+    );
+    std::fs::write(&level, &level_bytes).unwrap();
+    oversized(&backups.join(&saved.file_name), 64 * 1024 * 1024 + 1);
+    assert_eq!(
+        level_backup::restore_guarded(&backups, "world", &level, &saved.file_name, &config, || Ok(
+            ()
+        ))
+        .unwrap_err()
+        .code(),
+        "level_backup"
+    );
+    assert_eq!(std::fs::read(&level).unwrap(), level_bytes);
+}

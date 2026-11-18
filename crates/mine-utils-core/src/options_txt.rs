@@ -14,6 +14,8 @@ use crate::error::AppError;
 pub const RESOURCE_PACKS_KEY: &str = "resourcePacks";
 pub const INCOMPATIBLE_RESOURCE_PACKS_KEY: &str = "incompatibleResourcePacks";
 
+pub(crate) const MAX_OPTIONS_BYTES: u64 = 1024 * 1024;
+
 const LAUNCH_HINT: &str = "launch Minecraft once so it writes the file, then try again";
 
 /// Everything that can go wrong while reading `options.txt`. The app never
@@ -270,7 +272,7 @@ fn append_line(lines: &mut Vec<Line>, key: &str, value: &[String]) {
 /// Read and parse `options.txt`. A missing file or invalid UTF-8 asks the user
 /// to launch Minecraft once; the app never creates or repairs the file.
 pub fn read_options(path: &Path) -> Result<OptionsTxt, AppError> {
-    let bytes = std::fs::read(path).map_err(|err| {
+    let bytes = crate::read_capped::read_capped(path, MAX_OPTIONS_BYTES).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             AppError::Options(OptionsError::Missing {
                 path: path.to_path_buf(),
