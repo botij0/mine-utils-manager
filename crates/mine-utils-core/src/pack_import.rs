@@ -146,6 +146,7 @@ pub fn import_pack_with(
 
 pub(crate) trait ImportHooks {
     fn before_write(&self) -> Result<(), AppError>;
+    fn in_place(&self) {}
     fn replaced(&self, _old: &Path, _new: &Path) -> Result<(), AppError> {
         Ok(())
     }
@@ -261,6 +262,7 @@ fn import_pack_with_services(
     std::fs::create_dir_all(resourcepacks)?;
     let root = std::fs::canonicalize(resourcepacks)?;
     if source.parent() == Some(root.as_path()) {
+        services.hooks.in_place();
         let mut bytes_read = 0;
         let pack = inspect_entry(&source, location, icons, &mut bytes_read)?;
         return Ok(ImportOutcome::Imported {

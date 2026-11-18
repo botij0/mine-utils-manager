@@ -545,6 +545,8 @@ pub fn import_datapack_with(
         choice,
         guard,
         replaced: std::cell::Cell::new(false),
+        in_place: std::cell::Cell::new(false),
+        rollback: std::cell::RefCell::new(None),
     };
     let outcome = pack_import::import_pack_guarded(
         source,
@@ -556,7 +558,20 @@ pub fn import_datapack_with(
             trash,
             hooks: &hooks,
         },
-    )?;
+    );
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            if let Some(rollback) = hooks.rollback.into_inner() {
+                if let Err(rollback) = rollback.restore(paths) {
+                    return Err(
+                        err.with_context(format!("Could not roll back level.dat: {rollback}"))
+                    );
+                }
+            }
+            return Err(err);
+        }
+    };
     let filename = match &outcome {
         crate::pack::ImportOutcome::Imported { pack } => pack_filename(&pack.path)?,
         crate::pack::ImportOutcome::Duplicate { .. }
@@ -565,6 +580,9 @@ pub fn import_datapack_with(
             return Ok(map_pack_outcome(&outcome));
         }
     };
+    if hooks.in_place.get() {
+        return Ok(DatapackImportOutcome::Imported { filename });
+    }
     if writable(&paths.game_dir, &paths.world_dir, guard).is_err() {
         let status = game_lock::check(&paths.game_dir);
         let detail = status
@@ -587,16 +605,46 @@ struct DatapackImport<'a> {
     choice: ImportChoice,
     guard: &'a dyn WriteGuard,
     replaced: std::cell::Cell<bool>,
+    in_place: std::cell::Cell<bool>,
+    rollback: std::cell::RefCell<Option<LevelDatRollback>>,
+}
+
+struct LevelDatRollback {
+    previous: Vec<u8>,
+    written: Option<Vec<u8>>,
+}
+
+impl LevelDatRollback {
+    fn restore(self, paths: &DataPaths) -> std::io::Result<()> {
+        let Some(written) = self.written else {
+            return Ok(());
+        };
+        if std::fs::read(paths.level_dat_path())? != written {
+            return Err(std::io::Error::other(
+                "level.dat changed since the import write; left it unchanged",
+            ));
+        }
+        level_dat::write_level_dat(paths.level_dat_path(), &self.previous)
+    }
 }
 
 impl pack_import::ImportHooks for DatapackImport<'_> {
+    fn in_place(&self) {
+        self.in_place.set(true);
+    }
+
     fn replaced(&self, old: &Path, new: &Path) -> Result<(), AppError> {
         if old.file_name() != new.file_name() {
             let change = stack_core::Change::ReplaceData {
                 old: pack_filename(old)?,
                 new: pack_filename(new)?,
             };
-            commit(self.paths, None, &change, self.guard)?;
+            let file = DataFile {
+                paths: self.paths,
+                guard: self.guard,
+                rollback: Some(&self.rollback),
+            };
+            stack_core::commit(&file, None, &change)?;
         }
         self.replaced.set(true);
         Ok(())
@@ -767,6 +815,7 @@ fn remove_lists(
 struct DataFile<'a> {
     paths: &'a DataPaths,
     guard: &'a dyn WriteGuard,
+    rollback: Option<&'a std::cell::RefCell<Option<LevelDatRollback>>>,
 }
 
 impl stack_core::StackFile for DataFile<'_> {
@@ -807,10 +856,21 @@ impl stack_core::StackFile for DataFile<'_> {
 
     fn write(&self, rendered: Vec<u8>) -> Result<(), AppError> {
         level_dat::write_level_dat(self.paths.level_dat_path(), &rendered)?;
+        if let Some(rollback) = self.rollback {
+            if let Some(rollback) = rollback.borrow_mut().as_mut() {
+                rollback.written = Some(rendered);
+            }
+        }
         Ok(())
     }
 
     fn backup(&self, previous: &[u8]) -> Result<LevelBackupOutcome, AppError> {
+        if let Some(rollback) = self.rollback {
+            *rollback.borrow_mut() = Some(LevelDatRollback {
+                previous: previous.to_vec(),
+                written: None,
+            });
+        }
         level_backup::create(
             &self.paths.backups_root,
             self.paths.world_name(),
@@ -853,7 +913,11 @@ fn commit(
     change: &stack_core::Change,
     guard: &dyn WriteGuard,
 ) -> Result<DataWrite, AppError> {
-    let file = DataFile { paths, guard };
+    let file = DataFile {
+        paths,
+        guard,
+        rollback: None,
+    };
     let expected = expected.map(|snapshot| stack_core::Expected {
         primary: &snapshot.enabled,
         secondary: &snapshot.disabled,

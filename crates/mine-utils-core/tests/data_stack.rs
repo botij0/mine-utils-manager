@@ -1325,3 +1325,173 @@ fn replace_removes_existing_new_reference() {
         lists(&["vanilla", "file/cool-new", "file/other"], &[])
     );
 }
+
+#[test]
+fn failed_replace_retains_old_datapack_reference() {
+    for disabled in [false, true] {
+        let (enabled, disabled_list) = if disabled {
+            (
+                vec!["vanilla"],
+                vec!["file/first", "file/cool", "file/last"],
+            )
+        } else {
+            (
+                vec!["vanilla", "file/cool", "file/last"],
+                vec!["file/first"],
+            )
+        };
+        let world = temp_world(&enabled, &disabled_list);
+        datapack_source(world.paths.datapacks_dir(), "cool");
+        let source = datapack_source(world._dir.path(), "cool-new");
+        let before = std::fs::read(world.paths.level_dat_path()).unwrap();
+        data_stack::import_datapack_with(
+            &world.paths,
+            &source,
+            mine_utils_core::ImportChoice::Replace,
+            &world.icons,
+            &world.hashes,
+            &FnTrash(failing_trash),
+            &PassGuard,
+        )
+        .unwrap_err();
+        assert!(world.paths.datapacks_dir().join("cool").exists());
+        assert_eq!(view(&world.paths), lists(&enabled, &disabled_list));
+        assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), before);
+    }
+}
+
+#[test]
+fn in_place_disabled_datapack_stays_disabled() {
+    for choice in [
+        mine_utils_core::ImportChoice::Default,
+        mine_utils_core::ImportChoice::Replace,
+    ] {
+        let world = temp_world(&["vanilla"], &["file/cool"]);
+        let source = datapack_source(world.paths.datapacks_dir(), "cool");
+        let before = std::fs::read(world.paths.level_dat_path()).unwrap();
+        data_stack::import_datapack_with(
+            &world.paths,
+            &source,
+            choice,
+            &world.icons,
+            &world.hashes,
+            &RecordingTrash::new(),
+            &PassGuard,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), before);
+    }
+}
+
+#[test]
+fn replace_late_guard_failure_restores_level_dat_without_a_second_backup() {
+    for backups_enabled in [false, true] {
+        let mut world = temp_world(&["vanilla"], &["file/first", "file/cool", "file/last"]);
+        world.paths = DataPaths::for_world(
+            &mine_utils_core::WorldPaths::for_world(world.paths.game_dir(), "alpha").unwrap(),
+            &world._dir.path().join("data"),
+            BackupsConfig {
+                enabled: backups_enabled,
+                keep: 1,
+            },
+        );
+        datapack_source(world.paths.datapacks_dir(), "cool");
+        let source = datapack_source(world._dir.path(), "cool-new");
+        let before = std::fs::read(world.paths.level_dat_path()).unwrap();
+        let trash = RecordingTrash::new();
+        let error = data_stack::import_datapack_with(
+            &world.paths,
+            &source,
+            mine_utils_core::ImportChoice::Replace,
+            &world.icons,
+            &world.hashes,
+            &trash,
+            &ScriptedGuard::failing_at(7),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "game_running");
+        assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), before);
+        assert_eq!(
+            view(&world.paths),
+            lists(&["vanilla"], &["file/first", "file/cool", "file/last"])
+        );
+        assert!(world.paths.datapacks_dir().join("cool").exists());
+        assert!(world.paths.datapacks_dir().join("cool-new").exists());
+        assert!(trash.calls().is_empty());
+        let backups = mine_utils_core::level_backup::list(
+            world.paths.backups_root(),
+            world.paths.world_name(),
+        )
+        .unwrap();
+        assert_eq!(backups.len(), usize::from(backups_enabled));
+        if let Some(backup) = backups.first() {
+            assert_eq!(
+                std::fs::read(world.paths.backups_root().join(&backup.file_name)).unwrap(),
+                before
+            );
+        }
+    }
+}
+
+#[test]
+fn replace_rollback_keeps_a_concurrent_level_dat_edit_and_reports_it() {
+    let world = temp_world(&["vanilla"], &["file/cool"]);
+    datapack_source(world.paths.datapacks_dir(), "cool");
+    let source = datapack_source(world._dir.path(), "cool-new");
+    let concurrent = level_bytes(&["vanilla", "file/external"], &["file/cool"]);
+    let trash = FnTrash(|path: &Path| {
+        assert_eq!(view(&world.paths), lists(&["vanilla"], &["file/cool-new"]));
+        std::fs::write(world.paths.level_dat_path(), &concurrent).unwrap();
+        failing_trash(path)
+    });
+    let error = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &trash,
+        &PassGuard,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "pack_trash");
+    assert!(error.to_string().contains(
+        "Could not roll back level.dat: level.dat changed since the import write; left it unchanged"
+    ), "{error}");
+    assert_eq!(
+        std::fs::read(world.paths.level_dat_path()).unwrap(),
+        concurrent
+    );
+    assert_eq!(
+        view(&world.paths),
+        lists(&["vanilla", "file/external"], &["file/cool"])
+    );
+    assert!(world.paths.datapacks_dir().join("cool").exists());
+}
+
+#[test]
+fn replace_rollback_restores_the_rebased_level_dat_bytes() {
+    let world = temp_world(&["vanilla"], &["file/cool"]);
+    datapack_source(world.paths.datapacks_dir(), "cool");
+    let source = datapack_source(world._dir.path(), "cool-new");
+    let guard = RaceGuard {
+        level_dat: world.paths.level_dat_path().to_path_buf(),
+        calls: Cell::new(0),
+        write_at: Some(6),
+    };
+    let error = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &FnTrash(failing_trash),
+        &guard,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "pack_trash");
+    assert_eq!(
+        view(&world.paths),
+        lists(&["vanilla"], &["file/cool", "file/race-6.zip"])
+    );
+}
