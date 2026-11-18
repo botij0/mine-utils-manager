@@ -260,7 +260,7 @@ Restoring replaces the current `options.txt`. Mine Utils first saves the current
 2. In **Settings**, scroll to **World level.dat**.
 3. Find the world group and choose **Restore** beside a backup.
 
-If the backup and current world have different readable seeds, Mine Utils refuses the restore and changes nothing. A missing or corrupt current file, or an unreadable seed, still permits restore. Mine Utils backs up the current `level.dat` before a restore and can recreate a missing file. Return to **Worlds** afterward to review the restored datapack stack.
+If the backup and current world have different readable seeds, Mine Utils refuses the restore and changes nothing. A missing or corrupt current file, or an unreadable seed, still permits restore. Mine Utils backs up the current `level.dat` before a restore and can recreate a missing file. Return to **Worlds** afterward to review the restored datapack stack. A backup from before Minecraft 1.13 has an empty stack because those versions do not support datapacks. Mine Utils refuses datapack writes until the world is upgraded in Minecraft.
 
 ## Safety and network behavior
 

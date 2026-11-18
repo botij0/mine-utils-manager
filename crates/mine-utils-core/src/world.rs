@@ -3,7 +3,7 @@
 //!
 //! Only direct children of `saves` are scanned, and a directory without
 //! `level.dat` is skipped, never an error. A corrupt `level.dat`, a missing
-//! version, or missing datapack lists render as an error card; the other
+//! version, or malformed datapack lists render as an error card; the other
 //! worlds still render.
 
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ pub struct WorldIssue {
 }
 
 /// One world as the UI lists it. `issue` is set for corrupt, version-less, or
-/// datapack-less worlds; those render an error card instead of write controls.
+/// worlds with malformed metadata; those render an error card instead of write controls.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct World {
@@ -216,7 +216,7 @@ fn read_world(dir: &Path, icons: &IconCache, status: &game_lock::GameStatus) -> 
         issue: None,
     };
     match read_capped(&level_dat_in(dir), level_dat::MAX_LEVEL_DAT_BYTES) {
-        Ok(bytes) => match level_dat::parse(&bytes) {
+        Ok(bytes) => match level_dat::parse_lenient(&bytes) {
             Ok(view) => {
                 if let Some(name) = view.level_name {
                     if !name.is_empty() {

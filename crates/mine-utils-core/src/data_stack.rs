@@ -298,24 +298,10 @@ pub(crate) fn reject_link_targets(world_dir: &Path) -> Result<(), AppError> {
 
 /// Read the stack. Reads never block, even while the game runs.
 pub fn load(paths: &DataPaths) -> Result<DataStack, AppError> {
-    read_stack(paths, level_dat::parse)
-}
-
-/// [`load`] for the file a restore just wrote. The backup may predate
-/// datapacks, so its stack reads as empty instead of failing a restore that
-/// already succeeded.
-fn load_restored(paths: &DataPaths) -> Result<DataStack, AppError> {
-    read_stack(paths, level_dat::parse_lenient)
-}
-
-fn read_stack(
-    paths: &DataPaths,
-    parse: fn(&[u8]) -> Result<level_dat::LevelDatView, LevelDatError>,
-) -> Result<DataStack, AppError> {
     reject_link_targets(&paths.world_dir)?;
     let bytes =
         crate::read_capped::read_capped(paths.level_dat_path(), level_dat::MAX_LEVEL_DAT_BYTES)?;
-    let view = parse(&bytes)?;
+    let view = level_dat::parse_lenient(&bytes)?;
     Ok(stack_of(&view, paths))
 }
 
@@ -426,7 +412,7 @@ pub fn restore_backup_with_guard(
         &paths.backups,
         || writable(&paths.game_dir, &paths.world_dir, guard),
     )?;
-    load_restored(paths)
+    load(paths)
 }
 
 /// What a guarded delete did to `level.dat` after moving the pack to the trash.
@@ -522,6 +508,9 @@ pub fn import_datapack_with(
     guard: &dyn WriteGuard,
 ) -> Result<DatapackImportOutcome, AppError> {
     reject_link_targets(&paths.world_dir)?;
+    let bytes =
+        crate::read_capped::read_capped(paths.level_dat_path(), level_dat::MAX_LEVEL_DAT_BYTES)?;
+    level_dat::parse(&bytes)?;
     reject_symlink_source(source)?;
     let location = source_location(source)?;
     let name = display_name(source);
