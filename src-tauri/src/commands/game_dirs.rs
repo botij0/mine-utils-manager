@@ -237,21 +237,30 @@ pub async fn set_active_game_dir(
     state.note_first_ipc();
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let target =
-            std::fs::canonicalize(Path::new(&path)).map_err(|_| AppError::UnknownGameDir {
-                path: PathBuf::from(&path),
-            })?;
-        let discovered = discover_game_dirs(&home_dir()?);
-        let found = discovered.iter().any(|dir| dir.path == target);
-        let config = state.config();
-        let merged = merge_game_dirs(discovered, &config.game_dirs);
-        let entries: Vec<_> = merged.iter().map(entry_for).collect();
-        let (_, config) =
-            state.update(|store| store.set_active_game_dir(&target, &entries, found))?;
-        state_for(config)
+        set_active_with(&state, &path, |path| {
+            std::fs::canonicalize(path).map_err(|_| AppError::UnknownGameDir {
+                path: path.to_path_buf(),
+            })
+        })
     })
     .await
     .map_err(join_error)?
+}
+
+fn set_active_with(
+    state: &AppState,
+    path: &str,
+    canonicalize: impl FnOnce(&Path) -> Result<PathBuf, AppError>,
+) -> Result<GameDirState, AppError> {
+    let (_, config) = state.update(|store| {
+        let target = canonicalize(Path::new(path))?;
+        let discovered = discover_game_dirs(&home_dir()?);
+        let found = discovered.iter().any(|dir| dir.path == target);
+        let merged = merge_game_dirs(discovered, &store.config().game_dirs);
+        let entries: Vec<_> = merged.iter().map(entry_for).collect();
+        store.set_active_game_dir(&target, &entries, found)
+    })?;
+    state_for(config)
 }
 
 #[tauri::command]
@@ -358,6 +367,52 @@ mod tests {
         }
         assert_eq!(persisted.game_dirs.len(), 2);
         assert_eq!(state.config(), persisted);
+    }
+
+    #[test]
+    fn older_switch_finishes_before_newer_switch() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        for path in [&first, &second] {
+            std::fs::create_dir_all(path.join("saves")).unwrap();
+        }
+        let mut store = ConfigStore::new(root.path().join("config.json"), Config::default());
+        for path in [&first, &second] {
+            store
+                .add_game_dir(validate_game_dir(path).unwrap())
+                .unwrap();
+        }
+        let state = AppState::new(store, None, root.path().to_path_buf());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let older_state = state.clone();
+        let older_path = first.to_string_lossy().into_owned();
+        let older = std::thread::spawn(move || {
+            set_active_with(&older_state, &older_path, |path| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(std::fs::canonicalize(path).unwrap())
+            })
+            .unwrap();
+        });
+        entered_rx.recv().unwrap();
+        assert!(state.store.try_lock().is_err());
+        let newer_state = state.clone();
+        let newer_path = second.to_string_lossy().into_owned();
+        let (started_tx, started_rx) = mpsc::channel();
+        let newer = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            set_active_with(&newer_state, &newer_path, |path| {
+                Ok(std::fs::canonicalize(path).unwrap())
+            })
+            .unwrap();
+        });
+        started_rx.recv().unwrap();
+        release_tx.send(()).unwrap();
+        older.join().unwrap();
+        newer.join().unwrap();
+        assert_eq!(state.config().active_game_dir, Some(second));
     }
 
     #[test]

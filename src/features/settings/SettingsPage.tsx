@@ -44,12 +44,20 @@ export default function SettingsPage({
   refreshGameRunning = () => {},
 }: SettingsPageProps) {
   const [error, setError] = useState<ClientError | null>(null);
+  const [folderRevision, setFolderRevision] = useState(0);
   const orderedClient = useMemo(() => {
-    function enqueue<T>(action: () => Promise<T>): Promise<T> {
+    function enqueue<T>(action: () => Promise<T>, folderWrite = false): Promise<T> {
       const result = (pendingWrites.get(client) ?? Promise.resolve()).then(() =>
         new Promise<T>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('Settings write timed out. It may still finish in the background.')), SETTINGS_WRITE_TIMEOUT_MS);
-          action().then(resolve, reject).finally(() => clearTimeout(timer));
+          let timedOut = false;
+          const timer = setTimeout(() => {
+            timedOut = true;
+            reject(new Error('Settings write timed out. It may still finish in the background.'));
+          }, SETTINGS_WRITE_TIMEOUT_MS);
+          action().then(resolve, reject).finally(() => {
+            clearTimeout(timer);
+            if (timedOut && folderWrite) setFolderRevision((revision) => revision + 1);
+          });
         }),
       );
       pendingWrites.set(client, result.then(() => {}, () => {}));
@@ -57,19 +65,19 @@ export default function SettingsPage({
     }
     return {
       ...client,
-      addGameDir: (path: string) => enqueue(() => client.addGameDir(path)),
-      removeGameDir: (path: string) => enqueue(() => client.removeGameDir(path)),
-      setActiveGameDir: (path: string) => enqueue(() => client.setActiveGameDir(path)),
+      addGameDir: (path: string) => enqueue(() => client.addGameDir(path), true),
+      removeGameDir: (path: string) => enqueue(() => client.removeGameDir(path), true),
+      setActiveGameDir: (path: string) => enqueue(() => client.setActiveGameDir(path), true),
       setTheme: (theme: Theme) => enqueue(() => client.setTheme(theme)),
     };
   }, [client]);
 
   async function handleTheme(theme: Theme) {
+    setError(null);
     try {
       onConfigChanged(await orderedClient.setTheme(theme));
-      setError(null);
     } catch (err) {
-      setError(toAppError(err));
+      setError((current) => current?.message.startsWith('Settings write timed out.') ? current : toAppError(err));
     }
   }
 
@@ -94,11 +102,13 @@ export default function SettingsPage({
         {error ? (
           <p className="error" role="alert">
             {error.message}
+            <button type="button" onClick={() => setError(null)}>Dismiss</button>
           </p>
         ) : null}
       </section>
       <GameDirSettings
         client={orderedClient}
+        revision={folderRevision}
         activePath={config.active_game_dir}
         onConfigChanged={onConfigChanged}
       />

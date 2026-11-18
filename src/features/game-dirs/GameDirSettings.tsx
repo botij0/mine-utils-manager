@@ -8,12 +8,14 @@ import GameDirPicker from './GameDirPicker';
 interface GameDirSettingsProps {
   client: IpcClient;
   activePath: string | null;
+  revision?: number;
   onConfigChanged: (config: Config) => void;
 }
 
 export default function GameDirSettings({
   client,
   activePath,
+  revision = 0,
   onConfigChanged,
 }: GameDirSettingsProps) {
   const [entries, setEntries] = useState<GameDirEntry[]>([]);
@@ -24,43 +26,43 @@ export default function GameDirSettings({
     client
       .listGameDirs()
       .then(setEntries)
-      .catch((err: unknown) => setError(toAppError(err)));
-  }, [client]);
+      .catch((err: unknown) => setError((current) => current ?? toAppError(err)));
+  }, [client, revision]);
 
   async function handleAdd(event: FormEvent) {
     event.preventDefault();
     const path = draft.trim();
     if (!path) return;
+    setError(null);
     try {
       const state = await client.addGameDir(path);
       setEntries(state.entries);
       onConfigChanged(state.config);
       setDraft('');
-      setError(null);
     } catch (err) {
-      setError(toAppError(err));
+      setError((current) => current?.message.startsWith('Settings write timed out.') ? current : toAppError(err));
     }
   }
 
   async function handleRemove(path: string) {
+    setError(null);
     try {
       const state = await client.removeGameDir(path);
       setEntries(state.entries);
       onConfigChanged(state.config);
-      setError(null);
     } catch (err) {
-      setError(toAppError(err));
+      setError((current) => current?.message.startsWith('Settings write timed out.') ? current : toAppError(err));
     }
   }
 
   async function handleSelect(path: string) {
+    setError(null);
     try {
       const state = await client.setActiveGameDir(path);
       setEntries(state.entries);
       onConfigChanged(state.config);
-      setError(null);
     } catch (err) {
-      setError(toAppError(err));
+      setError((current) => current?.message.startsWith('Settings write timed out.') ? current : toAppError(err));
     }
   }
 
@@ -92,6 +94,7 @@ export default function GameDirSettings({
       {error ? (
         <p className="error" role="alert">
           {error.message}
+          <button type="button" onClick={() => setError(null)}>Dismiss</button>
         </p>
       ) : null}
     </section>
