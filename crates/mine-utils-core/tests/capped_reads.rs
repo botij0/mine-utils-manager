@@ -64,57 +64,128 @@ fn remaining_readers_refuse_oversized_files() {
 
 #[cfg(unix)]
 #[test]
-fn remaining_readers_refuse_symlinks_and_fifos_without_blocking() {
+fn shared_readers_follow_regular_files_and_keep_their_caps() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("shared");
+    symlink(&target, root.path().join("options.txt")).unwrap();
+    symlink(&target, root.path().join("launcher_profiles.json")).unwrap();
+    symlink(&target, provenance::provenance_file(root.path())).unwrap();
+
+    std::fs::write(&target, b"resourcePacks:[\"vanilla\"]\n").unwrap();
+    assert_eq!(
+        options_txt::read_options(&root.path().join("options.txt"))
+            .unwrap()
+            .resource_packs(),
+        ["vanilla"]
+    );
+    oversized(&target, 1024 * 1024 + 1);
+    assert_eq!(
+        options_txt::read_options(&root.path().join("options.txt"))
+            .unwrap_err()
+            .to_string(),
+        "io error: file is too large"
+    );
+    let selected = br#"{"profiles":{"test":{"lastVersionId":"1.21.4"}}}"#;
+    std::fs::write(&target, selected).unwrap();
+    assert_eq!(
+        modrinth::preferred_launcher_version(root.path()),
+        Some("1.21.4".into())
+    );
+    let mut padded = selected.to_vec();
+    padded.resize(4 * 1024 * 1024 + 1, b' ');
+    std::fs::write(&target, padded).unwrap();
+    assert_eq!(modrinth::preferred_launcher_version(root.path()), None);
+
+    std::fs::write(
+        &target,
+        br#"{"hash":{"project_id":"project","version_id":"version","file_name":"pack.zip"}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        provenance::lookup(root.path(), "hash").unwrap(),
+        Some(provenance::ProvenanceEntry {
+            project_id: "project".into(),
+            version_id: "version".into(),
+            file_name: "pack.zip".into(),
+        })
+    );
+    oversized(&target, 16 * 1024 * 1024 + 1);
+    assert_eq!(
+        provenance::lookup(root.path(), "hash").unwrap_err().code(),
+        "provenance_io"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn remaining_readers_refuse_non_regular_files_without_blocking() {
     use std::os::unix::{ffi::OsStrExt, fs::symlink};
-    for fifo in [false, true] {
-        let root = tempfile::tempdir().unwrap();
-        let target = root.path().join("target");
-        std::fs::write(&target, b"resourcePacks:[]\n").unwrap();
-        for name in [
-            "options.txt",
-            "provenance.json",
-            "launcher_profiles.json",
-            "saves/world/level.dat",
-        ] {
-            let path = root.path().join(name);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            if fifo {
-                let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-                assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
-            } else {
-                symlink(&target, &path).unwrap();
+    for linked in [false, true] {
+        for fifo in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            for name in ["options.txt", "provenance.json", "launcher_profiles.json"] {
+                let path = root.path().join(name);
+                let target = if linked {
+                    root.path().join(format!("{name}.target"))
+                } else {
+                    path.clone()
+                };
+                if fifo {
+                    let name = std::ffi::CString::new(target.as_os_str().as_bytes()).unwrap();
+                    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+                } else {
+                    std::fs::create_dir(&target).unwrap();
+                }
+                if linked {
+                    symlink(&target, &path).unwrap();
+                }
             }
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let paths = DataPaths::for_world(
-                &WorldPaths::for_world(root.path(), "world").unwrap(),
-                &root.path().join("app"),
-                BackupsConfig::default(),
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let paths = mine_utils_core::StackPaths::for_game_dir(
+                    root.path(),
+                    &root.path().join("app"),
+                    BackupsConfig::default(),
+                );
+                let _ = tx.send((
+                    mine_utils_core::resource_stack::load(&paths)
+                        .unwrap_err()
+                        .to_string(),
+                    provenance::lookup(root.path(), "missing")
+                        .unwrap_err()
+                        .code()
+                        .to_string(),
+                    modrinth::preferred_launcher_version(root.path()),
+                ));
+            });
+            assert_eq!(
+                rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap(),
+                (
+                    "io error: not a regular file".into(),
+                    "provenance_io".into(),
+                    None
+                )
             );
-            let _ = tx.send((
-                options_txt::read_options(&root.path().join("options.txt"))
-                    .unwrap_err()
-                    .code()
-                    .to_string(),
-                provenance::lookup(root.path(), "missing")
-                    .unwrap_err()
-                    .code()
-                    .to_string(),
-                modrinth::preferred_launcher_version(root.path()),
-                data_stack::load(&paths).unwrap_err().code().to_string(),
-            ));
-        });
-        assert_eq!(
-            rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap(),
-            (
-                "io".into(),
-                "provenance_io".into(),
-                None,
-                if fifo { "io".into() } else { "world".into() }
-            )
-        );
+        }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn data_stack_keeps_refusing_leaf_symlinks() {
+    let root = tempfile::tempdir().unwrap();
+    let world = root.path().join("saves/world");
+    std::fs::create_dir_all(&world).unwrap();
+    let target = root.path().join("shared-level.dat");
+    std::fs::write(&target, b"unused").unwrap();
+    std::os::unix::fs::symlink(target, world.join("level.dat")).unwrap();
+    let paths = DataPaths::for_world(
+        &WorldPaths::for_world(root.path(), "world").unwrap(),
+        &root.path().join("app"),
+        BackupsConfig::default(),
+    );
+    assert_eq!(data_stack::load(&paths).unwrap_err().code(), "world");
 }
 
 #[test]
