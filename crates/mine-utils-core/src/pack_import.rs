@@ -385,7 +385,7 @@ fn import_pack_with_services(
                     Err(restore) => {
                         recovery_failed = true;
                         context.push(format!(
-                            "Original pack retained at {}. Could not restore {}: {restore}",
+                            "Original pack retained at {}. Could not restore {}: {restore}. Restart Mine Utils to restore the holding entry",
                             holding.display(),
                             old.display()
                         ));

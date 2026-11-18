@@ -315,4 +315,4 @@ be using them. Restart Mine Utils to recover an entry left by that process.
 
 Restore changes only the filename. It leaves `options.txt` and `level.dat`
 unchanged because their references may already point at the original name.
-Recovery refuses filesystems without atomic no-replace rename support.
+Recovery refuses filesystems without atomic no-replace rename support. On Windows, Restore always shows a message asking you to rename the holding entry by hand.
