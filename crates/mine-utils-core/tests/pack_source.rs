@@ -341,3 +341,87 @@ fn folder_metadata_and_icon_that_are_not_regular_files_are_skipped_without_block
         ]
     );
 }
+
+#[cfg(unix)]
+fn within_deadline<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(2))
+        .expect("pack operation must not block on a FIFO")
+}
+
+#[cfg(unix)]
+#[test]
+fn fifo_zip_does_not_block_resource_or_datapack_scans() {
+    for relative in ["resourcepacks", "saves/world/datapacks"] {
+        let root = tempfile::tempdir().unwrap();
+        let packs = root.path().join(relative);
+        std::fs::create_dir_all(&packs).unwrap();
+        zip(&packs.join("Good.zip"), "", META);
+        mkfifo(&packs.join("Evil.zip"));
+        let rows = within_deadline(move || {
+            let icons = IconCache::new(&root.path().join("icons"));
+            let listing = if relative == "resourcepacks" {
+                scan_packs(&packs, &icons)
+            } else {
+                data_stack::scan_datapacks(&packs, &icons)
+            }
+            .unwrap();
+            listing
+                .packs
+                .into_iter()
+                .map(|card| (card.name, card.error.map(|error| error.code)))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            rows,
+            vec![
+                ("Evil".into(), Some("pack_broken_archive".into())),
+                ("Good".into(), None),
+            ]
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn fifo_zip_does_not_block_resource_or_datapack_digests() {
+    for relative in ["resourcepacks", "saves/world/datapacks"] {
+        let root = tempfile::tempdir().unwrap();
+        let packs = root.path().join(relative);
+        std::fs::create_dir_all(&packs).unwrap();
+        let fifo = packs.join("Evil.zip");
+        mkfifo(&fifo);
+        let error = within_deadline(move || {
+            let _root = root;
+            HashCache::new()
+                .hash(&fifo, PackLocation::Zip)
+                .unwrap_err()
+                .to_string()
+        });
+        assert_eq!(error, "io error: not a regular file");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn folder_digest_skips_nested_fifo_zips() {
+    for relative in ["resourcepacks", "saves/world/datapacks"] {
+        let root = tempfile::tempdir().unwrap();
+        let pack = root.path().join(relative).join("Folder");
+        folder(&pack, META);
+        mkfifo(&pack.join("data/test/Evil.zip"));
+        let digest = within_deadline(move || {
+            let _root = root;
+            HashCache::new()
+                .hash(&pack, PackLocation::Directory)
+                .unwrap()
+        });
+        assert_eq!(
+            digest,
+            "57116f1f0a3f9324a03be6b2d9fd5a9fbdcd73b43351ae64e7faae5a24907839"
+        );
+    }
+}
