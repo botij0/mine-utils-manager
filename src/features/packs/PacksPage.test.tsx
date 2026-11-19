@@ -735,6 +735,89 @@ describe('PacksPage', () => {
     expect(stackNames()).toEqual(['Brand.zip', 'Autumn.zip', 'Vanilla', 'vanilla']);
   });
 
+  it('reads the stack once when a reorder is refused as stale', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
+    let disk = resourceStack(['vanilla', 'file/Vanilla.zip', 'file/Autumn.zip']);
+    let reads = 0;
+    client.getResourceStack = async () => {
+      reads += 1;
+      return disk;
+    };
+    client.reorderResourceStack = async () => {
+      throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+    };
+    renderPage(client);
+    await screen.findByRole('list', { name: 'Stack order' });
+    const readsBefore = reads;
+
+    disk = resourceStack(['vanilla', 'file/Vanilla.zip', 'file/Autumn.zip', 'file/Brand.zip']);
+    await user.click(screen.getByRole('button', { name: 'Move Autumn.zip down' }));
+    await settle();
+
+    expect(reads - readsBefore).toBe(1);
+    expect(screen.getByRole('alert')).toHaveTextContent('the stack changed on disk');
+    expect(stackNames()).toEqual(['Brand.zip', 'Autumn.zip', 'Vanilla', 'vanilla']);
+  });
+
+  it('clears the stale-stack banner after Retry reloads the stack', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
+    let disk = resourceStack(['vanilla', 'file/Vanilla.zip', 'file/Autumn.zip']);
+    let reads = 0;
+    client.getResourceStack = async () => {
+      reads += 1;
+      return disk;
+    };
+    client.reorderResourceStack = async () => {
+      throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+    };
+    renderPage(client);
+    await screen.findByRole('list', { name: 'Stack order' });
+
+    disk = resourceStack(['vanilla', 'file/Vanilla.zip', 'file/Autumn.zip', 'file/Brand.zip']);
+    await user.click(screen.getByRole('button', { name: 'Move Autumn.zip down' }));
+    await settle();
+
+    const banner = screen.getByRole('alert');
+    expect(banner).toHaveTextContent('the stack changed on disk');
+    const readsAtBanner = reads;
+    await user.click(within(banner).getByRole('button', { name: 'Retry' }));
+    await settle();
+
+    expect(screen.queryByText('the stack changed on disk')).not.toBeInTheDocument();
+    expect(reads).toBe(readsAtBanner + 1);
+    expect(stackNames()).toEqual(['Brand.zip', 'Autumn.zip', 'Vanilla', 'vanilla']);
+  });
+
+  it('keeps the stale-stack banner when Retry cannot reload the stack', async () => {
+    const user = userEvent.setup();
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
+    let disk = resourceStack(['vanilla', 'file/Vanilla.zip', 'file/Autumn.zip']);
+    let failReload = false;
+    client.getResourceStack = async () => {
+      if (failReload) throw new IpcError('options_txt', 'options.txt is unreadable');
+      return disk;
+    };
+    client.reorderResourceStack = async () => {
+      throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+    };
+    renderPage(client);
+    await screen.findByRole('list', { name: 'Stack order' });
+
+    await user.click(screen.getByRole('button', { name: 'Move Autumn.zip down' }));
+    await settle();
+
+    const banner = screen.getByRole('alert');
+    expect(banner).toHaveTextContent('the stack changed on disk');
+    failReload = true;
+    await user.click(within(banner).getByRole('button', { name: 'Retry' }));
+    await settle();
+
+    expect(screen.getByText('the stack changed on disk')).toBeInTheDocument();
+    expect(screen.getByText('options.txt is unreadable')).toBeInTheDocument();
+  });
+
   it('reloads the stack after a toggle is refused as stale', async () => {
     const user = userEvent.setup();
     const client = makeFakeClient({ packs: [VANILLA_PACK] });
