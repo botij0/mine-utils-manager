@@ -3,7 +3,6 @@ use serde_json::Value;
 fn csp_directives(csp: &str) -> Vec<(&str, &str)> {
     csp.split(';')
         .map(str::trim)
-        .filter(|directive| !directive.is_empty())
         .map(|directive| directive.split_once(' ').unwrap_or((directive, "")))
         .collect()
 }
