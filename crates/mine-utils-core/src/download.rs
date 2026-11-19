@@ -931,7 +931,7 @@ mod tests {
     #[test]
     fn only_known_local_filesystems_allow_sweeping() {
         for local in [
-            0xef53, 0x9123683e, 0x58465342, 0xf2f52010, 0x01021994, 0x858458f6,
+            0xef53, 0x9123683e, 0x58465342, 0xf2f52010, 0x01021994, 0x858458f6, 0x2fc12fc1,
         ] {
             assert!(is_local_linux_filesystem(local), "{local:#x}");
         }

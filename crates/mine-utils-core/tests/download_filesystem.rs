@@ -52,11 +52,14 @@ fn filesystem_download_helper() {
     }
     let dest = result.unwrap().commit(dir, "pack.zip").unwrap();
     assert_eq!(std::fs::read(dest).unwrap(), bytes);
-    assert_eq!(
-        std::fs::read(dir.join(".stale.zip.mine-utils-download-4294967295-1-0.tmp")).unwrap(),
-        b"orphan"
-    );
-    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 2);
+    let stale = dir.join(".stale.zip.mine-utils-download-4294967295-1-0.tmp");
+    if std::env::var_os("DOWNLOAD_TEST_EXPECT_SWEEP").is_some() {
+        assert!(!stale.exists());
+        assert_eq!(std::fs::read_dir(dir).unwrap().count(), 1);
+    } else {
+        assert_eq!(std::fs::read(stale).unwrap(), b"orphan");
+        assert_eq!(std::fs::read_dir(dir).unwrap().count(), 2);
+    }
 }
 
 fn shim(dir: &Path) -> std::path::PathBuf {
@@ -142,6 +145,16 @@ fn sweeps_skip_remote_unknown_and_failed_filesystem_probes() {
             ],
         );
     }
+}
+
+#[test]
+fn zfs_sweeps_stale_downloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let shim = shim(dir.path());
+    check_download(&shim, &[
+        ("DOWNLOAD_TEST_FS_TYPE", "0x2fc12fc1".to_string()),
+        ("DOWNLOAD_TEST_EXPECT_SWEEP", "1".to_string()),
+    ]);
 }
 
 #[test]
