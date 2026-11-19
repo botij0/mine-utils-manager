@@ -1,5 +1,5 @@
 import type { ClientError, IpcError } from './clientTypes';
-import type { ErrorCode, ModrinthInstallOutcome, PackIssue } from './generated/wire';
+import type { ErrorCode, ModrinthInstallOutcome, PackIssue, WorldIssue } from './generated/wire';
 
 type Assert<T extends true> = T;
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends
@@ -14,6 +14,8 @@ export type RejectUnknownCode = Assert<Equal<string extends ErrorCode ? true : f
 export type ClosedClientCode = Assert<Equal<ClientError['code'], ErrorCode | 'unknown'>>;
 export type ClosedIpcCode = Assert<Equal<IpcError['code'], ErrorCode | 'unknown'>>;
 export type OmittedSymlinkPath = Assert<Equal<PackIssue['symlink_path'], string | undefined>>;
+export type ClosedPackIssueCode = Assert<Equal<'typo' extends PackIssue['code'] ? true : false, false>>;
+export type ClosedWorldIssueCode = Assert<Equal<'typo' extends WorldIssue['code'] ? true : false, false>>;
 
 export type OmittedResourceWarning = Assert<Equal<ResourceInstall['provenance_warning'], string | undefined>>;
 type DataInstall = Extract<ModrinthInstallOutcome, { kind: 'datapack' }>;
