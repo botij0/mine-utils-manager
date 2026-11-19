@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex, Once};
 use super::join_error;
 
 use mine_utils_core::{
-    discover_game_dirs, entry_for, home_dir, level_backup, merge_game_dirs, validate_game_dir,
-    AppError, BackupsConfig, Config, ConfigStore, DataPaths, GameDirEntry, StackPaths, Theme,
-    WorldPaths,
+    contains_entry, discover_game_dirs, entry_for, home_dir, is_game_dir, level_backup,
+    merge_game_dirs, validate_game_dir, AppError, BackupsConfig, Config, ConfigStore, DataPaths,
+    DiscoverySource, GameDirEntry, StackPaths, Theme, WorldPaths,
 };
 use tauri::State;
 
@@ -169,14 +169,25 @@ fn listing(config: &Config) -> Result<Vec<GameDirEntry>, AppError> {
         .iter()
         .map(|dir| dir.path.clone())
         .collect();
-    Ok(merged
+    let mut entries: Vec<_> = merged
         .into_iter()
         .map(|dir| {
             let mut entry = entry_for(&dir);
             entry.stored = stored.contains(&dir.path);
             entry
         })
-        .collect())
+        .collect();
+    if let Some(path) = config.active_game_dir.as_deref() {
+        if !contains_entry(&entries, path) && is_game_dir(path) {
+            entries.push(GameDirEntry {
+                path: path.to_path_buf(),
+                source: DiscoverySource::Manual,
+                present: true,
+                stored: false,
+            });
+        }
+    }
+    Ok(entries)
 }
 
 fn state_for(config: Config) -> Result<GameDirState, AppError> {
@@ -510,9 +521,95 @@ mod tests {
 }
 
 #[cfg(test)]
-mod last_world_tests {
+mod ipc_tests {
     use super::*;
     use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+
+    #[cfg(unix)]
+    #[test]
+    fn lists_saved_prism_dotminecraft_as_active() {
+        use serde_json::{json, Value};
+
+        const FIXTURE_HOME: &str = "MINE_UTILS_PRISM_FIXTURE_HOME";
+        const INSTANCE: &str = ".local/share/PrismLauncher/instances/both";
+        let Some(home) = std::env::var_os(FIXTURE_HOME).map(PathBuf::from) else {
+            let root = tempfile::tempdir().unwrap();
+            let home = root.path().canonicalize().unwrap();
+            let instance = home.join(INSTANCE);
+            for folder in ["minecraft", ".minecraft"] {
+                std::fs::create_dir_all(instance.join(folder).join("saves")).unwrap();
+            }
+            std::fs::write(
+                home.join("config.json"),
+                json!({ "active_game_dir": instance.join(".minecraft") }).to_string(),
+            )
+            .unwrap();
+
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "commands::game_dirs::ipc_tests::lists_saved_prism_dotminecraft_as_active",
+                ])
+                .env("HOME", &home)
+                .env(FIXTURE_HOME, &home)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&child.stdout);
+            assert!(
+                child.status.success() && stdout.contains("1 passed"),
+                "Prism fixture subprocess failed:\n{stdout}{}",
+                String::from_utf8_lossy(&child.stderr)
+            );
+            return;
+        };
+
+        assert_eq!(home_dir().unwrap(), home);
+        let config_path = home.join("config.json");
+        let config = mine_utils_core::load_config(&config_path).unwrap();
+        let app = mock_builder()
+            .manage(AppState::new(
+                ConfigStore::new(config_path, config),
+                None,
+                home.clone(),
+            ))
+            .invoke_handler(tauri::generate_handler![get_config, list_game_dirs])
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let invoke = |cmd: &str| {
+            get_ipc_response(
+                &window,
+                tauri::webview::InvokeRequest {
+                    cmd: cmd.into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: "tauri://localhost".parse().unwrap(),
+                    body: Default::default(),
+                    headers: Default::default(),
+                    invoke_key: INVOKE_KEY.into(),
+                },
+            )
+            .unwrap()
+            .deserialize::<Value>()
+            .unwrap()
+        };
+        let instance = home.join(INSTANCE);
+        let legacy = instance.join(".minecraft");
+        let modern = json!({"path": instance.join("minecraft"), "source": "prism_launcher", "present": true, "stored": false});
+        assert_eq!(invoke("get_config")["active_game_dir"], json!(legacy));
+        assert_eq!(
+            invoke("list_game_dirs"),
+            json!([
+                modern,
+                {"path": legacy, "source": "manual", "present": true, "stored": false}
+            ])
+        );
+
+        std::fs::remove_dir(legacy.join("saves")).unwrap();
+        assert_eq!(invoke("list_game_dirs"), json!([modern]));
+    }
 
     #[test]
     fn command_persists_world_to_disk() {

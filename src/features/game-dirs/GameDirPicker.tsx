@@ -25,12 +25,15 @@ export default function GameDirPicker({
     <ul className="dir-list">
       {entries.map((entry) => {
         const isActive = entry.path === activePath;
+        const sourceLabel = entry.source === 'manual' && !entry.stored
+          ? 'Saved'
+          : SOURCE_LABELS[entry.source];
         return (
           <li key={entry.path} className={isActive ? 'dir-row is-active' : 'dir-row'}>
             <div className="dir-info">
               <span className="dir-path">{entry.path}</span>
               <span className="badges">
-                <span className="badge">{SOURCE_LABELS[entry.source]}</span>
+                <span className="badge">{sourceLabel}</span>
                 <span className={entry.present ? 'badge ok' : 'badge warn'}>
                   {entry.present ? 'On disk' : 'Missing'}
                 </span>
