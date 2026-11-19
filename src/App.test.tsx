@@ -935,22 +935,27 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Worlds' })).toBeInTheDocument();
   });
 
-  it('falls back to Packs when the hash names no page', async () => {
+  it.each([
+    { label: 'Resource Packs', id: 'packs' },
+    { label: 'Worlds', id: 'worlds' },
+    { label: 'Discover', id: 'discover' },
+    { label: 'Settings', id: 'settings' },
+  ])('rewrites an unknown hash to $label in place and adds no history entry', async ({ label, id }) => {
     const user = userEvent.setup();
     const client = await shellClient();
     render(<App client={client} />);
-
-    await user.click(await screen.findByRole('button', { name: 'Worlds' }));
-    expect(await screen.findByRole('heading', { level: 1, name: 'Worlds' })).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: label }));
+    expect(await screen.findByRole('heading', { level: 1, name: label })).toBeInTheDocument();
     const entries = window.history.length;
 
-    window.location.hash = 'nonsense';
-    expect(
-      await screen.findByRole('heading', { level: 1, name: 'Resource Packs' }),
-    ).toBeInTheDocument();
-    expect(window.location.hash).toBe('#packs');
-    expect(window.history.length).toBe(entries + 1);
+    window.history.replaceState(null, '', '#nonsense');
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+
+    await waitFor(() => expect(window.location.hash).toBe(`#${id}`));
+    expect(window.history.length).toBe(entries);
+    expect(screen.getByRole('heading', { level: 1, name: label })).toBeInTheDocument();
   });
+
   it('retains the selected world across navigation', async () => {
     const user = userEvent.setup();
     const client = await shellClient();

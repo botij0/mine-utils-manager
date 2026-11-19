@@ -80,10 +80,14 @@ export default function App({ client = ipc }: AppProps) {
   }>({ busy: false, wanted: false, stale: false });
 
   useEffect(() => {
-    const onHashChange = () => setPage(pageFromHash() ?? DEFAULT_PAGE);
+    const onHashChange = () => {
+      const hashPage = pageFromHash();
+      if (hashPage) setPage(hashPage);
+      else window.history.replaceState(null, '', `#${page}`);
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
+  }, [page]);
 
   // A click to another page adds one history entry, so Back returns here. An
   // empty or unknown hash is rewritten in place, so it adds none.
