@@ -581,9 +581,9 @@ fn symlinked_options_write_returns_specific_error() {
     let path = dir.path().join("options.txt");
     std::fs::write(&target, "original").unwrap();
     std::os::unix::fs::symlink(&target, &path).unwrap();
-    let paths = resource_stack::StackPaths::for_game_dir(dir.path(), dir.path(), Default::default());
+    let paths =
+        resource_stack::StackPaths::for_game_dir(dir.path(), dir.path(), Default::default());
     let error = resource_stack::set_enabled(&paths, "Example.zip", true).unwrap_err();
-    println!("{}", serde_json::to_string(&error).unwrap());
     assert_eq!(error.code(), "options_symlink");
     assert_eq!(std::fs::read_to_string(target).unwrap(), "original");
 }
