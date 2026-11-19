@@ -571,6 +571,20 @@ pub fn set_enabled_with_guard(
     enabled: bool,
     guard: &dyn WriteGuard,
 ) -> Result<ResourceStack, AppError> {
+    let write = commit_toggle(paths, filename, enabled, guard)?;
+    if write.wrote {
+        load(paths)
+    } else {
+        resource_stack_of(paths, &write)
+    }
+}
+
+pub(crate) fn commit_toggle(
+    paths: &StackPaths,
+    filename: &str,
+    enabled: bool,
+    guard: &dyn WriteGuard,
+) -> Result<StackWrite, AppError> {
     if enabled {
         validate_filename(filename).map_err(AppError::from)?;
     }
@@ -582,12 +596,7 @@ pub fn set_enabled_with_guard(
         filename: filename.to_string(),
         enabled,
     };
-    let write = commit(paths, None, &change, guard)?;
-    if write.wrote {
-        load(paths)
-    } else {
-        Ok(resource_stack_of(paths, &write)?)
-    }
+    commit(paths, None, &change, guard)
 }
 
 /// Reorder the stack to `order`, low to high. `expected` is what the UI

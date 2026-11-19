@@ -577,8 +577,19 @@ fn outcome_is_imported(outcome: &ImportOutcome) -> bool {
 
 fn enable_resource(stack_paths: &StackPaths, outcome: &ImportOutcome) -> Result<(), AppError> {
     if let ImportOutcome::Imported { pack } = outcome {
-        let filename = crate::resource_stack::filename_for(&pack.path)?;
-        resource_stack::set_enabled(stack_paths, &filename, true)?;
+        let filename = resource_stack::filename_for(&pack.path)?;
+        let write = resource_stack::commit_toggle(
+            stack_paths,
+            &filename,
+            true,
+            &resource_stack::SystemGuard,
+        );
+        write.map_err(|err| {
+            let path = pack.path.display();
+            err.with_context(format!(
+                "The pack was installed at {path} but not enabled. Enable it in Minecraft."
+            ))
+        })?;
     }
     Ok(())
 }
