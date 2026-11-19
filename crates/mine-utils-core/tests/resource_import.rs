@@ -136,6 +136,29 @@ fn replace_onto_an_incompatible_pack_already_listed_keeps_one_entry_at_the_old_i
     );
 }
 
+#[test]
+fn replace_with_old_name_listed_twice_leaves_one_new_entry_at_the_first_old_index() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.paths.options_path(),
+        "music:0.4\nresourcePacks:[\"vanilla\",\"file/Faithful\",\"fabric\",\"file/Faithful\"]\nincompatibleResourcePacks:[\"file/Faithful\",\"fabric\",\"file/Faithful\"]\n",
+    )
+    .unwrap();
+    let outcome = resource_stack::import_pack_safely(
+        &fixture.paths,
+        &fixture.source,
+        ImportChoice::Replace,
+        &fixture.icons,
+        &HashCache::new(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, ImportOutcome::Imported { .. }));
+    assert_eq!(
+        std::fs::read_to_string(fixture.paths.options_path()).unwrap(),
+        "music:0.4\nresourcePacks:[\"vanilla\",\"file/Faithful-1.21\",\"fabric\"]\nincompatibleResourcePacks:[\"file/Faithful-1.21\",\"fabric\"]\n"
+    );
+}
+
 struct FailingGuard {
     calls: Cell<usize>,
     fail_at: usize,
