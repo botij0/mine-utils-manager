@@ -203,7 +203,7 @@ describe('App', () => {
     });
 
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Restore / })).toBeEnabled());
     expect(screen.queryByText('Game guard unavailable.')).not.toBeInTheDocument();
   });
 
@@ -274,12 +274,12 @@ describe('App', () => {
     ).toBeInTheDocument();
     await answerFor('/home/demo/.minecraft');
 
-    const restore = await screen.findByRole('button', { name: 'Restore' });
+    const restore = await screen.findByRole('button', { name: /^Restore / });
     expect(restore).toBeDisabled();
     expect(restore).toHaveAttribute('title', 'Checking whether Minecraft is running');
 
     await answerFor('/home/demo/prism');
-    expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Restore / })).toBeEnabled();
   });
 
   it('shows a neutral checking line while the check a folder switch sent is pending', async () => {
@@ -375,7 +375,7 @@ describe('App', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Skip for now' }));
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Restore / })).toBeEnabled());
     await waitFor(() => expect(checkedDirs).toEqual([null, null]));
 
     await act(async () => {
@@ -389,7 +389,7 @@ describe('App', () => {
       vi.advanceTimersByTime(15000);
     });
 
-    const restore = screen.getByRole('button', { name: 'Restore' });
+    const restore = screen.getByRole('button', { name: /^Restore / });
     expect(checkedDirs).toEqual([null, null]);
     expect(restore).toBeDisabled();
     expect(restore).toHaveAttribute('title', 'Checking whether Minecraft is running');
@@ -538,7 +538,7 @@ describe('App', () => {
     render(<App client={client} />);
 
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Restore / })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: /^Use / }));
     await waitFor(() =>
       expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/prism']),
@@ -547,7 +547,7 @@ describe('App', () => {
     await act(async () => {
       vi.advanceTimersByTime(15000);
     });
-    const restore = screen.getByRole('button', { name: 'Restore' });
+    const restore = screen.getByRole('button', { name: /^Restore / });
     expect(restore).toBeDisabled();
     expect(restore).toHaveAttribute('title', 'Mine Utils could not check whether Minecraft is running');
 
@@ -563,7 +563,7 @@ describe('App', () => {
       settleHung();
     });
     expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/prism', '/home/demo/prism']);
-    expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Restore / })).toBeEnabled();
   });
 
   it('shows unknown one window after a folder switch finds a timed-out check still hung', async () => {
@@ -590,14 +590,14 @@ describe('App', () => {
     render(<App client={client} />);
 
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Restore / })).toBeEnabled());
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
     await act(async () => {
       vi.advanceTimersByTime(15000);
     });
-    expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /^Restore / })).toHaveAttribute(
       'title',
       'Mine Utils could not check whether Minecraft is running',
     );
@@ -608,7 +608,7 @@ describe('App', () => {
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
     ).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+      expect(screen.getByRole('button', { name: /^Restore / })).toHaveAttribute(
         'title',
         'Checking whether Minecraft is running',
       ),
@@ -617,14 +617,14 @@ describe('App', () => {
     await act(async () => {
       vi.advanceTimersByTime(10000);
     });
-    expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /^Restore / })).toHaveAttribute(
       'title',
       'Checking whether Minecraft is running',
     );
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
-    const restore = screen.getByRole('button', { name: 'Restore' });
+    const restore = screen.getByRole('button', { name: /^Restore / });
     expect(restore).toBeDisabled();
     expect(restore).toHaveAttribute('title', 'Mine Utils could not check whether Minecraft is running');
     expect(checkedDirs).toEqual(['/home/demo/.minecraft', '/home/demo/.minecraft']);
@@ -637,7 +637,7 @@ describe('App', () => {
       '/home/demo/.minecraft',
       '/home/demo/prism',
     ]);
-    expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Restore / })).toBeEnabled();
   });
 
   it('sends no guard request until a window that starts hidden is shown', async () => {
@@ -718,12 +718,12 @@ describe('App', () => {
     const calls = holdGuardCalls(client);
     render(<App client={client} />);
 
-    expect(await screen.findByRole('button', { name: 'Restore' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Restore / })).toBeInTheDocument();
     for (let trip = 0; trip < 4; trip += 1) {
       await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
       await screen.findByRole('list', { name: 'Stack order' });
       await user.click(screen.getByRole('button', { name: 'Settings' }));
-      await screen.findByRole('button', { name: 'Restore' });
+      await screen.findByRole('button', { name: /^Restore / });
     }
     await user.click(screen.getByRole('button', { name: /^Use / }));
     expect(
@@ -744,7 +744,7 @@ describe('App', () => {
     const calls = holdGuardCalls(client);
     render(<App client={client} />);
 
-    const restore = await screen.findByRole('button', { name: 'Restore' });
+    const restore = await screen.findByRole('button', { name: /^Restore / });
     await act(async () => {});
     expect(restore).toBeDisabled();
     expect(restore).toHaveAttribute('title', 'Checking whether Minecraft is running');
@@ -752,7 +752,7 @@ describe('App', () => {
     await act(async () => {
       for (const call of calls) call.answer(null);
     });
-    expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Restore / })).toBeEnabled();
   });
   it('blocks Packs and Worlds writes with the checking reason until the first guard answer lands', async () => {
     const user = userEvent.setup();
@@ -817,12 +817,12 @@ describe('App', () => {
     const calls = holdGuardCalls(client);
     render(<App client={client} />);
 
-    await screen.findByRole('button', { name: 'Restore' });
+    await screen.findByRole('button', { name: /^Restore / });
     await waitFor(() => expect(calls).toHaveLength(1));
     await act(async () => {
       vi.advanceTimersByTime(15000);
     });
-    expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /^Restore / })).toHaveAttribute(
       'title',
       'Mine Utils could not check whether Minecraft is running',
     );
@@ -835,7 +835,7 @@ describe('App', () => {
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
     ).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+      expect(screen.getByRole('button', { name: /^Restore / })).toHaveAttribute(
         'title',
         'Checking whether Minecraft is running',
       ),
@@ -844,7 +844,7 @@ describe('App', () => {
     await act(async () => {
       vi.advanceTimersByTime(15000);
     });
-    expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /^Restore / })).toHaveAttribute(
       'title',
       'Mine Utils could not check whether Minecraft is running',
     );
@@ -864,7 +864,7 @@ describe('App', () => {
     const calls = holdGuardCalls(client);
     render(<App client={client} />);
 
-    await screen.findByRole('button', { name: 'Restore' });
+    await screen.findByRole('button', { name: /^Restore / });
     await user.click(screen.getByRole('button', { name: /^Use / }));
     expect(
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
@@ -878,7 +878,7 @@ describe('App', () => {
     await act(async () => {
       calls[0].answer(RUNNING);
     });
-    const restore = await screen.findByRole('button', { name: 'Restore' });
+    const restore = await screen.findByRole('button', { name: /^Restore / });
     expect(restore).toBeDisabled();
     expect(restore).toHaveAttribute('title', 'Checking whether Minecraft is running');
     expect(calls.map((call) => call.dir)).toEqual(['/home/demo/.minecraft', '/home/demo/.minecraft']);
@@ -886,7 +886,7 @@ describe('App', () => {
     await act(async () => {
       calls[1].answer(null);
     });
-    expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Restore / })).toBeEnabled();
   });
 
   it('sends nothing and leaves no timer after unmount', async () => {

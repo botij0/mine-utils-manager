@@ -81,6 +81,7 @@ export default function ActiveStack({
 
   const indexOfId = (id: UniqueIdentifier) => ids.indexOf(String(id));
   const draggedLabel = useRef('');
+  const pendingPickup = useRef<string | null>(null);
   const labelOf = (id: UniqueIdentifier) => {
     const entry = uiEntries[indexOfId(id)];
     if (!entry) return draggedLabel.current;
@@ -95,13 +96,19 @@ export default function ActiveStack({
   const announcements: Announcements = {
     onDragStart: ({ active }) => {
       draggedLabel.current = labelOf(active.id);
-      return `Picked up ${labelOf(active.id)}, ${positionOf(active.id)}.`;
+      const text = `Picked up ${labelOf(active.id)}, ${positionOf(active.id)}.`;
+      pendingPickup.current = text;
+      return text;
     },
     onDragOver: ({ active, over }) => {
-      if (!inStack(active.id)) return gone(active.id);
-      return over && inStack(over.id)
-        ? `${labelOf(active.id)} is over ${positionOf(over.id)}.`
-        : `${labelOf(active.id)} is not over a position.`;
+      const overText = !inStack(active.id)
+        ? gone(active.id)
+        : over && inStack(over.id)
+          ? `${labelOf(active.id)} is over ${positionOf(over.id)}.`
+          : `${labelOf(active.id)} is not over a position.`;
+      const pickup = pendingPickup.current;
+      pendingPickup.current = null;
+      return pickup ? `${pickup} ${overText}` : overText;
     },
     onDragEnd: ({ active, over }) => {
       if (!inStack(active.id)) return `Dropped. ${gone(active.id)}`;

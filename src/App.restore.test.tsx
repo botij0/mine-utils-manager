@@ -40,7 +40,7 @@ it('reloads Packs after an options backup is restored in Settings', async () => 
   await screen.findByLabelText('Search packs');
   await user.click(screen.getByRole('button', { name: 'Settings' }));
   const options = await screen.findByRole('region', { name: 'Options backups' });
-  const restore = () => within(options).getAllByRole('button', { name: 'Restore' })[0];
+  const restore = () => within(options).getAllByRole('button', { name: /^Restore / })[0];
   await waitFor(() => expect(restore()).toBeEnabled());
   const before = listPacks.mock.calls.length;
   await user.click(restore());
@@ -58,9 +58,9 @@ it('reloads Worlds after a level backup is restored in Settings', async () => {
   await screen.findByRole('list', { name: 'Datapack stack' });
   await user.click(screen.getByRole('button', { name: 'Settings' }));
   const group = await screen.findByRole('region', { name: 'Survival backups' });
-  await waitFor(() => expect(within(group).getByRole('button', { name: 'Restore' })).toBeEnabled());
+  await waitFor(() => expect(within(group).getByRole('button', { name: /^Restore / })).toBeEnabled());
   const before = listDatapacks.mock.calls.length;
-  await user.click(within(group).getByRole('button', { name: 'Restore' }));
+  await user.click(within(group).getByRole('button', { name: /^Restore / }));
   await screen.findByText(/^Restored .* for Survival\./);
   await user.click(screen.getByRole('button', { name: 'Worlds' }));
   await waitFor(() => expect(listDatapacks).toHaveBeenCalledTimes(before + 1));

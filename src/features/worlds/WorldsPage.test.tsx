@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorldsClient } from '../../lib/ipc';
+import { mockClient, resetMockWorlds } from '../../lib/ipc.mock';
 import { IpcError, type DataSnapshot, type GameRunning } from '../../lib/types';
 import { worldsClient } from '../../test/fake-ipc';
 import { datapack, datapackListing, stack, stackEntry, world } from '../../test/fake-packs';
@@ -380,6 +381,51 @@ describe('WorldsPage', () => {
     const grid = await screen.findByRole('list', { name: 'Datapack stack' });
     expect(within(grid).getByText('Broken datapack')).toBeInTheDocument();
     expect(within(grid).getByText('broken.zip is not readable')).toBeInTheDocument();
+  });
+
+  it('describes a broken datapack card with its error', async () => {
+    const brokenClient = pageClient({
+      listDatapacks: async () => ({
+        packs: {
+          packs: [BROKEN_DATAPACK],
+          count: 1, holding_entries: [],
+          bytes_read: 8,
+          elapsed_ms: 1,
+        },
+        stack: stack({
+          enabled: [{ kind: 'file', value: 'file/broken.zip', filename: 'broken.zip' }],
+          disabled: [],
+        }),
+      }),
+    });
+    render(<WorldsPage client={brokenClient} gameRunning={null} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    expect(
+      within(grid).getByRole('button', {
+        name: 'broken.zip, broken',
+        description: 'broken.zip is not readable',
+      }),
+    ).toHaveAccessibleDescription('broken.zip is not readable');
+  });
+
+  it('shows a broken datapack from the browser mock', async () => {
+    const previous = window.localStorage.getItem('mine-utils:config');
+    resetMockWorlds();
+    try {
+      await mockClient.setActiveGameDir('/home/demo/.minecraft');
+      render(
+        <WorldsPage client={mockClient} gameRunning={null} gameDir="/home/demo/.minecraft" />,
+      );
+      const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+      expect(within(grid).getByRole('button', { name: 'broken-loot.zip, broken' })).toBeInTheDocument();
+      expect(
+        within(grid).getByText('broken-loot.zip is not a readable pack: invalid Zip archive'),
+      ).toBeInTheDocument();
+    } finally {
+      if (previous === null) window.localStorage.removeItem('mine-utils:config');
+      else window.localStorage.setItem('mine-utils:config', previous);
+      resetMockWorlds();
+    }
   });
 
   it('keeps broken datapack errors out of the alert role and sums them up once', async () => {
