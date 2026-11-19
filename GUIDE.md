@@ -170,6 +170,14 @@ Pack files copied directly into `datapacks` still appear even when `level.dat` d
 
 Mine Utils compares the world's data format with each pack's declared format range. A warning helps you spot a possible mismatch before launching the world. Select a datapack to see its format and compatibility details.
 
+Mine Utils checks a datapack only when both its declared range and the world's data format are known. These cases are not checked:
+
+- A world whose Minecraft version is newer than the format table. The world header says the version is newer than this build knows, names the newest version it does know, and says datapack compatibility is not checked.
+- A world whose version name the table does not list, such as a version before 1.13. The world header says Mine Utils does not know the data format of that version, and that datapack compatibility is not checked.
+- A datapack that declares no format range. Its row and details show no warning.
+
+In the first two cases, no datapack row shows a warning chip, and the details show no "This world needs data format" line. A missing warning does not mean a datapack is compatible.
+
 A warning is different from a broken-pack error. A broken pack cannot be inspected normally, but an enabled broken datapack can still be disabled so you can recover the world.
 
 ### Remove a missing reference
