@@ -24,6 +24,27 @@ const PAGES: { id: PageId; label: string }[] = [
 
 const DEFAULT_PAGE: PageId = 'packs';
 
+function processProbeBanner(
+  processProbeAvailable: boolean | undefined,
+  lockDetectionSupported: boolean | undefined,
+  guardPause: 'checking' | 'unknown' | null,
+  gameRunning: GameRunning | null | undefined,
+) {
+  if (
+    processProbeAvailable !== false ||
+    lockDetectionSupported !== true ||
+    guardPause !== null ||
+    gameRunning
+  ) {
+    return null;
+  }
+  return (
+    <div className="banner" role="status">
+      Minecraft process detection is unavailable. Session locks are still checked; writes are allowed.
+    </div>
+  );
+}
+
 function pageFromHash(): PageId | null {
   const hash = window.location.hash.replace('#', '');
   return PAGES.some((item) => item.id === hash) ? (hash as PageId) : null;
@@ -58,7 +79,8 @@ export default function App({ client = ipc }: AppProps) {
   // Undefined until the first check lands, so the pages can tell "not yet
   // checked" apart from a fresh "not running" result.
   const [gameRunning, setGameRunning] = useState<GameRunning | null | undefined>(undefined);
-  const [processProbeAvailable, setProcessProbeAvailable] = useState(true);
+  const [processProbeAvailable, setProcessProbeAvailable] = useState<boolean | undefined>(true);
+  const [lockDetectionSupported, setLockDetectionSupported] = useState<boolean | undefined>(true);
   const [guardPause, setGuardPause] = useState<'checking' | 'unknown' | null>(null);
   // True once the stored config lands, so onboarding only shows for a real
   // first run and never for the default placeholder.
@@ -138,6 +160,7 @@ export default function App({ client = ipc }: AppProps) {
           settle(() => {
             setGameRunning(guardStatus.running);
             setProcessProbeAvailable(guardStatus.process_probe_available);
+            setLockDetectionSupported(guardStatus.detection_supported);
             setGuardPause(null);
           }),
         // Keep the last known value: only a successful check may clear it.
@@ -230,9 +253,12 @@ export default function App({ client = ipc }: AppProps) {
     return (
       <div className="app">
         <main className="content">
-          {!processProbeAvailable && guardPause === null && !gameRunning ? (
-            <div className="banner" role="status">Minecraft process detection is unavailable. Session locks are still checked; writes are allowed.</div>
-          ) : null}
+          {processProbeBanner(
+            processProbeAvailable,
+            lockDetectionSupported,
+            guardPause,
+            gameRunning,
+          )}
           <Onboarding client={client} onDone={finishOnboarding} />
         </main>
       </div>
@@ -276,9 +302,12 @@ export default function App({ client = ipc }: AppProps) {
           </button>
         </header>
         <main className="content">
-          {!processProbeAvailable && guardPause === null && !gameRunning ? (
-            <div className="banner" role="status">Minecraft process detection is unavailable. Session locks are still checked; writes are allowed.</div>
-          ) : null}
+          {processProbeBanner(
+            processProbeAvailable,
+            lockDetectionSupported,
+            guardPause,
+            gameRunning,
+          )}
           {error ? (
             <p className="error" role="alert">
               {error.message}

@@ -49,7 +49,15 @@ pub struct GameStatus {
     /// False when the platform cannot probe POSIX locks. The fallback reports
     /// unsupported instead of pretending the game is closed.
     pub supported: bool,
+    /// False only after a process listing fails. A skipped scan stays true, and
+    /// a payload that omits the field decodes as true, so neither looks like a
+    /// failed probe.
+    #[serde(default = "process_probe_available_when_absent")]
     pub process_probe_available: bool,
+}
+
+pub(crate) fn process_probe_available_when_absent() -> bool {
+    true
 }
 
 impl GameStatus {
@@ -58,7 +66,7 @@ impl GameStatus {
             running: None,
             stale_locks: Vec::new(),
             supported,
-            process_probe_available: false,
+            process_probe_available: process_probe_available_when_absent(),
         }
     }
 }
@@ -78,8 +86,6 @@ pub fn check_in(game_dir: &Path, proc_root: &Path) -> GameStatus {
     check_in_with(game_dir, proc_root, lock_detection_supported())
 }
 
-/// `locks_supported` is false on platforms that cannot probe POSIX locks.
-/// Callers on those platforms return before the process listing.
 fn check_in_with(game_dir: &Path, proc_root: &Path, locks_supported: bool) -> GameStatus {
     let mut status = GameStatus::idle(locks_supported);
     if !status.supported {
@@ -92,7 +98,7 @@ fn check_in_with(game_dir: &Path, proc_root: &Path, locks_supported: bool) -> Ga
     }
     match process_check(game_dir, proc_root) {
         Ok(running) => {
-            status.process_probe_available = true;
+            status.process_probe_available = process_probe_available_when_absent();
             status.running = running;
         }
         Err(_) => status.process_probe_available = false,
@@ -298,9 +304,7 @@ fn client_from_proc_entries(
     let canonical_game_dir = std::fs::canonicalize(game_dir).ok();
     let mut pids = Vec::new();
     for entry in entries {
-        let Ok(path) = entry else {
-            continue;
-        };
+        let path = entry?;
         if path
             .file_name()
             .and_then(|name| name.to_str())
@@ -461,6 +465,17 @@ mod tests {
         }))
         .unwrap();
         assert!(status.process_probe_available);
+    }
+
+    #[test]
+    fn guard_without_process_probe_available_deserializes_as_available() {
+        let guard: crate::wire::GameGuard = serde_json::from_value(serde_json::json!({
+            "running": null,
+            "stale_locks": [],
+            "detection_supported": true
+        }))
+        .unwrap();
+        assert!(guard.process_probe_available);
     }
 
     #[test]

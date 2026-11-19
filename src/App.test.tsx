@@ -104,7 +104,7 @@ describe('App', () => {
           running: null,
           stale_locks: [],
           detection_supported: true,
-        } as GameGuard);
+        } as unknown as GameGuard);
       }
     });
     expect(screen.queryByText(/Minecraft process detection is unavailable/)).not.toBeInTheDocument();
