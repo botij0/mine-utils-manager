@@ -1,6 +1,10 @@
 //! Download verification tests. The CDN is mocked; nothing here touches
 //! the network.
 
+#[cfg(unix)]
+#[path = "support/sweep_eligible.rs"]
+mod sweep_eligible;
+
 use std::io::{Cursor, Read, Write};
 use std::sync::{Arc, Mutex};
 
@@ -480,6 +484,9 @@ fn download_sweeps_only_stale_regular_download_temps() {
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir().unwrap();
+    if !sweep_eligible::eligible(dir.path()) {
+        return;
+    }
     let mut foreign = std::process::Command::new("sleep")
         .arg("60")
         .spawn()

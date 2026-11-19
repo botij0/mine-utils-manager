@@ -1,5 +1,9 @@
 #![cfg(target_os = "linux")]
 
+#[cfg(unix)]
+#[path = "support/sweep_eligible.rs"]
+mod sweep_eligible;
+
 use std::io::{Cursor, Write};
 use std::path::Path;
 use std::process::Command;
@@ -130,6 +134,7 @@ fn sweeps_skip_remote_unknown_and_failed_filesystem_probes() {
     let dir = tempfile::tempdir().unwrap();
     let shim = shim(dir.path());
     for fs_type in [
+        "0x794c7630",
         "0x65735546",
         "0x6969",
         "0xff534d42",
@@ -151,10 +156,13 @@ fn sweeps_skip_remote_unknown_and_failed_filesystem_probes() {
 fn zfs_sweeps_stale_downloads() {
     let dir = tempfile::tempdir().unwrap();
     let shim = shim(dir.path());
-    check_download(&shim, &[
-        ("DOWNLOAD_TEST_FS_TYPE", "0x2fc12fc1".to_string()),
-        ("DOWNLOAD_TEST_EXPECT_SWEEP", "1".to_string()),
-    ]);
+    check_download(
+        &shim,
+        &[
+            ("DOWNLOAD_TEST_FS_TYPE", "0x2fc12fc1".to_string()),
+            ("DOWNLOAD_TEST_EXPECT_SWEEP", "1".to_string()),
+        ],
+    );
 }
 
 #[test]
@@ -264,6 +272,9 @@ fn cleanup_keeps_its_directory_when_the_parent_swaps_at_unlink() {
             .args(["--exact", "cleanup_parent_swap_helper", "--nocapture"])
             .env("LD_PRELOAD", &shim)
             .env("CLEANUP_TEST_ROOT", game.path());
+        if sweep && !sweep_eligible::eligible(game.path()) {
+            continue;
+        }
         if sweep {
             command.env("CLEANUP_TEST_SWEEP", "1");
         }
