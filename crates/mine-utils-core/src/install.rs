@@ -10,6 +10,8 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use serde::de::value::{Error as DeserializeError, StrDeserializer};
+use serde::Deserialize;
 use sha2::{Digest, Sha256, Sha512};
 
 use crate::data_stack::{self, DataPaths, DatapackImportOutcome};
@@ -29,13 +31,11 @@ use crate::{HashCache, IconCache};
 /// Parse the wire install kind. The frontend sends `resourcepack` (one word,
 /// matching the Modrinth project type) or `datapack`.
 pub fn parse_install_kind(kind: &str) -> Result<SearchKind, ModrinthError> {
-    match kind {
-        "resourcepack" => Ok(SearchKind::ResourcePack),
-        "datapack" => Ok(SearchKind::Datapack),
-        other => Err(ModrinthError::Parse {
-            reason: format!("unknown project type {other:?}; want resourcepack or datapack"),
-        }),
-    }
+    SearchKind::deserialize(StrDeserializer::<DeserializeError>::new(kind)).map_err(|_| {
+        ModrinthError::Parse {
+            reason: format!("unknown project type {kind:?}; want resourcepack or datapack"),
+        }
+    })
 }
 
 /// Where the verified bytes came from.

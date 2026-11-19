@@ -17,6 +17,8 @@ use mine_utils_core::{
     preferred_launcher_version, world, AppError, ModrinthClient, ModrinthError, ModrinthProject,
     ModrinthVersion, ReqwestTransport, SearchQuery, SearchSort,
 };
+use serde::de::value::{Error as DeserializeError, StrDeserializer};
+use serde::Deserialize;
 use tauri::State;
 
 use super::game_dirs::AppState;
@@ -122,16 +124,11 @@ pub fn cancel_modrinth_install(mods: State<'_, ModrinthState>, install_id: Strin
 }
 
 fn parse_sort(sort: &str) -> Result<SearchSort, ModrinthError> {
-    match sort {
-        "relevance" => Ok(SearchSort::Relevance),
-        "downloads" => Ok(SearchSort::Downloads),
-        "follows" => Ok(SearchSort::Follows),
-        "newest" => Ok(SearchSort::Newest),
-        "updated" => Ok(SearchSort::Updated),
-        other => Err(ModrinthError::Parse {
-            reason: format!("unknown sort {other:?}"),
-        }),
-    }
+    SearchSort::deserialize(StrDeserializer::<DeserializeError>::new(sort)).map_err(|_| {
+        ModrinthError::Parse {
+            reason: format!("unknown sort {sort:?}"),
+        }
+    })
 }
 
 fn build_search_query(
@@ -145,7 +142,9 @@ fn build_search_query(
         text,
         kind: parse_install_kind(&kind)?,
         game_version,
-        sort: parse_sort(sort.as_deref().unwrap_or("relevance"))?,
+        sort: sort
+            .as_deref()
+            .map_or(Ok(SearchSort::Relevance), parse_sort)?,
         limit: SEARCH_PAGE_SIZE,
         offset,
     })

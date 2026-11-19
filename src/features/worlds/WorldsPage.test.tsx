@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorldsClient } from '../../lib/ipc';
 import { mockClient, resetMockWorlds } from '../../lib/ipc.mock';
-import { IpcError, type DataSnapshot, type GameRunning } from '../../lib/types';
+import { IpcError, type DataSnapshot, type GameRunning, type Pack } from '../../lib/types';
 import { worldsClient } from '../../test/fake-ipc';
 import { datapack, datapackListing, stack, stackEntry, world } from '../../test/fake-packs';
 import WorldsPage from './WorldsPage';
@@ -429,7 +429,7 @@ describe('WorldsPage', () => {
   });
 
   it('keeps broken datapack errors out of the alert role and sums them up once', async () => {
-    const otherBroken = {
+    const otherBroken: Pack = {
       ...BROKEN_DATAPACK,
       id: '/saves/Survival/other.zip',
       name: 'other',

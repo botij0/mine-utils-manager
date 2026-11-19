@@ -194,12 +194,47 @@ pub struct PackIcon {
     pub path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
+pub enum PackIssueCode {
+    PackNonUtf8Name,
+    PackUnknownKind,
+    PackBrokenArchive,
+    PackMissingMeta,
+    PackSymlink,
+    PackDuplicate,
+    PackNameCollision,
+    PackNotFound,
+    PackOutsideRoot,
+    PackTrash,
+}
+
+impl From<&PackError> for PackIssueCode {
+    fn from(error: &PackError) -> Self {
+        match error {
+            PackError::NonUtf8Name { .. } => Self::PackNonUtf8Name,
+            PackError::UnknownKind { .. } => Self::PackUnknownKind,
+            PackError::BrokenArchive { .. } | PackError::InvalidHolding { .. } => {
+                Self::PackBrokenArchive
+            }
+            PackError::MissingMeta { .. } => Self::PackMissingMeta,
+            PackError::Symlink { .. } => Self::PackSymlink,
+            PackError::Duplicate { .. } => Self::PackDuplicate,
+            PackError::NameCollision { .. } => Self::PackNameCollision,
+            PackError::NotFound { .. } => Self::PackNotFound,
+            PackError::OutsideRoot { .. } => Self::PackOutsideRoot,
+            PackError::Trash { .. } => Self::PackTrash,
+        }
+    }
+}
+
 /// A broken pack still shows up in a listing, with `error` set and the fields
 /// the scan managed to read. One bad archive never hides the rest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct PackIssue {
-    pub code: String,
+    pub code: PackIssueCode,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "wire-types", ts(optional))]

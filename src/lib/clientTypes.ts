@@ -14,7 +14,6 @@ export type ModrinthInstallOutcome =
   | Extract<Wire.ModrinthInstallOutcome, { kind: 'datapack' }>;
 export type DataStackEntry = Wire.StackEntry;
 export type StackGuard = Pick<Wire.GameGuard, 'running' | 'stale_locks' | 'detection_supported'>;
-export type PackIssueCode = Wire.PackIssue['code'];
 
 export type ClientErrorCode = Wire.ErrorCode | 'unknown';
 export type ClientError = Omit<Wire.AppError, 'code'> & {

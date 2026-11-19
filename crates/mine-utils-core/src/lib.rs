@@ -83,4 +83,6 @@ pub use world::{World, WorldIssue, WorldPaths, WorldVersion};
 
 pub mod error_code;
 pub mod wire;
+#[cfg(feature = "wire-types")]
+pub mod wire_exports;
 pub use error_code::ErrorCode;

@@ -95,7 +95,7 @@ fn corrupt_gzip_is_an_error_card() {
         .issue
         .as_ref()
         .expect("corrupt world has an issue");
-    assert_eq!(issue.code, "level_dat");
+    assert_eq!(serde_json::to_vec(&issue.code).unwrap(), br#""level_dat""#);
     assert!(worlds[0].version.is_none());
 }
 

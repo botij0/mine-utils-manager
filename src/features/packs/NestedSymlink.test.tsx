@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import type { PackIssue } from '../../lib/types';
 import { pack } from '../../test/fake-packs';
 import PackDetail from './PackDetail';
 import DatapackDetail from '../worlds/DatapackDetail';
@@ -12,7 +13,7 @@ const error = {
   code: 'pack_symlink',
   message: '/packs/Linked/data/link is a symlink; pack sources must be real files and dirs',
   symlink_path: '/packs/Linked/data/link',
-};
+} satisfies PackIssue;
 const nested = pack('Linked', {
   path, location: 'directory', kind: 'unknown', error,
 });

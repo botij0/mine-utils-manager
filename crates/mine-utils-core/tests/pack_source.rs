@@ -1,3 +1,4 @@
+use mine_utils_core::pack::PackIssueCode;
 use std::io::Write;
 use std::path::Path;
 
@@ -99,14 +100,17 @@ fn zip_and_folder_metadata_share_the_cap() {
         let codes: Vec<_> = listing
             .packs
             .iter()
-            .map(|p| p.error.as_ref().map(|e| e.code.as_str()))
+            .map(|p| p.error.as_ref().map(|e| e.code))
             .collect();
         if size == 1024 * 1024 {
             assert_eq!(codes, vec![None, None]);
         } else {
             assert_eq!(
                 codes,
-                vec![Some("pack_broken_archive"), Some("pack_broken_archive")]
+                vec![
+                    Some(PackIssueCode::PackBrokenArchive),
+                    Some(PackIssueCode::PackBrokenArchive)
+                ]
             );
         }
     }
@@ -138,7 +142,7 @@ fn scan_and_hash_reject_nested_folder_symlinks() {
         .unwrap()
         .packs
         .remove(0);
-    assert_eq!(card.error.map(|e| e.code), Some("pack_symlink".into()));
+    assert_eq!(card.error.map(|e| e.code), Some(PackIssueCode::PackSymlink));
     assert_eq!(
         HashCache::new()
             .hash(&source, PackLocation::Directory)
@@ -174,7 +178,16 @@ fn source_entrypoint_receipt() {
         let row = format!(
             "{} | {} | {} | {}",
             card.name,
-            card.error.as_ref().map_or("ok", |e| &e.code),
+            card.error.as_ref().map_or_else(
+                || "ok".into(),
+                |issue| {
+                    serde_json::to_value(issue.code)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }
+            ),
             hash,
             import(path, root.path())
         );
@@ -231,7 +244,10 @@ fn zip_and_folder_root_symlinks_are_never_read() {
         .into_iter()
         .map(|card| card.error.unwrap().code)
         .collect();
-    assert_eq!(codes, vec!["pack_symlink", "pack_symlink"]);
+    assert_eq!(
+        codes,
+        vec![PackIssueCode::PackSymlink, PackIssueCode::PackSymlink]
+    );
 }
 
 #[test]
@@ -249,7 +265,10 @@ fn zip_metadata_cap_uses_actual_bytes_when_declared_size_is_false() {
     let packs = scan_packs(root.path(), &IconCache::new(&root.path().join("icons")))
         .unwrap()
         .packs;
-    assert_eq!(packs[0].error.as_ref().unwrap().code, "pack_broken_archive");
+    assert_eq!(
+        packs[0].error.as_ref().unwrap().code,
+        PackIssueCode::PackBrokenArchive
+    );
     assert!(packs[0]
         .error
         .as_ref()
@@ -329,13 +348,13 @@ fn folder_metadata_and_icon_that_are_not_regular_files_are_skipped_without_block
         vec![
             (
                 "DirMeta".to_string(),
-                Some("pack_missing_meta".to_string()),
+                Some(PackIssueCode::PackMissingMeta),
                 false
             ),
             ("FifoIcon".to_string(), None, false),
             (
                 "FifoMeta".to_string(),
-                Some("pack_missing_meta".to_string()),
+                Some(PackIssueCode::PackMissingMeta),
                 false
             ),
         ]
@@ -378,7 +397,7 @@ fn fifo_zip_does_not_block_resource_or_datapack_scans() {
         assert_eq!(
             rows,
             vec![
-                ("Evil".into(), Some("pack_broken_archive".into())),
+                ("Evil".into(), Some(PackIssueCode::PackBrokenArchive)),
                 ("Good".into(), None),
             ]
         );
