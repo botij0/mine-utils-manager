@@ -456,10 +456,12 @@ describe('WorldsPage', () => {
       expect(within(card).queryByRole('alert')).not.toBeInTheDocument();
     }
     expect(within(grid).getByRole('button', { name: 'Disable broken.zip' })).toBeEnabled();
-    const summaries = screen
-      .getAllByRole('status')
-      .filter((node) => node.textContent === '2 broken datapacks');
-    expect(summaries).toHaveLength(1);
+    await waitFor(() => {
+      const summaries = screen
+        .getAllByRole('status')
+        .filter((node) => node.textContent === '2 broken datapacks');
+      expect(summaries).toHaveLength(1);
+    });
   });
 
   it('names each datapack toggle after its file', async () => {
