@@ -81,6 +81,14 @@ impl WorldPaths {
     }
 
     pub fn for_world(game_dir: &Path, world: &str) -> Result<WorldPaths, crate::error::AppError> {
+        Self::for_world_with(game_dir, world, Path::canonicalize)
+    }
+
+    fn for_world_with(
+        game_dir: &Path,
+        world: &str,
+        canonicalize_world: impl FnOnce(&Path) -> std::io::Result<PathBuf>,
+    ) -> Result<WorldPaths, crate::error::AppError> {
         if world.is_empty()
             || world == "."
             || world == ".."
@@ -93,7 +101,7 @@ impl WorldPaths {
             });
         }
         let world_dir = game_dir.join("saves").join(world);
-        let resolved = resolve_inside_saves(game_dir, &world_dir)?;
+        let resolved = resolve_inside_saves(game_dir, &world_dir, canonicalize_world)?;
         Ok(WorldPaths {
             game_dir: game_dir.to_path_buf(),
             world_dir: resolved,
@@ -108,6 +116,7 @@ impl WorldPaths {
 fn resolve_inside_saves(
     game_dir: &Path,
     world_dir: &Path,
+    canonicalize_world: impl FnOnce(&Path) -> std::io::Result<PathBuf>,
 ) -> Result<PathBuf, crate::error::AppError> {
     let reject = |reason: String| {
         Err(crate::error::AppError::World {
@@ -122,7 +131,7 @@ fn resolve_inside_saves(
     let canonical_game = std::fs::canonicalize(game_dir).unwrap_or_else(|_| game_dir.to_path_buf());
     let canonical_saves = std::fs::canonicalize(canonical_game.join("saves"))
         .unwrap_or_else(|_| canonical_game.join("saves"));
-    let resolved = std::fs::canonicalize(world_dir)
+    let resolved = canonicalize_world(world_dir)
         .unwrap_or_else(|_| canonical_saves.join(world_dir.file_name().unwrap_or_default()));
     if resolved != canonical_saves && !resolved.starts_with(&canonical_saves) {
         return reject(format!("is outside {}", canonical_saves.display()));
@@ -460,6 +469,64 @@ mod tests {
             assert!(WorldPaths::for_world(game, bad).is_err());
         }
         assert!(WorldPaths::for_world(game, "Survival 1_17").is_ok());
+    }
+
+    #[test]
+    fn case_alias_shares_level_backup_retention_and_listing() {
+        use crate::{config::BackupsConfig, data_stack::DataPaths, level_backup};
+
+        let (dir, _) = game_with(&[("world", None)]);
+        let game = dir.path().join("game");
+        let exact = WorldPaths::for_world(&game, "world").unwrap();
+        let alias = WorldPaths::for_world_with(&game, "World", |path| {
+            assert_eq!(path, game.join("saves/World"));
+            path.canonicalize()
+                .or_else(|_| path.with_file_name("world").canonicalize())
+        })
+        .unwrap();
+        let config = BackupsConfig {
+            enabled: true,
+            keep: 1,
+        };
+        let exact = DataPaths::for_world(&exact, dir.path(), config.clone());
+        let alias = DataPaths::for_world(&alias, dir.path(), config);
+
+        for (paths, bytes) in [(&exact, &b"older"[..]), (&alias, &b"new backup"[..])] {
+            level_backup::create(
+                paths.backups_root(),
+                paths.world_name(),
+                bytes,
+                paths.backups(),
+            )
+            .unwrap();
+        }
+
+        let backups = level_backup::list_all(exact.backups_root()).unwrap();
+        assert_eq!(
+            backups
+                .iter()
+                .map(|backup| backup.world.as_str())
+                .collect::<Vec<_>>(),
+            ["world"],
+        );
+        assert_eq!(
+            std::fs::read(exact.backups_root().join(&backups[0].file_name)).unwrap(),
+            b"new backup",
+        );
+        for paths in [exact, alias] {
+            assert_eq!(
+                level_backup::list(paths.backups_root(), paths.world_name()).unwrap(),
+                backups,
+            );
+        }
+    }
+
+    #[test]
+    fn level_backup_name_preserves_exact_case() {
+        let (dir, _) = game_with(&[("My World", None)]);
+        let world = WorldPaths::for_world(&dir.path().join("game"), "My World").unwrap();
+        let paths = crate::data_stack::DataPaths::for_world(&world, dir.path(), Default::default());
+        assert_eq!(paths.world_name(), "My World");
     }
 
     #[test]
