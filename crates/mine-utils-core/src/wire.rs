@@ -12,12 +12,13 @@ pub struct GameDirState {
     pub entries: Vec<GameDirEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct GameGuard {
     pub running: Option<GameRunning>,
     pub stale_locks: Vec<PathBuf>,
     pub detection_supported: bool,
+    #[serde(default = "crate::game_lock::process_probe_available_when_absent")]
     pub process_probe_available: bool,
 }
 
