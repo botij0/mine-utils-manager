@@ -7,6 +7,14 @@ import { worldsClient } from '../../test/fake-ipc';
 import { datapack, datapackListing, stack, stackEntry, world } from '../../test/fake-packs';
 import WorldsPage from './WorldsPage';
 
+vi.mock('../../lib/ipc', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/ipc')>();
+  return {
+    ...actual,
+    pickPackPath: async () => '/tmp/fresh.zip',
+  };
+});
+
 const BROKEN_DATAPACK = datapack('broken.zip', null, null, {
   id: '/saves/Survival/broken.zip',
   name: 'broken',
@@ -618,6 +626,132 @@ describe('WorldsPage', () => {
       expect(screen.getByText('No datapacks yet. Import a zip or a folder to add one.')).toBeInTheDocument(),
     );
   });
+
+  it.each(['pack_trash', 'io'] as const)(
+    'shows the datapack disabled when delete rejects with %s after the disable step',
+    async (code) => {
+      const user = userEvent.setup();
+      const inner = pageClient();
+      let failed = false;
+      const message = code === 'pack_trash'
+        ? 'Could not move a.zip to the trash'
+        : 'Could not finish deleting a.zip';
+      const client = pageClient({
+        listDatapacks: async (name) => {
+          const listing = await inner.listDatapacks(name);
+          if (!failed || name !== 'Survival 1_17') return listing;
+          return {
+            packs: listing.packs,
+            stack: stack({
+              enabled: ['vanilla', 'fabric', 'fabric-convention-tags-v2'].map(stackEntry),
+              disabled: [stackEntry('file/a.zip')],
+            }),
+          };
+        },
+        deleteDatapack: async () => {
+          failed = true;
+          throw new IpcError(code, message);
+        },
+      });
+      render(<WorldsPage client={client} gameRunning={null} />);
+      const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+      await user.click(within(grid).getByRole('button', { name: 'a.zip, enabled' }));
+      await user.click(
+        within(screen.getByRole('region', { name: 'Datapack details' })).getByRole('button', { name: 'Delete' }),
+      );
+      expect(await screen.findByRole('alert')).toHaveTextContent(message);
+      expect(await screen.findByRole('button', { name: 'a.zip, disabled' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'a.zip, enabled' })).not.toBeInTheDocument();
+      expect(screen.queryByText(/still references/)).not.toBeInTheDocument();
+    },
+  );
+
+  it('names a pack the world still references and stays quiet when the reference is removed', async () => {
+    const user = userEvent.setup();
+    let phase: 'both' | 'a-gone' | 'b-referenced' = 'both';
+    const named = (name: string) => datapack(name, 7, 7, {
+      id: `/saves/Survival 1_17/datapacks/${name}`,
+      name,
+      path: `/saves/Survival 1_17/datapacks/${name}`,
+    });
+    const client = pageClient({
+      listDatapacks: async () => {
+        const packs = phase === 'both'
+          ? [named('a.zip'), named('b.zip')]
+          : phase === 'a-gone'
+            ? [named('b.zip')]
+            : [];
+        const enabled = [stackEntry('vanilla')];
+        if (phase === 'both') enabled.push(stackEntry('file/a.zip'), stackEntry('file/b.zip'));
+        if (phase === 'a-gone') enabled.push(stackEntry('file/b.zip'));
+        return {
+          packs: { packs, count: packs.length, holding_entries: [], bytes_read: 1, elapsed_ms: 1 },
+          stack: stack({
+            enabled,
+            disabled: phase === 'b-referenced' ? [stackEntry('file/b.zip')] : [],
+          }),
+        };
+      },
+      deleteDatapack: async (_world, path) => {
+        if (path.endsWith('/a.zip')) {
+          phase = 'a-gone';
+          return { removed_references: true, stack: stack() };
+        }
+        phase = 'b-referenced';
+        return { removed_references: false, stack: stack() };
+      },
+    });
+    render(<WorldsPage client={client} gameRunning={null} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    await user.click(within(grid).getByRole('button', { name: 'a.zip, enabled' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'a.zip, enabled' })).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText(/still references/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'b.zip, enabled' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(
+      await screen.findByText('b.zip was moved to the trash, but Survival 1.17 still references it.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('File missing from datapacks')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'b.zip, disabled' })).toBeInTheDocument();
+  });
+
+  it.each(['level_backup', 'io'] as const)(
+    'shows a pack that import committed before rejecting with %s',
+    async (code) => {
+      const user = userEvent.setup();
+      const inner = pageClient();
+      let committed = false;
+      const message = code === 'level_backup'
+        ? 'Could not back up level.dat'
+        : 'New pack installed at /saves/Survival 1_17/datapacks/fresh.zip';
+      const fresh = datapack('fresh.zip');
+      const client = pageClient({
+        listDatapacks: async (name) => {
+          const listing = await inner.listDatapacks(name);
+          if (!committed || name !== 'Survival 1_17') return listing;
+          return {
+            packs: {
+              ...listing.packs,
+              packs: [...listing.packs.packs, fresh],
+              count: listing.packs.count + 1,
+            },
+            stack: listing.stack,
+          };
+        },
+        importDatapack: async () => {
+          committed = true;
+          throw new IpcError(code, message);
+        },
+      });
+      render(<WorldsPage client={client} gameRunning={null} />);
+      await user.click(await screen.findByRole('button', { name: 'Import zip' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(message);
+      expect(await screen.findByRole('button', { name: 'fresh.zip, disabled' })).toBeInTheDocument();
+    },
+  );
 });
 
 it('restores an interrupted datapack Replace in the selected world', async () => {
