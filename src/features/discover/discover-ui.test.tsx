@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { userEvent } from '@testing-library/user-event';
@@ -7,6 +8,7 @@ import ProjectDetail from './ProjectDetail';
 import VersionPicker from './VersionPicker';
 import { IpcError } from '../../lib/types';
 import type {
+  GameRunning,
   ModrinthInstallOutcome,
   ModrinthSearchHit,
   ModrinthSearchPage,
@@ -229,6 +231,43 @@ describe('discover dialogs', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Install' }));
     expect(await screen.findByText(/already installed/)).toBeInTheDocument();
     expect(onInstalled).not.toHaveBeenCalled();
+  });
+
+  it('shows the running banner and locks Install as soon as an install returns game_running', async () => {
+    const client = makeFakeClient([]);
+    const running: GameRunning = {
+      kind: 'process',
+      detail: 'pid 4242 runs java',
+      lock_path: null,
+      pid: 4242,
+      command: 'java',
+    };
+    let nowRunning: GameRunning | null = null;
+    client.installModrinthPack = async () => {
+      nowRunning = running;
+      throw new IpcError('game_running', 'Minecraft started during the download.');
+    };
+    function GuardedDiscover() {
+      const [gameRunning, setGameRunning] = useState<GameRunning | null>(null);
+      return (
+        <DiscoverPage
+          client={client}
+          gameRunning={gameRunning}
+          hasGameDir
+          refreshGameRunning={() => setGameRunning(nowRunning)}
+        />
+      );
+    }
+    render(<GuardedDiscover />);
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
+    fireEvent.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+
+    expect(await screen.findByText('Minecraft started during the download.')).toBeInTheDocument();
+    const banner = (await screen.findByText('Minecraft is running.')).closest('.banner') as HTMLElement;
+    expect(banner).toHaveTextContent('pid 4242 runs java');
+    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled();
   });
 
   it('surfaces the provenance warning without failing the install', () => {

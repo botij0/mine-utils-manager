@@ -40,7 +40,7 @@ export default function DiscoverPage({
   refreshGameRunning = () => {},
   onInstalled = () => {},
 }: DiscoverPageProps) {
-  const discover = useModrinth(client, active, reloadSignal, gameDir);
+  const discover = useModrinth(client, active, reloadSignal, gameDir, () => void refreshGameRunning());
   const [worlds, setWorlds] = useState<World[] | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
 

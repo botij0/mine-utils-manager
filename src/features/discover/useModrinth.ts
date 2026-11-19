@@ -128,6 +128,7 @@ export function useModrinth(
   active = true,
   reloadSignal = '',
   gameDir: string | null = null,
+  onGameRunning?: () => void,
 ): ModrinthState {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<ModrinthKind>('resourcepack');
@@ -437,13 +438,16 @@ export function useModrinth(
       setInstallResult(outcome);
       return outcome;
     } catch (err) {
-      if (mounted.current && selectToken.current === token) setInstallError(toAppError(err));
+      const appError = toAppError(err);
+      if (mounted.current && selectToken.current === token) setInstallError(appError);
+      // The backend just saw the game; the app guard must re-check now.
+      if (appError.code === 'game_running') onGameRunning?.();
       return null;
     } finally {
       installId.current = null;
       if (mounted.current) setInstallPhase('idle');
     }
-  }, [client, kind, selected, selectedVersionId, versions, world]);
+  }, [client, kind, selected, selectedVersionId, versions, world, onGameRunning]);
 
   const cancelInstall = useCallback(async () => {
     const id = installId.current;
