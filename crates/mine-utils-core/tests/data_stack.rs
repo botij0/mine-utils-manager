@@ -59,13 +59,12 @@ struct World {
     hashes: HashCache,
 }
 
-fn temp_world(enabled: &[&str], disabled: &[&str]) -> World {
+fn world_with_level(bytes: &[u8]) -> World {
     let dir = tempfile::tempdir().unwrap();
     let game = dir.path().join("game");
     let world = game.join("saves").join("alpha");
     std::fs::create_dir_all(world.join("datapacks")).unwrap();
-    let bytes = level_bytes(enabled, disabled);
-    std::fs::write(world.join("level.dat"), &bytes).unwrap();
+    std::fs::write(world.join("level.dat"), bytes).unwrap();
     let paths = DataPaths::for_world(
         &mine_utils_core::WorldPaths::for_world(&game, "alpha").unwrap(),
         &dir.path().join("data"),
@@ -80,6 +79,60 @@ fn temp_world(enabled: &[&str], disabled: &[&str]) -> World {
         icons: IconCache::new(&game.join("cache")),
         hashes: HashCache::new(),
     }
+}
+
+fn temp_world(enabled: &[&str], disabled: &[&str]) -> World {
+    world_with_level(&level_bytes(enabled, disabled))
+}
+
+fn level_without_packs(
+    name: &str,
+    data_version: Option<i32>,
+    seed: i64,
+    level_name: &str,
+) -> Vec<u8> {
+    use fastnbt::Value;
+    let mut pairs = vec![
+        (
+            "Version".to_string(),
+            Value::Compound(
+                [("Name".to_string(), Value::String(name.to_string()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        ),
+        (
+            "LevelName".to_string(),
+            Value::String(level_name.to_string()),
+        ),
+        ("RandomSeed".to_string(), Value::Long(seed)),
+    ];
+    if let Some(version) = data_version {
+        pairs.push(("DataVersion".to_string(), Value::Int(version)));
+    }
+    let root = Value::Compound(
+        [(
+            "Data".to_string(),
+            Value::Compound(pairs.into_iter().collect()),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    level_dat::gzip(&fastnbt::to_bytes(&root).unwrap())
+}
+
+fn data_without_packs(bytes: &[u8]) -> std::collections::HashMap<String, fastnbt::Value> {
+    use fastnbt::Value;
+    let raw = level_dat::gunzip(bytes).unwrap();
+    let value = level_dat::parse_nbt(&raw).unwrap();
+    let Value::Compound(mut root) = value else {
+        panic!("root");
+    };
+    let Value::Compound(mut data) = root.remove("Data").expect("Data") else {
+        panic!("Data");
+    };
+    data.remove("DataPacks");
+    data
 }
 
 #[test]
@@ -785,6 +838,177 @@ fn legacy_world_loads_empty_and_refuses_writes() {
     .unwrap_err();
     assert!(error.to_string().contains("before 1.13"));
     assert!(!world.paths.datapacks_dir().join("old-pack").exists());
+}
+
+#[test]
+fn a_1_20_world_without_datapacks_gains_the_lists_when_enabled() {
+    let bytes = level_without_packs("1.20", Some(3463), 99, "Modern");
+    let world = world_with_level(&bytes);
+    let stack = data_stack::load(&world.paths).unwrap();
+    assert!(stack.enabled.is_empty());
+    assert!(stack.disabled.is_empty());
+    let stack =
+        data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard).unwrap();
+    assert_eq!(
+        stack
+            .enabled
+            .iter()
+            .map(|entry| entry.value().to_string())
+            .collect::<Vec<_>>(),
+        vec!["file/a.zip".to_string()]
+    );
+    assert!(stack.disabled.is_empty());
+    let written = std::fs::read(world.paths.level_dat_path()).unwrap();
+    let view = level_dat::parse(&written).unwrap();
+    assert_eq!(view.version_name, "1.20");
+    assert_eq!(view.level_name.as_deref(), Some("Modern"));
+    assert_eq!(view.enabled, vec!["file/a.zip".to_string()]);
+    assert_eq!(view.disabled, Vec::<String>::new());
+    assert_eq!(data_without_packs(&bytes), data_without_packs(&written));
+}
+
+#[test]
+fn a_1_20_world_without_data_version_gains_the_lists_on_import() {
+    let bytes = level_without_packs("1.20.4", None, 7, "Tool");
+    let world = world_with_level(&bytes);
+    let source = datapack_source(world._dir.path(), "new-pack");
+    let outcome = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Default,
+        &world.icons,
+        &world.hashes,
+        &RecordingTrash::new(),
+        &PassGuard,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome,
+        data_stack::DatapackImportOutcome::Imported {
+            filename: "new-pack".to_string()
+        }
+    );
+    assert!(world.paths.datapacks_dir().join("new-pack").is_dir());
+    let written = std::fs::read(world.paths.level_dat_path()).unwrap();
+    let view = level_dat::parse(&written).unwrap();
+    assert_eq!(view.enabled, vec!["file/new-pack".to_string()]);
+    assert_eq!(view.disabled, Vec::<String>::new());
+    assert_eq!(view.version_name, "1.20.4");
+    assert_eq!(view.level_name.as_deref(), Some("Tool"));
+    assert_eq!(data_without_packs(&bytes), data_without_packs(&written));
+}
+
+#[test]
+fn the_first_datapack_data_version_gains_the_lists_when_enabled() {
+    let bytes = level_without_packs("17w43a", Some(1444), 1, "Snap");
+    let world = world_with_level(&bytes);
+    let stack =
+        data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard).unwrap();
+    assert_eq!(
+        stack
+            .enabled
+            .iter()
+            .map(|entry| entry.value().to_string())
+            .collect::<Vec<_>>(),
+        vec!["file/a.zip".to_string()]
+    );
+    assert!(stack.disabled.is_empty());
+    let written = std::fs::read(world.paths.level_dat_path()).unwrap();
+    assert_eq!(
+        level_dat::parse(&written).unwrap().enabled,
+        vec!["file/a.zip".to_string()]
+    );
+    assert_eq!(data_without_packs(&bytes), data_without_packs(&written));
+}
+
+#[test]
+fn a_1_13_name_without_data_version_gains_the_lists_when_enabled() {
+    let bytes = level_without_packs("1.13", None, 13, "Release");
+    let world = world_with_level(&bytes);
+    let stack =
+        data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard).unwrap();
+    assert_eq!(
+        stack
+            .enabled
+            .iter()
+            .map(|entry| entry.value().to_string())
+            .collect::<Vec<_>>(),
+        vec!["file/a.zip".to_string()]
+    );
+    assert!(stack.disabled.is_empty());
+    let written = std::fs::read(world.paths.level_dat_path()).unwrap();
+    assert_eq!(data_without_packs(&bytes), data_without_packs(&written));
+}
+
+#[test]
+fn older_or_absent_versions_keep_the_pre_1_13_refusal() {
+    let cases = [
+        ("1.20", Some(1443), 11),
+        ("1.12.2", Some(3463), 12),
+        ("1.12.2", Some(1343), 13),
+        ("1.12", None, 14),
+        ("17w42a", None, 15),
+    ];
+    for (name, data_version, seed) in cases {
+        let bytes = level_without_packs(name, data_version, seed, "Old");
+        let world = world_with_level(&bytes);
+        let error = data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard)
+            .unwrap_err();
+        assert_eq!(error.code(), "level_dat", "{name} {data_version:?}");
+        assert!(
+            error.to_string().contains(
+                "Data.DataPacks is absent; Minecraft versions before 1.13 do not support datapacks"
+            ),
+            "{name} {data_version:?}: {error}"
+        );
+        assert_eq!(
+            std::fs::read(world.paths.level_dat_path()).unwrap(),
+            bytes,
+            "{name} {data_version:?}"
+        );
+        let source = datapack_source(world._dir.path(), "old-pack");
+        let error = data_stack::import_datapack_with(
+            &world.paths,
+            &source,
+            mine_utils_core::ImportChoice::Default,
+            &world.icons,
+            &world.hashes,
+            &RecordingTrash::new(),
+            &PassGuard,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("before 1.13"),
+            "{name} {data_version:?}: {error}"
+        );
+        assert!(
+            !world.paths.datapacks_dir().join("old-pack").exists(),
+            "{name} {data_version:?}"
+        );
+    }
+}
+
+#[test]
+fn a_modern_non_compound_datapacks_tag_is_still_refused() {
+    use fastnbt::Value;
+    let bytes = level_without_packs("1.20", Some(3463), 5, "Bad");
+    let raw = level_dat::gunzip(&bytes).unwrap();
+    let mut value = level_dat::parse_nbt(&raw).unwrap();
+    let Value::Compound(root) = &mut value else {
+        panic!("root");
+    };
+    let Some(Value::Compound(data)) = root.get_mut("Data") else {
+        panic!("data");
+    };
+    data.insert("DataPacks".to_string(), Value::String("no".to_string()));
+    let bytes = level_dat::gzip(&fastnbt::to_bytes(&value).unwrap());
+    let world = world_with_level(&bytes);
+    let error =
+        data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard).unwrap_err();
+    assert_eq!(error.code(), "level_dat");
+    assert!(error.to_string().contains("not a compound"), "{error}");
+    assert!(!error.to_string().contains("before 1.13"), "{error}");
+    assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), bytes);
 }
 
 #[test]

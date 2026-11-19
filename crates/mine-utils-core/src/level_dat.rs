@@ -1,9 +1,10 @@
 //! Read and modify `level.dat`, the gzip-compressed NBT file that owns the world
 //! name, the world version, and the datapack lists.
 //!
-//! The file is parsed to a `fastnbt::Value` tree. Only the two string lists at
-//! `Data.DataPacks.Enabled` and `Data.DataPacks.Disabled` are ever mutated;
-//! every other tag is carried through untouched. Tag order is preserved as far
+//! The file is parsed to a `fastnbt::Value` tree. Writes change the string
+//! lists at `Data.DataPacks.Enabled` and `Data.DataPacks.Disabled`. A 1.13 or
+//! newer file that has no `DataPacks` compound gains that compound on write.
+//! Every other tag is carried through untouched. Tag order is preserved as far
 //! as `fastnbt` allows: tests compare the parsed value tree outside
 //! `Data.DataPacks`, never gzip byte identity.
 
@@ -105,9 +106,9 @@ pub fn parse(bytes: &[u8]) -> Result<LevelDatView, LevelDatError> {
     view_of(&value, lists_of)
 }
 
-/// Like [`parse`], but a file with no `Data.DataPacks` reads as empty lists.
-/// Minecraft before 1.13 wrote none, so such a file holds no datapacks. A
-/// present but malformed `DataPacks` still fails.
+/// Like [`parse`], but a file with no `Data.DataPacks` reads as empty lists
+/// even when the world is older than 1.13. A present but malformed `DataPacks`
+/// still fails.
 pub fn parse_lenient(bytes: &[u8]) -> Result<LevelDatView, LevelDatError> {
     let raw = gunzip(bytes)?;
     let value = parse_nbt(&raw)?;
@@ -186,16 +187,95 @@ fn strings_of(list: &Value, key: &str) -> Result<Vec<String>, LevelDatError> {
     }
 }
 
+/// 17w43a, the first snapshot that writes `Data.DataPacks`.
+const FIRST_DATAPACK_DATA_VERSION: i32 = 1444;
+
+const ABSENT_PACKS_REASON: &str =
+    "Data.DataPacks is absent; Minecraft versions before 1.13 do not support datapacks";
+
+fn data_version(data: &std::collections::HashMap<String, Value>) -> Option<i32> {
+    match data.get("DataVersion") {
+        Some(Value::Int(version)) => Some(*version),
+        _ => None,
+    }
+}
+
+fn version_name(data: &std::collections::HashMap<String, Value>) -> Option<&str> {
+    match data.get("Version") {
+        Some(Value::Compound(version)) => match version.get("Name") {
+            Some(Value::String(name)) => Some(name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+enum ReleaseAge {
+    BeforePacks,
+    Packs,
+    Unparsed,
+}
+
+fn release_age(name: &str) -> ReleaseAge {
+    let Some((major, minor, patch)) = release_parts(name) else {
+        return ReleaseAge::Unparsed;
+    };
+    if (major, minor, patch) < (1, 13, 0) {
+        ReleaseAge::BeforePacks
+    } else {
+        ReleaseAge::Packs
+    }
+}
+
+fn release_parts(name: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = name.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next()?.parse().ok()?;
+    let patch: u32 = match parts.next() {
+        Some(text) => text.parse().ok()?,
+        None => 0,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+fn missing_packs_are_creatable(data: &std::collections::HashMap<String, Value>) -> bool {
+    let version = data_version(data);
+    if version.is_some_and(|version| version < FIRST_DATAPACK_DATA_VERSION) {
+        return false;
+    }
+    match version_name(data).map(release_age) {
+        Some(ReleaseAge::BeforePacks) => false,
+        Some(ReleaseAge::Packs) => true,
+        Some(ReleaseAge::Unparsed) | None => {
+            version.is_some_and(|version| version >= FIRST_DATAPACK_DATA_VERSION)
+        }
+    }
+}
+
+fn absent_packs() -> LevelDatError {
+    LevelDatError::MissingDataPacks {
+        reason: ABSENT_PACKS_REASON.to_string(),
+    }
+}
+
+fn string_list(entries: &[String]) -> Value {
+    Value::List(entries.iter().cloned().map(Value::String).collect())
+}
+
 fn lists_of(
     data: &std::collections::HashMap<String, Value>,
 ) -> Result<(Vec<String>, Vec<String>), LevelDatError> {
     let packs = match data.get("DataPacks") {
         Some(Value::Compound(packs)) => packs,
-        None => return Err(LevelDatError::MissingDataPacks {
-            reason:
-                "Data.DataPacks is absent; Minecraft versions before 1.13 do not support datapacks"
-                    .to_string(),
-        }),
+        None => {
+            if missing_packs_are_creatable(data) {
+                return Ok((Vec::new(), Vec::new()));
+            }
+            return Err(absent_packs());
+        }
         _ => {
             return Err(LevelDatError::MissingDataPacks {
                 reason: "Data.DataPacks is not a compound".to_string(),
@@ -232,6 +312,7 @@ fn lists_or_empty(
 }
 
 /// Replace both datapack lists and re-encode. Every other tag is preserved.
+/// A 1.13 or newer file with no `DataPacks` compound gains that compound.
 pub fn render_with(
     bytes: &[u8],
     enabled: &[String],
@@ -259,19 +340,30 @@ fn replace_lists(
             reason: "Data is not a compound".to_string(),
         });
     };
+    if !data.contains_key("DataPacks") {
+        if !missing_packs_are_creatable(data) {
+            return Err(absent_packs());
+        }
+        data.insert(
+            "DataPacks".to_string(),
+            Value::Compound(
+                [
+                    ("Enabled".to_string(), string_list(enabled)),
+                    ("Disabled".to_string(), string_list(disabled)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+        return Ok(());
+    }
     let Some(Value::Compound(packs)) = data.get_mut("DataPacks") else {
         return Err(LevelDatError::MissingDataPacks {
             reason: "Data.DataPacks is not a compound".to_string(),
         });
     };
-    packs.insert(
-        "Enabled".to_string(),
-        Value::List(enabled.iter().cloned().map(Value::String).collect()),
-    );
-    packs.insert(
-        "Disabled".to_string(),
-        Value::List(disabled.iter().cloned().map(Value::String).collect()),
-    );
+    packs.insert("Enabled".to_string(), string_list(enabled));
+    packs.insert("Disabled".to_string(), string_list(disabled));
     Ok(())
 }
 
@@ -586,9 +678,25 @@ mod tests {
             )]))
             .unwrap(),
         );
-        assert!(matches!(
-            parse(&no_packs),
-            Err(LevelDatError::MissingDataPacks { .. })
-        ));
+        let view = parse(&no_packs).unwrap();
+        assert_eq!(view.version_name, "1.21.10");
+        assert_eq!(view.enabled, Vec::<String>::new());
+        assert_eq!(view.disabled, Vec::<String>::new());
+        let legacy = gzip(
+            &fastnbt::to_bytes(&compound(vec![(
+                "Data",
+                compound(vec![(
+                    "Version",
+                    compound(vec![("Name", Value::String("1.12.2".to_string()))]),
+                )]),
+            )]))
+            .unwrap(),
+        );
+        assert_eq!(
+            parse(&legacy).unwrap_err(),
+            LevelDatError::MissingDataPacks {
+                reason: ABSENT_PACKS_REASON.to_string(),
+            }
+        );
     }
 }

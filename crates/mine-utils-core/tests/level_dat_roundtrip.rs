@@ -176,9 +176,8 @@ fn missing_version_is_an_error() {
     );
 }
 
-#[test]
-fn missing_datapacks_is_an_error() {
-    let bytes = fixture("1.21.10", &[], &[], Vec::new());
+fn without_datapacks(version: &str) -> Vec<u8> {
+    let bytes = fixture(version, &[], &[], Vec::new());
     let raw = level_dat::gunzip(&bytes).unwrap();
     let mut value = level_dat::parse_nbt(&raw).unwrap();
     let Value::Compound(root) = &mut value else {
@@ -188,11 +187,54 @@ fn missing_datapacks_is_an_error() {
         panic!("data")
     };
     data.remove("DataPacks");
-    let bytes = level_dat::gzip(&fastnbt::to_bytes(&value).unwrap());
-    assert!(matches!(
+    level_dat::gzip(&fastnbt::to_bytes(&value).unwrap())
+}
+
+#[test]
+fn a_modern_file_without_datapacks_reads_empty_and_gains_lists() {
+    let bytes = without_datapacks("1.21.10");
+    let view = level_dat::parse(&bytes).unwrap();
+    assert_eq!(view.enabled, Vec::<String>::new());
+    assert_eq!(view.disabled, Vec::<String>::new());
+    assert_eq!(view.version_name, "1.21.10");
+    let written = level_dat::render_with(&bytes, &["file/a.zip".to_string()], &[]).unwrap();
+    let view = level_dat::parse(&written).unwrap();
+    assert_eq!(view.enabled, vec!["file/a.zip".to_string()]);
+    assert_eq!(view.disabled, Vec::<String>::new());
+    assert_eq!(view.level_name.as_deref(), Some("Fixture"));
+    assert_eq!(data_minus_packs(&bytes), data_minus_packs(&written));
+}
+
+fn data_minus_packs(bytes: &[u8]) -> HashMap<String, Value> {
+    let raw = level_dat::gunzip(bytes).unwrap();
+    let mut value = level_dat::parse_nbt(&raw).unwrap();
+    let Value::Compound(root) = &mut value else {
+        panic!("root")
+    };
+    let Some(Value::Compound(data)) = root.get_mut("Data") else {
+        panic!("data")
+    };
+    data.remove("DataPacks");
+    data.clone()
+}
+
+#[test]
+fn a_pre_1_13_file_without_datapacks_names_that_reason() {
+    let bytes = without_datapacks("1.12.2");
+    let reason =
+        "Data.DataPacks is absent; Minecraft versions before 1.13 do not support datapacks";
+    assert_eq!(
         level_dat::parse(&bytes).unwrap_err(),
-        level_dat::LevelDatError::MissingDataPacks { .. }
-    ));
+        level_dat::LevelDatError::MissingDataPacks {
+            reason: reason.to_string(),
+        }
+    );
+    assert_eq!(
+        level_dat::render_with(&bytes, &["file/a.zip".to_string()], &[]).unwrap_err(),
+        level_dat::LevelDatError::MissingDataPacks {
+            reason: reason.to_string(),
+        }
+    );
 }
 
 #[test]
