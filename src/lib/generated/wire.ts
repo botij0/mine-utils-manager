@@ -60,7 +60,21 @@ export type ModrinthSearchPage = { hits: Array<ModrinthSearchHit>, has_more: boo
 export type ModrinthSort = "relevance" | "downloads" | "follows" | "newest" | "updated";
 export type ModrinthTargets = { installed_versions: Array<string>, preferred_launcher: string | null, world_version: string | null, };
 export type ModrinthVersion = { id: string, project_id: string, name: string, version_number: string, game_versions: Array<string>, loaders: Array<string>, files: Array<ModrinthFile>, };
-export type Pack = { id: string, name: string, path: string, location: PackLocation, kind: PackKind, description: string, meta: PackMeta, format: FormatVersion | null, format_range: FormatRange | null, game_label: string | null, icon: PackIcon | null, error: PackIssue | null, bytes_read: number, };
+export type Pack = { id: string, name: string, path: string, location: PackLocation, kind: PackKind, description: string, meta: PackMeta,
+/**
+ * The lower end of the declared range, or the upper end when the range has
+ * none. Taken from `PackMeta::effective_range`, which reads `min_format` and
+ * `max_format`, then `supported_formats`, then `pack_format`. `format` never
+ * carries the any-minor sentinel: a bare-major upper end reads back as
+ * `major.0`.
+ */
+format: FormatVersion | null,
+/**
+ * The full declared range that `format` summarizes. A bare-major upper end,
+ * from `max_format` or `supported_formats`, means any minor of that major:
+ * its `minor` is `FormatVersion::ANY_MINOR` (2147483647 on the wire).
+ */
+format_range: FormatRange | null, game_label: string | null, icon: PackIcon | null, error: PackIssue | null, bytes_read: number, };
 export type PackIcon = { sha256: string, path: string, };
 export type PackIssue = { code: string, message: string, symlink_path?: string, };
 export type PackKind = "resource" | "data" | "both" | "unknown";

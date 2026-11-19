@@ -216,7 +216,15 @@ pub struct Pack {
     pub kind: PackKind,
     pub description: String,
     pub meta: PackMeta,
+    /// The lower end of the declared range, or the upper end when the range has
+    /// none. Taken from `PackMeta::effective_range`, which reads `min_format` and
+    /// `max_format`, then `supported_formats`, then `pack_format`. `format` never
+    /// carries the any-minor sentinel: a bare-major upper end reads back as
+    /// `major.0`.
     pub format: Option<FormatVersion>,
+    /// The full declared range that `format` summarizes. A bare-major upper end,
+    /// from `max_format` or `supported_formats`, means any minor of that major:
+    /// its `minor` is `FormatVersion::ANY_MINOR` (2147483647 on the wire).
     pub format_range: Option<FormatRange>,
     pub game_label: Option<String>,
     pub icon: Option<PackIcon>,
