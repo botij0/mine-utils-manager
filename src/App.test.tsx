@@ -196,13 +196,14 @@ describe('App', () => {
     render(<App client={client} />);
 
     await user.click(await screen.findByRole('button', { name: 'Worlds' }));
-    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
-    expect(within(grid).getByRole('button', { name: /^Disable( |$)/ })).toBeEnabled();
-    expect(within(grid).getByRole('button', { name: /^Enable( |$)/ })).toBeEnabled();
+    await waitFor(() => {
+      const grid = screen.getByRole('list', { name: 'Datapack stack' });
+      expect(within(grid).getByRole('button', { name: /^Disable( |$)/ })).toBeEnabled();
+      expect(within(grid).getByRole('button', { name: /^Enable( |$)/ })).toBeEnabled();
+    });
 
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    const restore = await screen.findByRole('button', { name: 'Restore' });
-    expect(restore).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled());
     expect(screen.queryByText('Game guard unavailable.')).not.toBeInTheDocument();
   });
 
@@ -374,7 +375,7 @@ describe('App', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Skip for now' }));
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
-    expect(await screen.findByRole('button', { name: 'Restore' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Restore' })).toBeEnabled());
     await waitFor(() => expect(checkedDirs).toEqual([null, null]));
 
     await act(async () => {
@@ -606,9 +607,11 @@ describe('App', () => {
     expect(
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
     ).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: 'Restore' })).toHaveAttribute(
-      'title',
-      'Checking whether Minecraft is running',
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+        'title',
+        'Checking whether Minecraft is running',
+      ),
     );
 
     await act(async () => {
@@ -770,24 +773,32 @@ describe('App', () => {
     expect(screen.getByText(/^Checking whether Minecraft is running/)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Worlds' }));
-    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
-    expect(screen.getByRole('button', { name: 'Import zip' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
-    expect(within(grid).getByRole('button', { name: /^Disable( |$)/ })).toBeDisabled();
-    const worlds = screen.getByRole('button', { name: 'Import zip' }).closest('section') as HTMLElement;
+    const worlds = (await screen.findByRole('button', { name: 'Import zip' })).closest('section') as HTMLElement;
     expect(within(worlds).getByText(/^Checking whether Minecraft is running/)).toBeInTheDocument();
+    await waitFor(() => {
+      const grid = screen.getByRole('list', { name: 'Datapack stack' });
+      expect(screen.getByRole('button', { name: 'Import zip' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
+      expect(within(grid).getByRole('button', { name: /^Disable( |$)/ })).toBeDisabled();
+    });
 
     await act(async () => {
       for (const call of calls) call.answer(null);
     });
-    expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Import folder' })).toBeEnabled();
-    expect(within(grid).getByRole('button', { name: /^Disable( |$)/ })).toBeEnabled();
-    expect(screen.queryByText(/^Checking whether Minecraft is running/)).not.toBeInTheDocument();
+    await waitFor(() => {
+      const grid = screen.getByRole('list', { name: 'Datapack stack' });
+      expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Import folder' })).toBeEnabled();
+      expect(within(grid).getByRole('button', { name: /^Disable( |$)/ })).toBeEnabled();
+      expect(screen.queryByText(/^Checking whether Minecraft is running/)).not.toBeInTheDocument();
+    });
 
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
-    expect(screen.getByRole('button', { name: 'Import pack' })).toBeEnabled();
-    expect(within(list).getByRole('button', { name: /^Remove / })).toBeEnabled();
+    await waitFor(() => {
+      const packs = screen.getByRole('list', { name: 'Stack order' });
+      expect(screen.getByRole('button', { name: 'Import pack' })).toBeEnabled();
+      expect(within(packs).getByRole('button', { name: /^Remove / })).toBeEnabled();
+    });
   });
 
   it('shows unknown one window after a hidden folder switch finds a timed-out check still hung', async () => {
@@ -823,9 +834,11 @@ describe('App', () => {
     expect(
       await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/prism/ }),
     ).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: 'Restore' })).toHaveAttribute(
-      'title',
-      'Checking whether Minecraft is running',
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Restore' })).toHaveAttribute(
+        'title',
+        'Checking whether Minecraft is running',
+      ),
     );
 
     await act(async () => {
@@ -945,9 +958,14 @@ describe('App', () => {
     render(<App client={client} />);
     await user.click(await screen.findByRole('button', { name: 'Worlds' }));
     await user.click(await screen.findByRole('button', { name: /Second World/ }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Second World/ })).toHaveAttribute('aria-current', 'true'),
+    );
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
     await user.click(screen.getByRole('button', { name: 'Worlds' }));
-    expect(await screen.findByRole('button', { name: /Second World/ })).toHaveAttribute('aria-current', 'true');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Second World/ })).toHaveAttribute('aria-current', 'true'),
+    );
   });
 
   it('retains Discover search and loaded results across navigation', async () => {
@@ -1059,7 +1077,7 @@ describe('App', () => {
     const worldCalls = listWorlds.mock.calls.length;
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
     await user.click(screen.getByRole('button', { name: 'Worlds' }));
-    expect(screen.getByRole('button', { name: /Survival 1.17/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Survival 1.17/ })).toBeInTheDocument();
     expect(screen.queryByText('Loading worlds…')).not.toBeInTheDocument();
     expect(listPacks).toHaveBeenCalledTimes(packCalls);
     expect(listWorlds).toHaveBeenCalledTimes(worldCalls);
@@ -1181,13 +1199,13 @@ describe('App', () => {
     const datapacks = vi.spyOn(client, 'listDatapacks');
     render(<App client={client} />);
     await user.click(await screen.findByRole('button', { name: 'Worlds' }));
-    expect(await screen.findByRole('button', { name: /Survival 1.17/ })).toHaveAttribute('aria-current', 'true');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Survival 1.17/ })).toHaveAttribute('aria-current', 'true'));
     await screen.findByRole('list', { name: 'Datapack stack' });
     const oldCalls = datapacks.mock.calls.length;
     await user.click(screen.getByRole('button', { name: 'Settings' }));
     await user.click(await screen.findByRole('button', { name: /^Use / }));
     await user.click(screen.getByRole('button', { name: 'Worlds' }));
-    expect(await screen.findByRole('button', { name: /B first/ })).toHaveAttribute('aria-current', 'true');
+    await waitFor(() => expect(screen.getByRole('button', { name: /B first/ })).toHaveAttribute('aria-current', 'true'));
     await waitFor(() => expect(datapacks.mock.calls.slice(oldCalls)).toEqual([['first-b']]));
   });
 

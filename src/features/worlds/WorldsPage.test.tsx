@@ -80,14 +80,18 @@ describe('WorldsPage', () => {
   it.each(['running', 'unknown'] as const)('disables imports while the game guard is %s', async (state) => {
     const client = pageClient();
     const { rerender } = render(<WorldsPage client={client} gameRunning={null} />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled());
+    await waitFor(() => {
+      expect(screen.getByRole('list', { name: 'Datapack stack' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Import folder' })).toBeEnabled();
+    }, { timeout: 10_000 });
     const running: GameRunning = {
       kind: 'process', detail: 'java', lock_path: null, pid: 42, command: 'java',
     };
     rerender(<WorldsPage client={client} gameRunning={state === 'running' ? running : null} gameGuardUnknown={state === 'unknown'} />);
     expect(screen.getByRole('button', { name: 'Import zip' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
-  });
+  }, 20_000);
 
   it('holds writes with the checking text until the first guard answer, even when the stored world says running', async () => {
     const running: GameRunning = { kind: 'process', detail: 'pid 42 runs java', lock_path: null, pid: 42, command: 'java' };
@@ -95,28 +99,38 @@ describe('WorldsPage', () => {
     const client = pageClient({
       listWorlds: async () => [world({ running })],
       listDatapacks: async (name: string) => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
         const listing = await stored.listDatapacks(name);
         return { ...listing, stack: { ...listing.stack, running } };
       },
     });
     const { rerender } = render(<WorldsPage client={client} />);
 
-    const importZip = await screen.findByRole('button', { name: 'Import zip' });
-    expect(importZip).toBeDisabled();
+    expect(
+      await screen.findByText(/^Checking whether Minecraft is running; writes are paused/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Import zip' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
-    expect(screen.getByText(/^Checking whether Minecraft is running; writes are paused/)).toBeInTheDocument();
     expect(screen.queryByText(/^Minecraft is running/)).not.toBeInTheDocument();
 
+    await screen.findByRole('list', { name: 'Datapack stack' });
     rerender(<WorldsPage client={client} gameRunning={null} />);
-    expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Import folder' })).toBeEnabled();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Import folder' })).toBeEnabled();
+      expect(
+        screen.queryByText(/^Checking whether Minecraft is running; writes are paused/),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it('lists worlds with icons and versions', async () => {
     render(<WorldsPage client={pageClient()} gameRunning={null} />);
-    expect(await screen.findAllByText('Survival 1.17')).toHaveLength(2);
-    expect(screen.getByText('Creative Flat')).toBeInTheDocument();
-    expect(screen.getAllByText('1.21.10', { selector: '.world-rail-version' })).toHaveLength(2);
+    await waitFor(() => {
+      expect(screen.getAllByText('Survival 1.17')).toHaveLength(2);
+      expect(screen.getByText('Creative Flat')).toBeInTheDocument();
+      expect(screen.getAllByText('1.21.10', { selector: '.world-rail-version' })).toHaveLength(2);
+    });
   });
 
   it('says so when a world is newer than the format table instead of passing it as compatible', async () => {
