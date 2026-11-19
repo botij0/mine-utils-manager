@@ -139,7 +139,8 @@ it('explains why an install is paused when targets cannot load', async () => {
   await user.click(await screen.findByRole('button', { name: 'Install…' }));
   await waitFor(() => {
     expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled();
-    expect(screen.getByRole('dialog')).toHaveTextContent('Install targets are unavailable. Return to Discover to retry.');
+    expect(screen.getByRole('dialog')).toHaveTextContent('Install targets are unavailable.');
+    expect(screen.getByRole('dialog')).not.toHaveTextContent('Return to Discover');
   }, { timeout: 3_000 });
 }, 10_000);
 
