@@ -55,6 +55,7 @@ export default function WorldsPage({
     busy,
     listingWorld,
     actionError,
+    clearStaleActionError,
     reload,
     refreshListing,
     toggleDatapack,
@@ -82,10 +83,18 @@ export default function WorldsPage({
   // blocked by issue).
   const refreshAfterGuard = useCallback(async () => {
     void refreshGameRunning();
-    await refreshListing();
+    const applied = await refreshListing();
     await reload();
     onDataChanged?.();
+    return applied;
   }, [refreshGameRunning, refreshListing, reload, onDataChanged]);
+
+  const retryStaleListing = () => {
+    void refreshAfterGuard().then((applied) => {
+      if (!applied) return;
+      clearStaleActionError();
+    });
+  };
 
   const worldFormat = selected?.version?.data_format ?? null;
   const worldLabel = selected?.version?.name ?? selected?.level_name ?? null;
@@ -322,7 +331,7 @@ export default function WorldsPage({
                   gameGuardChecking={guardChecking}
                   staleLocks={locked || running ? [] : (stack?.stale_locks ?? [])}
                   refreshGameRunning={refreshGameRunning}
-                  onRefresh={refreshAfterGuard}
+                  onRefresh={() => void refreshAfterGuard()}
                 />
                 {lockedNotice ? (
                   <p className="banner" role="status">
@@ -338,7 +347,7 @@ export default function WorldsPage({
                   <p className="error" role="alert">
                     {actionError.message}{' '}
                     {actionError.code === 'stale_stack' ? (
-                      <button type="button" className="button" onClick={() => void refreshAfterGuard()}>
+                      <button type="button" className="button" onClick={retryStaleListing}>
                         Retry
                       </button>
                     ) : null}
