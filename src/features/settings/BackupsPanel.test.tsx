@@ -85,6 +85,24 @@ describe('BackupsPanel', () => {
     expect(within(optionsTable).getAllByRole('button', { name: 'Restore' })).toHaveLength(2);
   });
 
+  it('names each Restore button after its backup', async () => {
+    render(<BackupsPanel client={makeClient()} gameRunning={null} />);
+
+    const optionsTable = (await screen.findAllByRole('table'))[0];
+    expect(
+      within(optionsTable).getByRole('button', { name: 'Restore 2026-10-25 09:00:00 UTC' }),
+    ).toHaveAccessibleName('Restore 2026-10-25 09:00:00 UTC');
+    expect(
+      within(optionsTable).getByRole('button', { name: 'Restore 2026-10-25 08:00:00 UTC' }),
+    ).toHaveAccessibleName('Restore 2026-10-25 08:00:00 UTC');
+    const level = await screen.findByRole('region', { name: 'Survival 1_17 backups' });
+    expect(
+      within(level).getByRole('button', {
+        name: 'Restore 2026-10-25 10:15:00 UTC for Survival 1_17',
+      }),
+    ).toHaveAccessibleName('Restore 2026-10-25 10:15:00 UTC for Survival 1_17');
+  });
+
   it('shows the empty state when there are no backups', async () => {
     render(<BackupsPanel client={makeClient({ backups: [] })} gameRunning={null} />);
 

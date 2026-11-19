@@ -146,6 +146,18 @@ describe('ActiveStack', () => {
     expect(await screen.findByText('Dropped Alpha at position 1 of 4.')).toBeInTheDocument();
   });
 
+  it('announces the pickup that the first over text replaces', async () => {
+    const user = userEvent.setup();
+    render(<PacksPage client={stackClient()} gameRunning={null} />);
+
+    await screen.findByRole('list', { name: 'Stack order' });
+    const handle = within(card('Alpha')).getByRole('button', { name: 'Drag Alpha' });
+    handle.focus();
+    await user.keyboard('[Space]');
+    expect(screen.getByText('Picked up Alpha, position 2 of 4.')).toBeInTheDocument();
+    expect(screen.getByText('Alpha is over position 1 of 4.')).toBeInTheDocument();
+  });
+
   it('keeps announcing when the dragged pack leaves the stack mid-drag', async () => {
     const user = userEvent.setup();
     const props = {
