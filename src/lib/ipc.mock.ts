@@ -23,6 +23,7 @@ import type {
   ModrinthSort,
   ModrinthVersion,
   Pack,
+  PackIssue,
   PackKind,
   PackListing,
   ResourceStack,
@@ -820,6 +821,7 @@ export interface MockWorldPack {
   minFormat: number | null;
   maxFormat: number | null;
   gameLabel: string;
+  error?: PackIssue;
 }
 
 const SURVIVAL_PACKS: MockWorldPack[] = [
@@ -850,8 +852,20 @@ const INITIAL_WORLD_STACKS: Record<string, { enabled: string[]; disabled: string
   },
 };
 
+const BROKEN_LOOT: MockWorldPack = {
+  filename: 'broken-loot.zip',
+  kind: 'unknown',
+  minFormat: null,
+  maxFormat: null,
+  gameLabel: '',
+  error: {
+    code: 'pack_broken_archive',
+    message: 'broken-loot.zip is not a readable pack: invalid Zip archive',
+  },
+};
+
 const INITIAL_WORLD_PACKS: Record<string, MockWorldPack[]> = {
-  'Survival 1_17': [...SURVIVAL_PACKS],
+  'Survival 1_17': [...SURVIVAL_PACKS, BROKEN_LOOT],
   'Creative Flat': [],
   'Locked World': [],
 };
@@ -1025,6 +1039,7 @@ function mockDatapackListing(world: string): DatapackListing {
       ),
       path: `/home/demo/.minecraft/saves/${world}/datapacks/${item.filename}`,
       id: `/home/demo/.minecraft/saves/${world}/datapacks/${item.filename}`,
+      error: item.error ?? null,
     };
   });
   return {

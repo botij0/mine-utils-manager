@@ -31,6 +31,11 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
+function restoreName(busy: boolean, display: string, world?: string): string {
+  const verb = busy ? 'Restoring' : 'Restore';
+  return world ? `${verb} ${display} for ${world}` : `${verb} ${display}`;
+}
+
 /** Every `options.txt` write leaves a timestamped backup; this lists them and
  *  restores one. The backend blocks restore while the game is running; this
  *  panel only mirrors that state so the button explains itself. */
@@ -249,6 +254,7 @@ export default function BackupsPanel({
                     className="button"
                     disabled={blocked || restoring !== null}
                     title={restoreTitle}
+                    aria-label={restoreName(restoring === backup.file_name, backup.display)}
                     onClick={() => void handleRestore(backup.file_name)}
                   >
                     {restoring === backup.file_name ? 'Restoring…' : 'Restore'}
@@ -310,6 +316,7 @@ export default function BackupsPanel({
                             className="button"
                             disabled={blocked || levelRestoring !== null}
                             title={restoreTitle}
+                            aria-label={restoreName(levelRestoring === key, backup.display, group.label)}
                             onClick={() => void handleLevelRestore(group.dirName, group.label, backup.file_name)}
                           >
                             {levelRestoring === key ? 'Restoring…' : 'Restore'}

@@ -140,7 +140,7 @@ describe('ActiveStack', () => {
     const handle = within(card('Alpha')).getByRole('button', { name: 'Drag Alpha' });
     handle.focus();
     await user.keyboard('[Space]');
-    expect(await screen.findByText('Alpha is over position 1 of 4.')).toBeInTheDocument();
+    expect(await screen.findByText(/Alpha is over position 1 of 4\./)).toBeInTheDocument();
     await user.keyboard('[ArrowDown]');
     await user.keyboard('[Space]');
     expect(await screen.findByText('Dropped Alpha at position 1 of 4.')).toBeInTheDocument();
@@ -154,8 +154,8 @@ describe('ActiveStack', () => {
     const handle = within(card('Alpha')).getByRole('button', { name: 'Drag Alpha' });
     handle.focus();
     await user.keyboard('[Space]');
-    expect(screen.getByText('Picked up Alpha, position 2 of 4.')).toBeInTheDocument();
-    expect(screen.getByText('Alpha is over position 1 of 4.')).toBeInTheDocument();
+    const live = screen.getByText(/Picked up Alpha, position 2 of 4\./);
+    expect(live.textContent).toBe('Picked up Alpha, position 2 of 4. Alpha is over position 1 of 4.');
   });
 
   it('keeps announcing when the dragged pack leaves the stack mid-drag', async () => {
@@ -172,7 +172,7 @@ describe('ActiveStack', () => {
     const handle = within(card('Beta')).getByRole('button', { name: 'Drag Beta' });
     handle.focus();
     await user.keyboard('[Space]');
-    expect(await screen.findByText('Beta is over position 1 of 4.')).toBeInTheDocument();
+    expect(await screen.findByText(/Beta is over position 1 of 4\./)).toBeInTheDocument();
 
     rerender(<ActiveStack {...props} stack={resourceStack(['vanilla', 'fabric', 'file/Alpha.zip'])} />);
     await user.keyboard('[Escape]');
@@ -272,7 +272,7 @@ describe('ActiveStack', () => {
 
     await user.click(
       screen.getByRole('button', {
-        name: 'Restore',
+        name: /^Restore /,
       }),
     );
 

@@ -82,7 +82,7 @@ describe('BackupsPanel', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('4.0 KB')).toBeInTheDocument();
     const optionsTable = screen.getAllByRole('table')[0];
-    expect(within(optionsTable).getAllByRole('button', { name: 'Restore' })).toHaveLength(2);
+    expect(within(optionsTable).getAllByRole('button', { name: /^Restore / })).toHaveLength(2);
   });
 
   it('names each Restore button after its backup', async () => {
@@ -139,7 +139,7 @@ describe('BackupsPanel', () => {
   it('disables restore while the game is running', async () => {
     render(<BackupsPanel client={makeClient()} gameRunning={RUNNING} />);
 
-    const buttons = await screen.findAllByRole('button', { name: 'Restore' });
+    const buttons = await screen.findAllByRole('button', { name: /^Restore / });
     for (const button of buttons) {
       expect(button).toBeDisabled();
     }
@@ -150,7 +150,7 @@ describe('BackupsPanel', () => {
       <BackupsPanel client={makeClient()} gameRunning={null} gameGuardUnknown />,
     );
 
-    const buttons = await screen.findAllByRole('button', { name: 'Restore' });
+    const buttons = await screen.findAllByRole('button', { name: /^Restore / });
     for (const button of buttons) {
       expect(button).toBeDisabled();
       expect(button).toHaveAttribute(
@@ -174,7 +174,7 @@ describe('BackupsPanel', () => {
     const optionsTable = await screen.findByRole('table');
     await act(async () => {});
 
-    for (const button of within(optionsTable).getAllByRole('button', { name: 'Restore' })) {
+    for (const button of within(optionsTable).getAllByRole('button', { name: /^Restore / })) {
       expect(button).toBeEnabled();
     }
   });
@@ -184,7 +184,7 @@ describe('BackupsPanel', () => {
     const client = makeClient();
     render(<BackupsPanel client={client} gameRunning={null} />);
 
-    const buttons = await screen.findAllByRole('button', { name: 'Restore' });
+    const buttons = await screen.findAllByRole('button', { name: /^Restore / });
     await user.click(buttons[0]);
 
     await waitFor(() =>
@@ -207,7 +207,7 @@ describe('BackupsPanel', () => {
 
     const region = screen.getByRole('region', { name: 'Survival 1_17 backups' });
     const { getByRole } = within(region);
-    await user.click(getByRole('button', { name: 'Restore' }));
+    await user.click(getByRole('button', { name: /^Restore / }));
 
     await waitFor(() =>
       expect(client.levelRestores).toEqual([
@@ -222,7 +222,7 @@ describe('BackupsPanel', () => {
     client.restoreLevelBackup = async () => { throw new IpcError('world_mismatch', 'backend error'); };
     render(<BackupsPanel client={client} gameRunning={null} />);
     const region = await screen.findByRole('region', { name: 'Survival 1_17 backups' });
-    await user.click(within(region).getByRole('button', { name: 'Restore' }));
+    await user.click(within(region).getByRole('button', { name: /^Restore / }));
     expect(await screen.findByRole('alert')).toHaveTextContent('This backup belongs to a different world');
   });
 
@@ -273,7 +273,7 @@ describe('BackupsPanel', () => {
       />,
     );
 
-    const buttons = await screen.findAllByRole('button', { name: 'Restore' });
+    const buttons = await screen.findAllByRole('button', { name: /^Restore / });
     await user.click(buttons[0]);
 
     const alert = await screen.findByRole('alert');
@@ -294,14 +294,14 @@ describe('BackupsPanel', () => {
     render(<BackupsPanel client={client} gameRunning={null} />);
 
     const optionsTable = (await screen.findAllByRole('table'))[0];
-    await user.click(within(optionsTable).getAllByRole('button', { name: 'Restore' })[0]);
+    await user.click(within(optionsTable).getAllByRole('button', { name: /^Restore / })[0]);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('the stack changed on disk');
     expect(await within(optionsTable).findByText('2026-10-26 09:30:00 UTC')).toBeInTheDocument();
     expect(
       within(optionsTable).getByText('20261026T093000.000000000-options.txt'),
     ).toBeInTheDocument();
-    expect(within(optionsTable).getAllByRole('button', { name: 'Restore' })).toHaveLength(3);
+    expect(within(optionsTable).getAllByRole('button', { name: /^Restore / })).toHaveLength(3);
   });
 
   it('reloads the world level.dat backups after a stale_stack restore', async () => {
@@ -317,14 +317,14 @@ describe('BackupsPanel', () => {
     render(<BackupsPanel client={client} gameRunning={null} />);
 
     const region = await screen.findByRole('region', { name: 'Survival 1_17 backups' });
-    await user.click(within(region).getByRole('button', { name: 'Restore' }));
+    await user.click(within(region).getByRole('button', { name: /^Restore / }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('the stack changed on disk');
     expect(await within(region).findByText('2026-10-26 09:30:00 UTC')).toBeInTheDocument();
     expect(
       within(region).getByText('20261026T093000.000000000-Survival 1_17-level.dat'),
     ).toBeInTheDocument();
-    expect(within(region).getAllByRole('button', { name: 'Restore' })).toHaveLength(2);
+    expect(within(region).getAllByRole('button', { name: /^Restore / })).toHaveLength(2);
   });
 
   it('reloads the table when the active game dir changes, not when the guard object does', async () => {

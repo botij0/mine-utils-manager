@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { DataStackEntry, Pack } from '../../lib/types';
 import { StatusNote } from '../packs/PackEmptyState';
 import CompatibilityChip from './CompatibilityChip';
@@ -43,19 +44,23 @@ export default function DatapackGrid({
   onToggle,
   onMove,
 }: DatapackGridProps) {
+  const brokenCount = rows.filter((row) => row.pack?.error).length;
+  const brokenSummary =
+    brokenCount === 0 ? '' : `${brokenCount} broken ${brokenCount === 1 ? 'datapack' : 'datapacks'}`;
+  const [announcedBroken, setAnnouncedBroken] = useState('');
+  useEffect(() => {
+    setAnnouncedBroken(brokenSummary);
+  }, [brokenSummary]);
   if (loading && rows.length === 0) {
     return <StatusNote>Loading datapacks…</StatusNote>;
   }
   if (rows.length === 0) {
     return <StatusNote>No datapacks yet. Import a zip or a folder to add one.</StatusNote>;
   }
-  const brokenCount = rows.filter((row) => row.pack?.error).length;
-  const brokenSummary =
-    brokenCount === 0 ? '' : `${brokenCount} broken ${brokenCount === 1 ? 'datapack' : 'datapacks'}`;
   return (
     <>
       <p className="visually-hidden" role="status">
-        {brokenSummary}
+        {announcedBroken}
       </p>
       <ul className="datapack-grid" aria-label="Datapack stack" aria-busy={loading}>
         {rows.map((row, index) => {
@@ -67,6 +72,7 @@ export default function DatapackGrid({
           const broken = row.pack?.error ?? null;
           const selectionId = broken?.code === 'pack_non_utf8_name' ? row.pack!.id : name;
           if (broken) {
+            const errorId = `datapack-broken-${index}`;
             // A broken pack is an error card, but an *enabled* broken row is
             // still a live `level.dat` entry: it keeps Disable (and any move
             // that stays between `file/` entries) so a corrupt pack can be
@@ -82,10 +88,11 @@ export default function DatapackGrid({
                   className="datapack-card-main"
                   onClick={() => onSelect(selectionId)}
                   aria-label={`${name}, broken`}
+                  aria-describedby={errorId}
                 >
                   <span className="datapack-name">{name}</span>
                   <span className="datapack-kind">Broken datapack</span>
-                  <span className="datapack-error">{broken.message}</span>
+                  <span id={errorId} className="datapack-error">{broken.message}</span>
                 </button>
                 {actionable ? (
                   <span className="datapack-actions">
