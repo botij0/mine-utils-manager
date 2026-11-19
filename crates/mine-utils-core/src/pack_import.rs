@@ -15,19 +15,19 @@ use crate::pack_scan::{
 };
 use crate::pack_source::{display_name, Fingerprint, PackSource};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExistingPack {
     None,
-    Destination,
-    Elsewhere,
+    Destination(PathBuf),
+    Elsewhere(PathBuf),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImportPlan {
     Copy,
-    Duplicate,
+    Duplicate(PathBuf),
     Skip,
-    ReplaceDuplicate,
+    ReplaceDuplicate(PathBuf),
     ReplaceDestination,
     Collision,
 }
@@ -41,10 +41,18 @@ pub fn plan_import(
         (ExistingPack::None, false, _) => ImportPlan::Copy,
         (ExistingPack::None, true, ImportChoice::Replace) => ImportPlan::ReplaceDestination,
         (ExistingPack::None, true, _) => ImportPlan::Collision,
-        (_, _, ImportChoice::Default) => ImportPlan::Duplicate,
+        (
+            ExistingPack::Destination(path) | ExistingPack::Elsewhere(path),
+            _,
+            ImportChoice::Default,
+        ) => ImportPlan::Duplicate(path),
         (_, _, ImportChoice::Skip) => ImportPlan::Skip,
-        (ExistingPack::Elsewhere, true, ImportChoice::Replace) => ImportPlan::Collision,
-        (_, _, ImportChoice::Replace) => ImportPlan::ReplaceDuplicate,
+        (ExistingPack::Elsewhere(_), true, ImportChoice::Replace) => ImportPlan::Collision,
+        (
+            ExistingPack::Destination(path) | ExistingPack::Elsewhere(path),
+            _,
+            ImportChoice::Replace,
+        ) => ImportPlan::ReplaceDuplicate(path),
     }
 }
 
@@ -292,23 +300,23 @@ fn import_pack_with_services(
     reject_ambiguous_name(&destination, &root)?;
     let destination_taken = std::fs::symlink_metadata(&destination).is_ok();
 
-    let existing_pack = match &existing {
+    let existing_pack = match existing {
         None => ExistingPack::None,
-        Some(path) if path == &destination => ExistingPack::Destination,
-        Some(_) => ExistingPack::Elsewhere,
+        Some(path) if path == destination => ExistingPack::Destination(path),
+        Some(path) => ExistingPack::Elsewhere(path),
     };
     let removal = match plan_import(existing_pack, destination_taken, choice) {
         ImportPlan::Copy => None,
         ImportPlan::Skip => return Ok(ImportOutcome::Skipped),
-        ImportPlan::Duplicate => {
+        ImportPlan::Duplicate(existing) => {
             return Ok(ImportOutcome::Duplicate {
                 name,
                 sha256,
-                existing: existing.unwrap().to_string_lossy().to_string(),
+                existing: existing.to_string_lossy().to_string(),
             });
         }
         ImportPlan::Collision => return Ok(ImportOutcome::Collision { name }),
-        ImportPlan::ReplaceDuplicate => existing,
+        ImportPlan::ReplaceDuplicate(existing) => Some(existing),
         ImportPlan::ReplaceDestination => Some(destination.clone()),
     };
 
@@ -561,6 +569,7 @@ mod tests {
     fn plan_import_covers_every_existing_taken_choice_combination() {
         use ExistingPack::{Destination, Elsewhere, None};
         use ImportChoice::{Default, Replace, Skip};
+        let path = PathBuf::from("existing-pack");
         let cases = [
             (None, false, Default, ImportPlan::Copy),
             (None, false, Skip, ImportPlan::Copy),
@@ -568,22 +577,62 @@ mod tests {
             (None, true, Default, ImportPlan::Collision),
             (None, true, Skip, ImportPlan::Collision),
             (None, true, Replace, ImportPlan::ReplaceDestination),
-            (Destination, false, Default, ImportPlan::Duplicate),
-            (Destination, false, Skip, ImportPlan::Skip),
-            (Destination, false, Replace, ImportPlan::ReplaceDuplicate),
-            (Destination, true, Default, ImportPlan::Duplicate),
-            (Destination, true, Skip, ImportPlan::Skip),
-            (Destination, true, Replace, ImportPlan::ReplaceDuplicate),
-            (Elsewhere, false, Default, ImportPlan::Duplicate),
-            (Elsewhere, false, Skip, ImportPlan::Skip),
-            (Elsewhere, false, Replace, ImportPlan::ReplaceDuplicate),
-            (Elsewhere, true, Default, ImportPlan::Duplicate),
-            (Elsewhere, true, Skip, ImportPlan::Skip),
-            (Elsewhere, true, Replace, ImportPlan::Collision),
+            (
+                Destination(path.clone()),
+                false,
+                Default,
+                ImportPlan::Duplicate(path.clone()),
+            ),
+            (Destination(path.clone()), false, Skip, ImportPlan::Skip),
+            (
+                Destination(path.clone()),
+                false,
+                Replace,
+                ImportPlan::ReplaceDuplicate(path.clone()),
+            ),
+            (
+                Destination(path.clone()),
+                true,
+                Default,
+                ImportPlan::Duplicate(path.clone()),
+            ),
+            (Destination(path.clone()), true, Skip, ImportPlan::Skip),
+            (
+                Destination(path.clone()),
+                true,
+                Replace,
+                ImportPlan::ReplaceDuplicate(path.clone()),
+            ),
+            (
+                Elsewhere(path.clone()),
+                false,
+                Default,
+                ImportPlan::Duplicate(path.clone()),
+            ),
+            (Elsewhere(path.clone()), false, Skip, ImportPlan::Skip),
+            (
+                Elsewhere(path.clone()),
+                false,
+                Replace,
+                ImportPlan::ReplaceDuplicate(path.clone()),
+            ),
+            (
+                Elsewhere(path.clone()),
+                true,
+                Default,
+                ImportPlan::Duplicate(path.clone()),
+            ),
+            (Elsewhere(path.clone()), true, Skip, ImportPlan::Skip),
+            (
+                Elsewhere(path.clone()),
+                true,
+                Replace,
+                ImportPlan::Collision,
+            ),
         ];
         for (existing, taken, choice, expected) in cases {
             assert_eq!(
-                plan_import(existing, taken, choice),
+                plan_import(existing.clone(), taken, choice),
                 expected,
                 "existing={existing:?}, taken={taken}, choice={choice:?}"
             );
