@@ -33,6 +33,8 @@ interface PacksPageProps {
   gameGuardChecking?: boolean;
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
+  /** From the app-level game guard poll. Undefined until the first check. */
+  lockDetectionSupported?: boolean;
 }
 
 interface ToggleToast {
@@ -63,6 +65,7 @@ export default function PacksPage({
   gameGuardUnknown = false,
   gameGuardChecking = false,
   refreshGameRunning = () => {},
+  lockDetectionSupported,
 }: PacksPageProps) {
   const {
     packs,
@@ -427,7 +430,7 @@ export default function PacksPage({
               guardUnknown={guardUnknown}
               checking={guardChecking}
               staleLocks={[]}
-              supported
+              supported={lockDetectionSupported}
               onRecheck={() => {
                 void refreshStack();
                 void refreshGameRunning();
