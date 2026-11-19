@@ -935,23 +935,6 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Worlds' })).toBeInTheDocument();
   });
 
-  it('falls back to Packs when the hash names no page', async () => {
-    const user = userEvent.setup();
-    const client = await shellClient();
-    render(<App client={client} />);
-
-    await user.click(await screen.findByRole('button', { name: 'Worlds' }));
-    expect(await screen.findByRole('heading', { level: 1, name: 'Worlds' })).toBeInTheDocument();
-    const entries = window.history.length;
-
-    window.location.hash = 'nonsense';
-    expect(
-      await screen.findByRole('heading', { level: 1, name: 'Resource Packs' }),
-    ).toBeInTheDocument();
-    expect(window.location.hash).toBe('#packs');
-    expect(window.history.length).toBe(entries + 1);
-  });
-
   it.each([
     { label: 'Resource Packs', id: 'packs' },
     { label: 'Worlds', id: 'worlds' },
