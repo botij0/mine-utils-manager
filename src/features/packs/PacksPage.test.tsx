@@ -785,7 +785,7 @@ describe('PacksPage', () => {
     await user.click(within(banner).getByRole('button', { name: 'Retry' }));
     await settle();
 
-    expect(screen.queryByText('the stack changed on disk')).not.toBeInTheDocument();
+    expect(screen.queryByText(/the stack changed on disk/)).not.toBeInTheDocument();
     expect(reads).toBe(readsAtBanner + 1);
     expect(stackNames()).toEqual(['Brand.zip', 'Autumn.zip', 'Vanilla', 'vanilla']);
   });
@@ -793,7 +793,7 @@ describe('PacksPage', () => {
   it('keeps the stale-stack banner when Retry cannot reload the stack', async () => {
     const user = userEvent.setup();
     const client = makeFakeClient({ packs: [VANILLA_PACK] });
-    let disk = resourceStack(['vanilla', 'file/Vanilla.zip', 'file/Autumn.zip']);
+    const disk = resourceStack(['vanilla', 'file/Vanilla.zip', 'file/Autumn.zip']);
     let failReload = false;
     client.getResourceStack = async () => {
       if (failReload) throw new IpcError('options_txt', 'options.txt is unreadable');
@@ -814,7 +814,7 @@ describe('PacksPage', () => {
     await user.click(within(banner).getByRole('button', { name: 'Retry' }));
     await settle();
 
-    expect(screen.getByText('the stack changed on disk')).toBeInTheDocument();
+    expect(screen.getByText(/the stack changed on disk/)).toBeInTheDocument();
     expect(screen.getByText('options.txt is unreadable')).toBeInTheDocument();
   });
 
