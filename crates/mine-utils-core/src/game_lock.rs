@@ -75,7 +75,13 @@ pub fn check(game_dir: &Path) -> GameStatus {
 
 /// Check with an injectable proc root so tests can fake process listings.
 pub fn check_in(game_dir: &Path, proc_root: &Path) -> GameStatus {
-    let mut status = GameStatus::idle(lock_detection_supported());
+    check_in_with(game_dir, proc_root, lock_detection_supported())
+}
+
+/// `locks_supported` is false on platforms that cannot probe POSIX locks.
+/// Callers on those platforms return before the process listing.
+fn check_in_with(game_dir: &Path, proc_root: &Path, locks_supported: bool) -> GameStatus {
+    let mut status = GameStatus::idle(locks_supported);
     if !status.supported {
         return status;
     }
@@ -281,16 +287,28 @@ fn session_lock_check(_game_dir: &Path, _stale: &mut Vec<PathBuf>) -> Option<Gam
 /// working directory equal to the active game dir. The cwd check covers
 /// launchers that set the process directory instead of passing `--gameDir`.
 fn process_check(game_dir: &Path, proc_root: &Path) -> std::io::Result<Option<GameRunning>> {
+    let entries = std::fs::read_dir(proc_root)?.map(|entry| entry.map(|dir| dir.path()));
+    client_from_proc_entries(game_dir, entries)
+}
+
+fn client_from_proc_entries(
+    game_dir: &Path,
+    entries: impl Iterator<Item = std::io::Result<PathBuf>>,
+) -> std::io::Result<Option<GameRunning>> {
     let canonical_game_dir = std::fs::canonicalize(game_dir).ok();
-    let mut pids: Vec<PathBuf> = std::fs::read_dir(proc_root)?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.chars().all(|c| c.is_ascii_digit()))
-        })
-        .collect();
+    let mut pids = Vec::new();
+    for entry in entries {
+        let Ok(path) = entry else {
+            continue;
+        };
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.chars().all(|c| c.is_ascii_digit()))
+        {
+            pids.push(path);
+        }
+    }
     pids.sort();
 
     for proc_dir in pids {
@@ -427,5 +445,73 @@ fn cwd_matches(cwd: Option<&Path>, game_dir: &Path, canonical_game_dir: Option<&
     match (std::fs::canonicalize(cwd), canonical_game_dir) {
         (Ok(cwd), Some(target)) => cwd == target,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_without_process_probe_available_deserializes_as_available() {
+        let status: GameStatus = serde_json::from_value(serde_json::json!({
+            "running": null,
+            "stale_locks": [],
+            "supported": true
+        }))
+        .unwrap();
+        assert!(status.process_probe_available);
+    }
+
+    #[test]
+    fn an_explicit_false_process_probe_stays_unavailable() {
+        let status: GameStatus = serde_json::from_value(serde_json::json!({
+            "running": null,
+            "stale_locks": [],
+            "supported": true,
+            "process_probe_available": false
+        }))
+        .unwrap();
+        assert!(!status.process_probe_available);
+    }
+
+    #[test]
+    fn unsupported_lock_detection_does_not_mark_the_process_probe_failed() {
+        let root = tempfile::tempdir().unwrap();
+        let game_dir = root.path().join("game");
+        std::fs::create_dir_all(&game_dir).unwrap();
+        let status = check_in_with(&game_dir, &root.path().join("missing-proc"), false);
+        assert!(!status.supported);
+        assert!(status.running.is_none());
+        assert!(status.process_probe_available);
+    }
+
+    #[test]
+    fn a_mid_listing_read_dir_error_makes_the_probe_unavailable() {
+        let root = tempfile::tempdir().unwrap();
+        let game_dir = root.path().join("game");
+        std::fs::create_dir_all(&game_dir).unwrap();
+        let proc_root = root.path().join("proc");
+        let pid_dir = proc_root.join("4242");
+        std::fs::create_dir_all(&pid_dir).unwrap();
+        std::fs::write(
+            pid_dir.join("cmdline"),
+            format!("java\0--gameDir\0{}\0", game_dir.display()),
+        )
+        .unwrap();
+
+        let entries = vec![
+            Ok(proc_root.join("1")),
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "unreadable directory entry",
+            )),
+            Ok(pid_dir),
+        ];
+        let found = client_from_proc_entries(&game_dir, entries.into_iter());
+        assert!(
+            found.is_err(),
+            "a partial proc listing must fail the probe instead of returning a later client"
+        );
     }
 }

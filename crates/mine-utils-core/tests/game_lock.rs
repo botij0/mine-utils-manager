@@ -1,13 +1,14 @@
 //! Game guard tests: a real second process holds a POSIX write lock, and a
 //! fake `/proc` proves the process scan.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use mine_utils_core::backup;
 use mine_utils_core::game_lock::{
-    check_in, lock_detection_supported, GameRunning, GameRunningKind,
+    check_in, lock_detection_supported, GameRunning, GameRunningKind, GameStatus,
 };
 use mine_utils_core::pack_import::TrashService;
 use mine_utils_core::resource_stack::{self, StackPaths, WriteGuard};
@@ -65,10 +66,15 @@ fn game_dir_with_world(dir: &Path) -> PathBuf {
 }
 
 fn wait_for_running(game_dir: &Path, proc_root: &Path) -> Option<mine_utils_core::GameRunning> {
+    wait_for_status(game_dir, proc_root).and_then(|status| status.running)
+}
+
+fn wait_for_status(game_dir: &Path, proc_root: &Path) -> Option<GameStatus> {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        if let Some(running) = check_in(game_dir, proc_root).running {
-            return Some(running);
+        let status = check_in(game_dir, proc_root);
+        if status.running.is_some() {
+            return Some(status);
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -817,4 +823,50 @@ fn process_probe_reports_unavailable_and_empty_roots() {
     assert_eq!(unavailable["running"], serde_json::Value::Null);
     assert_eq!(idle["process_probe_available"], true);
     assert_eq!(idle["running"], serde_json::Value::Null);
+}
+
+#[test]
+fn a_mode_000_proc_root_marks_the_probe_unavailable() {
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let game = root.path().join("game");
+    let proc_root = root.path().join("proc");
+    std::fs::create_dir_all(&game).unwrap();
+    std::fs::create_dir_all(&proc_root).unwrap();
+    std::fs::write(proc_root.join("4242"), b"not-a-directory").unwrap();
+    let mut blocked = std::fs::metadata(&proc_root).unwrap().permissions();
+    blocked.set_mode(0o000);
+    std::fs::set_permissions(&proc_root, blocked).unwrap();
+
+    let status = serde_json::to_value(check_in(&game, &proc_root)).unwrap();
+    std::fs::set_permissions(&proc_root, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(status["process_probe_available"], false);
+    assert_eq!(status["running"], serde_json::Value::Null);
+}
+
+#[test]
+fn a_held_lock_does_not_mark_the_unrun_process_probe_unavailable() {
+    if !lock_detection_supported() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let game_dir = game_dir_with_world(dir.path());
+    let lock_path = game_dir.join("saves/world/session.lock");
+    std::fs::write(&lock_path, b"\x00").unwrap();
+    let missing_proc = dir.path().join("missing-proc");
+
+    let mut child = spawn_lock_holder(&lock_path);
+    let status = wait_for_status(&game_dir, &missing_proc);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let status = status.expect("the held session.lock is detected");
+    assert_eq!(
+        status.running.as_ref().map(|running| running.kind),
+        Some(GameRunningKind::SessionLock)
+    );
+    assert!(status.process_probe_available);
 }

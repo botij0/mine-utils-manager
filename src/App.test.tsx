@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import type { IpcClient } from './lib/ipc';
-import type { GameRunning } from './lib/types';
+import type { GameGuard, GameRunning } from './lib/types';
 import { IpcError } from './lib/types';
 import { datapack, makeFakeClient, gameDir, stack, world } from './test/fake-ipc';
 import type { FakeClient } from './test/fake-ipc';
@@ -84,6 +84,97 @@ describe('App', () => {
     expect(await screen.findByText(/Minecraft process detection is unavailable/)).toHaveTextContent('writes are allowed');
     const list = await screen.findByRole('list', { name: 'Stack order' });
     expect(within(list).getByRole('button', { name: 'Remove Alpha.zip' })).toBeEnabled();
+  });
+
+  it('shows no process probe note when the guard payload omits the field', async () => {
+    const client = await shellClient();
+    client.getResourceStack = async () => stackResponse(null);
+    const calls: Array<(status: GameGuard) => void> = [];
+    client.getGameGuard = () =>
+      new Promise((resolve) => {
+        calls.push(resolve);
+      });
+    render(<App client={client} />);
+    await screen.findByRole('list', { name: 'Stack order' });
+    await act(async () => {});
+    expect(screen.getByText(/^Checking whether Minecraft is running/)).toBeInTheDocument();
+    await act(async () => {
+      for (const resolve of calls) {
+        resolve({
+          running: null,
+          stale_locks: [],
+          detection_supported: true,
+        } as GameGuard);
+      }
+    });
+    expect(screen.queryByText(/Minecraft process detection is unavailable/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Session locks are still checked/)).not.toBeInTheDocument();
+  });
+
+  it('drops the process probe note once probing is available again', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const client = await shellClient();
+    let available = false;
+    client.getResourceStack = async () => stackResponse(null);
+    client.getGameGuard = async () => ({
+      running: null,
+      stale_locks: [],
+      detection_supported: true,
+      process_probe_available: available,
+    });
+    render(<App client={client} />);
+    expect(await screen.findByText(/Minecraft process detection is unavailable/)).toBeInTheDocument();
+
+    available = true;
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Minecraft process detection is unavailable/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('hides the process probe note while Minecraft is running', async () => {
+    const client = await shellClient();
+    client.getResourceStack = async () => stackResponse(RUNNING);
+    client.getGameGuard = async () => ({
+      running: RUNNING,
+      stale_locks: [],
+      detection_supported: true,
+      process_probe_available: false,
+    });
+    render(<App client={client} />);
+    expect(await screen.findByText('Minecraft is running.')).toBeInTheDocument();
+    expect(screen.queryByText(/Minecraft process detection is unavailable/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Session locks are still checked/)).not.toBeInTheDocument();
+  });
+
+  it('does not claim session locks are checked when lock detection is unsupported', async () => {
+    const client = await shellClient();
+    client.getResourceStack = async () => ({ ...stackResponse(null), detection_supported: false });
+    const calls: Array<(status: GameGuard) => void> = [];
+    client.getGameGuard = () =>
+      new Promise((resolve) => {
+        calls.push(resolve);
+      });
+    render(<App client={client} />);
+    await screen.findByRole('list', { name: 'Stack order' });
+    await act(async () => {});
+    expect(screen.getByText(/^Checking whether Minecraft is running/)).toBeInTheDocument();
+    await act(async () => {
+      for (const resolve of calls) {
+        resolve({
+          running: null,
+          stale_locks: [],
+          detection_supported: false,
+          process_probe_available: false,
+        });
+      }
+    });
+    expect(screen.getByText(/Game lock detection is not supported/)).toBeInTheDocument();
+    expect(screen.queryByText(/Session locks are still checked/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Minecraft process detection is unavailable/)).not.toBeInTheDocument();
   });
 
   it('shows the startup warning and the shell', async () => {
