@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex, Once};
 use super::join_error;
 
 use mine_utils_core::{
-    discover_game_dirs, entry_for, home_dir, level_backup, merge_game_dirs, validate_game_dir,
-    AppError, BackupsConfig, Config, ConfigStore, DataPaths, GameDirEntry, StackPaths, Theme,
-    WorldPaths,
+    contains_entry, discover_game_dirs, entry_for, home_dir, is_game_dir, level_backup,
+    merge_game_dirs, validate_game_dir, AppError, BackupsConfig, Config, ConfigStore, DataPaths,
+    DiscoverySource, GameDirEntry, StackPaths, Theme, WorldPaths,
 };
 use tauri::State;
 
@@ -169,14 +169,25 @@ fn listing(config: &Config) -> Result<Vec<GameDirEntry>, AppError> {
         .iter()
         .map(|dir| dir.path.clone())
         .collect();
-    Ok(merged
+    let mut entries: Vec<_> = merged
         .into_iter()
         .map(|dir| {
             let mut entry = entry_for(&dir);
             entry.stored = stored.contains(&dir.path);
             entry
         })
-        .collect())
+        .collect();
+    if let Some(path) = config.active_game_dir.as_deref() {
+        if !contains_entry(&entries, path) && is_game_dir(path) {
+            entries.push(GameDirEntry {
+                path: path.to_path_buf(),
+                source: DiscoverySource::Manual,
+                present: true,
+                stored: false,
+            });
+        }
+    }
+    Ok(entries)
 }
 
 fn state_for(config: Config) -> Result<GameDirState, AppError> {
