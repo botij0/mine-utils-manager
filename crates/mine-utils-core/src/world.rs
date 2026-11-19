@@ -6,6 +6,7 @@
 //! version, or malformed datapack lists render as an error card; the other
 //! worlds still render.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -87,27 +88,33 @@ impl WorldPaths {
     fn for_world_with(
         game_dir: &Path,
         world: &str,
-        canonicalize_world: impl FnOnce(&Path) -> std::io::Result<PathBuf>,
+        canonicalize_world: impl FnOnce(&Path) -> io::Result<PathBuf>,
     ) -> Result<WorldPaths, crate::error::AppError> {
-        if world.is_empty()
-            || world == "."
-            || world == ".."
-            || world.contains('/')
-            || world.contains('\\')
-            || world.contains('\0')
-        {
+        if !is_world_name(world) {
             return Err(crate::error::AppError::World {
                 reason: format!("{world} is not a world in this game dir"),
             });
         }
         let world_dir = game_dir.join("saves").join(world);
         let resolved = resolve_inside_saves(game_dir, &world_dir, canonicalize_world)?;
+        let name = world_entry_name(&resolved)
+            .map_err(|err| crate::error::AppError::World {
+                reason: format!(
+                    "could not read the world folder name for {}: {err}",
+                    resolved.display()
+                ),
+            })?
+            .unwrap_or_else(|| world.to_string());
         Ok(WorldPaths {
             game_dir: game_dir.to_path_buf(),
             world_dir: resolved,
-            name: world.to_string(),
+            name,
         })
     }
+}
+
+fn is_world_name(world: &str) -> bool {
+    !world.is_empty() && world != "." && world != ".." && !world.contains(['/', '\\', '\0'])
 }
 
 /// Resolve a world dir and prove it stays inside the canonical `saves` root.
@@ -116,7 +123,7 @@ impl WorldPaths {
 fn resolve_inside_saves(
     game_dir: &Path,
     world_dir: &Path,
-    canonicalize_world: impl FnOnce(&Path) -> std::io::Result<PathBuf>,
+    canonicalize_world: impl FnOnce(&Path) -> io::Result<PathBuf>,
 ) -> Result<PathBuf, crate::error::AppError> {
     let reject = |reason: String| {
         Err(crate::error::AppError::World {
@@ -133,10 +140,49 @@ fn resolve_inside_saves(
         .unwrap_or_else(|_| canonical_game.join("saves"));
     let resolved = canonicalize_world(world_dir)
         .unwrap_or_else(|_| canonical_saves.join(world_dir.file_name().unwrap_or_default()));
-    if resolved != canonical_saves && !resolved.starts_with(&canonical_saves) {
-        return reject(format!("is outside {}", canonical_saves.display()));
+    if resolved.parent() != Some(canonical_saves.as_path()) {
+        return reject(format!(
+            "is not a direct child of {}",
+            canonical_saves.display()
+        ));
     }
     Ok(resolved)
+}
+
+fn world_entry_name(world_dir: &Path) -> io::Result<Option<String>> {
+    match std::fs::symlink_metadata(world_dir) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(meta) if meta.is_symlink() => return Err(io::Error::other("world folder is a symlink")),
+        Ok(_) => return Ok(None),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    }
+
+    let saves = world_dir
+        .parent()
+        .ok_or_else(|| io::Error::other("world folder has no parent"))?;
+    let entries = std::fs::read_dir(saves)?.collect::<io::Result<Vec<_>>>()?;
+    let entry = if let Some(entry) = entries.iter().find(|entry| entry.path() == world_dir) {
+        entry
+    } else {
+        // Canonicalization can keep the caller's spelling on a case-insensitive volume.
+        let identity = crate::download::directory_handle(world_dir)?;
+        entries
+            .iter()
+            .find(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_dir())
+                    && crate::download::directory_handle(&entry.path())
+                        .is_ok_and(|candidate| candidate == identity)
+            })
+            .ok_or_else(|| io::Error::other("world folder has no matching directory entry"))?
+    };
+    let name = entry
+        .file_name()
+        .into_string()
+        .ok()
+        .filter(|name| is_world_name(name))
+        .ok_or_else(|| io::Error::other("world folder name is not a valid backup name"))?;
+    Ok(Some(name))
 }
 
 /// True only for a real directory: symlinks (even to directories) are
