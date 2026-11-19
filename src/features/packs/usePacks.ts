@@ -30,7 +30,8 @@ export interface PacksState {
   /** The stack-read failure. A pack-list failure never lands here. */
   stackError: IpcError | null;
   reload: () => Promise<void>;
-  refreshStack: () => Promise<void>;
+  /** True when this call applied a stack. False when a newer read won or the read failed. */
+  refreshStack: () => Promise<boolean>;
   importPack: (path: string, choice?: ImportChoice) => Promise<ImportOutcome>;
   deletePack: (path: string) => Promise<void>;
   togglePack: (filename: string, enabled: boolean) => Promise<void>;
@@ -112,21 +113,22 @@ export function usePacks(
     }
   }, [client]);
 
-  const refreshStack = useCallback(async () => {
+  const refreshStack = useCallback(async (): Promise<boolean> => {
     const request = ++stackRequest.current;
     setStackLoading(true);
     setStackError(null);
     try {
       const next = await client.getResourceStack();
-      if (mounted.current && request === stackRequest.current) {
-        setStack(next);
-        setStackError(null);
-      }
+      if (!mounted.current || request !== stackRequest.current) return false;
+      setStack(next);
+      setStackError(null);
+      return true;
     } catch (err) {
       // Keep the last stack on screen. A failed re-read is not a reason to
       // replace a usable view with an error card.
-      if (!mounted.current || request !== stackRequest.current) return;
+      if (!mounted.current || request !== stackRequest.current) return false;
       setStackError(toAppError(err));
+      return false;
     } finally {
       if (mounted.current && request === stackRequest.current) setStackLoading(false);
     }
@@ -213,16 +215,11 @@ export function usePacks(
           setStack(next);
           setStackError(null);
         }
-      } catch (err) {
-        // A refused write leaves the rendered stack behind the disk. Re-read it
-        // so the user sees the current order along with the error.
-        if (toAppError(err).code === 'stale_stack') await refreshStack();
-        throw err;
       } finally {
         if (mounted.current) setBusy(false);
       }
     },
-    [client, stack, refreshStack],
+    [client, stack],
   );
 
   return {

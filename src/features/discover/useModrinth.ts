@@ -153,6 +153,12 @@ export function useModrinth(
   const [installResult, setInstallResult] = useState<ModrinthInstallOutcome | null>(null);
   const [installError, setInstallError] = useState<IpcError | null>(null);
   const installId = useRef<string | null>(null);
+  // Discover passes a new arrow each render. install reads the latest one
+  // without taking that arrow as a dependency.
+  const onGameRunningRef = useRef(onGameRunning);
+  useLayoutEffect(() => {
+    onGameRunningRef.current = onGameRunning;
+  }, [onGameRunning]);
   const requestId = useRef(0);
   const selectToken = useRef(0);
   const mounted = useRef(true);
@@ -441,13 +447,13 @@ export function useModrinth(
       const appError = toAppError(err);
       if (mounted.current && selectToken.current === token) setInstallError(appError);
       // The backend just saw the game; the app guard must re-check now.
-      if (appError.code === 'game_running') onGameRunning?.();
+      if (appError.code === 'game_running') onGameRunningRef.current?.();
       return null;
     } finally {
       installId.current = null;
       if (mounted.current) setInstallPhase('idle');
     }
-  }, [client, kind, selected, selectedVersionId, versions, world, onGameRunning]);
+  }, [client, kind, selected, selectedVersionId, versions, world]);
 
   const cancelInstall = useCallback(async () => {
     const id = installId.current;

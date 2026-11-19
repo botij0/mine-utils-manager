@@ -130,6 +130,33 @@ describe('useModrinth', () => {
     }
   });
 
+  it('keeps install stable across rerenders when its inputs are unchanged', async () => {
+    const client = makeFakeClient([gameDir('/home/demo/.minecraft', true, true)]);
+    const calls: number[] = [];
+    const { result, rerender } = renderHook(
+      ({ onGameRunning }: { onGameRunning: () => void }) =>
+        useModrinth(client, true, '', null, onGameRunning),
+      { initialProps: { onGameRunning: () => { calls.push(1); } } },
+    );
+    const first = result.current.install;
+    rerender({ onGameRunning: () => { calls.push(2); } });
+    expect(result.current.install).toBe(first);
+
+    client.installModrinthPack = async () => {
+      throw new IpcError('game_running', 'Minecraft is running; close it first');
+    };
+    await act(async () => {
+      await result.current.select(freshHit());
+    });
+    const afterSelect = result.current.install;
+    rerender({ onGameRunning: () => { calls.push(3); } });
+    expect(result.current.install).toBe(afterSelect);
+    await act(async () => {
+      await result.current.install();
+    });
+    expect(calls).toEqual([3]);
+  });
+
   it('requests backend cancellation when unmounted during an install', async () => {
     const client = makeFakeClient([]);
     const cancel = vi.spyOn(client, 'cancelModrinthInstall').mockResolvedValue(true);

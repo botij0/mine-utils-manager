@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { PackClient } from '../../lib/ipc';
 import { ipc, isTauriRuntime, pickPackPath, toAppError } from '../../lib/ipc';
-import type { GameRunning, ImportChoice, Pack, PackKind } from '../../lib/types';
+import type { ClientErrorCode, GameRunning, ImportChoice, Pack, PackKind } from '../../lib/types';
 import {
   formatFilterOptions,
   matchesFormat,
@@ -38,6 +38,11 @@ interface PacksPageProps {
 interface ToggleToast {
   message: string;
   undo: (() => void) | null;
+}
+
+interface ActionNotice {
+  message: string;
+  code: ClientErrorCode | null;
 }
 
 /** Tauri adds a real path to dropped files; a browser drop has none. */
@@ -86,7 +91,7 @@ export default function PacksPage({
   const [extraPaths, setExtraPaths] = useState<string[]>([]);
   const [lastPath, setLastPath] = useState<string | null>(null);
   const [sheetError, setSheetError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ActionNotice | null>(null);
   const [dragging, setDragging] = useState(false);
   const [toast, setToast] = useState<ToggleToast | null>(null);
 
@@ -107,7 +112,7 @@ export default function PacksPage({
   const refreshAfterGuard = useCallback(
     (err: unknown) => {
       const appError = toAppError(err);
-      setActionError(appError.message);
+      setActionError({ message: appError.message, code: appError.code });
       if (appError.code !== 'game_running' && appError.code !== 'stale_stack') return;
       // The backend just saw the game or a changed stack; refresh both sources
       // now instead of at the next poll.
@@ -116,6 +121,13 @@ export default function PacksPage({
     },
     [refreshStack, refreshGameRunning],
   );
+
+  const retryStackRead = () => {
+    void refreshStack().then((loaded) => {
+      if (!loaded) return;
+      setActionError((current) => (current?.code === 'stale_stack' ? null : current));
+    });
+  };
 
   const handleToggle = async (filename: string, enabled: boolean): Promise<void> => {
     setActionError(null);
@@ -167,7 +179,7 @@ export default function PacksPage({
     stackError && !noGameDir ? (
       <div className="stack-error" role="alert">
         <p className="error">{stackError.message}</p>
-        <button type="button" className="button" onClick={() => void refreshStack()}>
+        <button type="button" className="button" onClick={retryStackRead}>
           Retry
         </button>
       </div>
@@ -349,7 +361,15 @@ export default function PacksPage({
       }} />
       {actionError ? (
         <p className="error" role="alert">
-          {actionError}
+          {actionError.message}
+          {actionError.code === 'stale_stack' ? (
+            <>
+              {' '}
+              <button type="button" className="button" onClick={retryStackRead}>
+                Retry
+              </button>
+            </>
+          ) : null}
         </p>
       ) : null}
       {error && !noGameDir ? (
@@ -372,7 +392,10 @@ export default function PacksPage({
           if (paths.length > 0) {
             handleDroppedPaths(paths);
           } else if (!isTauriRuntime()) {
-            setActionError('Dropping files needs the desktop app. Use Import pack instead.');
+            setActionError({
+              message: 'Dropping files needs the desktop app. Use Import pack instead.',
+              code: null,
+            });
           }
         }}
       >
