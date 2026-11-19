@@ -20,6 +20,11 @@ const nested = pack('Linked', {
 describe('nested symlink pack details', () => {
   it('removes an enabled nested-folder reference without offering to enable it through Undo', async () => {
     const client = makeFakeClient({ packs: [nested], resource: ['vanilla', 'file/Linked'] });
+    const readStack = client.getResourceStack.bind(client);
+    client.getResourceStack = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return readStack();
+    };
     render(<PacksPage client={client} gameRunning={null} />);
     await userEvent.click(await screen.findByRole('button', { name: /^Linked,/ }));
     await userEvent.click(screen.getByRole('checkbox', { name: 'Enabled in the active stack' }));

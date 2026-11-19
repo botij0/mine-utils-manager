@@ -81,6 +81,11 @@ it('refreshes Discover after one Worlds import without rescanning Worlds or Pack
   const packs = vi.spyOn(client, 'listResourcePacks');
   const datapacks = vi.spyOn(client, 'listDatapacks');
   const targets = vi.spyOn(client, 'modrinthTargets');
+  const readConfig = client.getConfig.bind(client);
+  client.getConfig = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return readConfig();
+  };
   render(<App client={client} />);
   await screen.findByLabelText('Search packs');
   await user.click(screen.getByRole('button', { name: 'Discover' }));
@@ -110,6 +115,11 @@ it('explains why an install is paused when targets cannot load', async () => {
   const user = userEvent.setup();
   const client = await clientWithWorld();
   client.modrinthTargets = async () => { throw new IpcError('io', 'target read failed'); };
+  const readGuard = client.getGameGuard.bind(client);
+  client.getGameGuard = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    return readGuard();
+  };
   render(<App client={client} />);
   await user.click(await screen.findByRole('button', { name: 'Discover' }));
   fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
