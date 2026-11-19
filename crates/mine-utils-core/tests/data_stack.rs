@@ -1571,3 +1571,50 @@ fn replace_long_datapack_name_preserves_original_in_a_bounded_holding() {
         lists(&["vanilla", &format!("file/{name}")], &[])
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn replace_removes_only_empty_holdings_left_by_another_process() {
+    let world = temp_world(&["vanilla"], &[]);
+    let source = install_pack(&world, "cool-pack");
+    std::fs::write(source.join("data/new.json"), b"new content").unwrap();
+    let folder = world.paths.datapacks_dir().to_path_buf();
+    let empty = ".mine-utils-replace.4294967295-123-0.tmp";
+    let full = ".mine-utils-replace.4294967295-123-1.tmp";
+    let linked = ".mine-utils-replace.4294967295-123-2.tmp";
+    let current = format!(".mine-utils-replace.{}-123-3.tmp", std::process::id());
+    let legacy = ".mine-utils-replace-Old.zip.4294967295-123-4.tmp";
+    std::fs::create_dir(folder.join(empty)).unwrap();
+    std::fs::create_dir(folder.join(full)).unwrap();
+    std::fs::write(folder.join(full).join("Old.zip"), b"keep").unwrap();
+    let outside = world._dir.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, folder.join(linked)).unwrap();
+    std::fs::create_dir(folder.join(&current)).unwrap();
+    std::fs::create_dir(folder.join(legacy)).unwrap();
+    let outcome = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Replace,
+        &world.icons,
+        &world.hashes,
+        &RecordingTrash::new(),
+        &PassGuard,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome,
+        data_stack::DatapackImportOutcome::Imported {
+            filename: "cool-pack".to_string()
+        }
+    );
+    assert!(!folder.join(empty).exists());
+    assert_eq!(
+        std::fs::read(folder.join(full).join("Old.zip")).unwrap(),
+        b"keep"
+    );
+    assert_eq!(std::fs::read_link(folder.join(linked)).unwrap(), outside);
+    assert!(outside.is_dir());
+    assert!(folder.join(&current).is_dir());
+    assert!(folder.join(legacy).is_dir());
+}

@@ -130,6 +130,24 @@ pub(crate) fn list(folder: &Path) -> Result<Vec<HoldingEntry>, AppError> {
     Ok(holdings)
 }
 
+pub(crate) fn remove_empty(folder: &Path) {
+    if reject_symlink_folder(folder).is_err() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let abandoned = name.to_str().and_then(parse).is_some_and(|(format, pid)| {
+            matches!(format, HoldingFormat::Directory) && pid != std::process::id()
+        });
+        if abandoned && entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            let _ = std::fs::remove_dir(entry.path());
+        }
+    }
+}
+
 pub fn restore_resource_holding(paths: &StackPaths, holding_name: &str) -> Result<(), AppError> {
     restore(
         paths.game_dir(),
