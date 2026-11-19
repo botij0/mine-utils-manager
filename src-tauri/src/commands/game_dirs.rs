@@ -1,6 +1,7 @@
 pub use mine_utils_core::wire::GameDirState;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
 
 use super::join_error;
@@ -13,12 +14,40 @@ use mine_utils_core::{
 use tauri::State;
 
 #[derive(Clone)]
+struct ActiveSwitch {
+    next: Arc<AtomicU64>,
+    applied: Arc<AtomicU64>,
+}
+
+impl ActiveSwitch {
+    fn new() -> Self {
+        Self {
+            next: Arc::new(AtomicU64::new(0)),
+            applied: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn issue(&self) -> u64 {
+        self.next.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    fn applied(&self) -> u64 {
+        self.applied.load(Ordering::SeqCst)
+    }
+
+    fn commit(&self, ticket: u64) {
+        self.applied.fetch_max(ticket, Ordering::SeqCst);
+    }
+}
+
+#[derive(Clone)]
 pub struct AppState {
     store: Arc<Mutex<ConfigStore>>,
     committed: Arc<Mutex<Config>>,
     startup_warning: Option<String>,
     first_ipc: Arc<Once>,
     data_dir: PathBuf,
+    active_switch: ActiveSwitch,
 }
 
 impl AppState {
@@ -30,6 +59,7 @@ impl AppState {
             startup_warning,
             first_ipc: Arc::new(Once::new()),
             data_dir,
+            active_switch: ActiveSwitch::new(),
         }
     }
 
@@ -252,13 +282,21 @@ fn set_active_with(
     path: &str,
     canonicalize: impl FnOnce(&Path) -> Result<PathBuf, AppError>,
 ) -> Result<GameDirState, AppError> {
+    let ticket = state.active_switch.issue();
+    let target = canonicalize(Path::new(path))?;
+    let discovered = discover_game_dirs(&home_dir()?);
+    let found = discovered.iter().any(|dir| dir.path == target);
+    let stored = state.lock().config().game_dirs.clone();
+    let merged = merge_game_dirs(discovered, &stored);
+    let entries: Vec<_> = merged.iter().map(entry_for).collect();
+    let active_switch = state.active_switch.clone();
     let (_, config) = state.update(|store| {
-        let target = canonicalize(Path::new(path))?;
-        let discovered = discover_game_dirs(&home_dir()?);
-        let found = discovered.iter().any(|dir| dir.path == target);
-        let merged = merge_game_dirs(discovered, &store.config().game_dirs);
-        let entries: Vec<_> = merged.iter().map(entry_for).collect();
-        store.set_active_game_dir(&target, &entries, found)
+        if ticket < active_switch.applied() {
+            return Ok(());
+        }
+        store.set_active_game_dir(&target, &entries, found)?;
+        active_switch.commit(ticket);
+        Ok(())
     })?;
     state_for(config)
 }
@@ -397,22 +435,63 @@ mod tests {
             .unwrap();
         });
         entered_rx.recv().unwrap();
-        assert!(state.store.try_lock().is_err());
-        let newer_state = state.clone();
-        let newer_path = second.to_string_lossy().into_owned();
-        let (started_tx, started_rx) = mpsc::channel();
-        let newer = std::thread::spawn(move || {
-            started_tx.send(()).unwrap();
-            set_active_with(&newer_state, &newer_path, |path| {
+        let validation_holds_lock = state.store.try_lock().is_err();
+        if !validation_holds_lock {
+            let newer_path = second.to_string_lossy().into_owned();
+            set_active_with(&state, &newer_path, |path| {
                 Ok(std::fs::canonicalize(path).unwrap())
             })
             .unwrap();
-        });
-        started_rx.recv().unwrap();
+            assert_eq!(state.config().active_game_dir, Some(second.clone()));
+        }
         release_tx.send(()).unwrap();
         older.join().unwrap();
-        newer.join().unwrap();
+        assert!(
+            !validation_holds_lock,
+            "blocked validation holds the store lock"
+        );
         assert_eq!(state.config().active_game_dir, Some(second));
+    }
+
+    #[test]
+    fn blocked_validation_does_not_block_theme_write() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        std::fs::create_dir_all(game.join("saves")).unwrap();
+        let mut store = ConfigStore::new(root.path().join("config.json"), Config::default());
+        store
+            .add_game_dir(validate_game_dir(&game).unwrap())
+            .unwrap();
+        let state = AppState::new(store, None, root.path().to_path_buf());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let path = game.to_string_lossy().into_owned();
+        let worker_state = state.clone();
+        let worker = std::thread::spawn(move || {
+            set_active_with(&worker_state, &path, |dir| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(std::fs::canonicalize(dir).unwrap())
+            })
+            .unwrap();
+        });
+        entered_rx.recv().unwrap();
+        let validation_holds_lock = state.store.try_lock().is_err();
+        if !validation_holds_lock {
+            state.update(|store| store.set_theme(Theme::Dark)).unwrap();
+            assert_eq!(state.config().theme, Theme::Dark);
+        }
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+        assert!(
+            !validation_holds_lock,
+            "blocked validation holds the store lock"
+        );
+        assert_eq!(state.config().theme, Theme::Dark);
+        assert_eq!(
+            state.config().active_game_dir.as_deref(),
+            Some(game.as_path())
+        );
     }
 
     #[test]

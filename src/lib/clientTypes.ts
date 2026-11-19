@@ -22,6 +22,17 @@ export type ClientError = Omit<Wire.AppError, 'code'> & {
   rawCode?: string;
 };
 
+export class SettingsWriteTimeoutError extends Error {
+  constructor() {
+    super('Settings write timed out. It may still finish in the background.');
+    this.name = 'SettingsWriteTimeoutError';
+  }
+}
+
+export function isSettingsWriteTimeout(error: unknown): error is SettingsWriteTimeoutError {
+  return error instanceof SettingsWriteTimeoutError;
+}
+
 export class IpcError extends Error implements ClientError {
   constructor(
     readonly code: ClientErrorCode,

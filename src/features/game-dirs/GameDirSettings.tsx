@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { toAppError } from '../../lib/ipc';
 import type { IpcClient } from '../../lib/ipc';
-import type { ClientError, Config, GameDirEntry } from '../../lib/types';
+import { isSettingsWriteTimeout } from '../../lib/types';
+import type { ClientError, Config, GameDirEntry, SettingsWriteTimeoutError } from '../../lib/types';
 import GameDirPicker from './GameDirPicker';
 
 interface GameDirSettingsProps {
@@ -20,7 +21,7 @@ export default function GameDirSettings({
 }: GameDirSettingsProps) {
   const [entries, setEntries] = useState<GameDirEntry[]>([]);
   const [draft, setDraft] = useState('');
-  const [error, setError] = useState<ClientError | null>(null);
+  const [error, setError] = useState<ClientError | SettingsWriteTimeoutError | null>(null);
   const failedAction = useRef<string | null>(null);
 
   function beginAction(action: string) {
@@ -31,9 +32,10 @@ export default function GameDirSettings({
   }
 
   function reportError(err: unknown, action: string) {
-    const next = toAppError(err);
-    if (next.message.startsWith('Settings write timed out.') && !failedAction.current) failedAction.current = action;
-    setError((current) => current?.message.startsWith('Settings write timed out.') ? current : next);
+    const timedOut = isSettingsWriteTimeout(err);
+    const next = timedOut ? err : toAppError(err);
+    if (timedOut && !failedAction.current) failedAction.current = action;
+    setError((current) => (isSettingsWriteTimeout(current) ? current : next));
   }
 
   useEffect(() => {

@@ -123,6 +123,48 @@ describe('SettingsPage', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('replaces a folder error that only copies the timeout sentence', async () => {
+    const client = makeFakeClient([]);
+    const add = client.addGameDir;
+    client.addGameDir = async (path) => {
+      if (path.endsWith('/one')) {
+        throw new Error('Settings write timed out. It may still finish in the background.');
+      }
+      return add(path);
+    };
+    render(<Harness client={client} />);
+    await act(async () => {});
+    fireEvent.change(screen.getByLabelText('Game dir path'), { target: { value: '/tmp/saves/one' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Settings write timed out. It may still finish in the background.',
+    );
+    fireEvent.change(screen.getByLabelText('Game dir path'), { target: { value: '/tmp/saves/two' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    await screen.findByText('/tmp/saves/two');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('replaces a theme error that only copies the timeout sentence', async () => {
+    const client = makeFakeClient([]);
+    const setTheme = client.setTheme;
+    client.setTheme = async (theme) => {
+      if (theme === 'light') {
+        throw new Error('Settings write timed out. It may still finish in the background.');
+      }
+      return setTheme(theme);
+    };
+    render(<Harness client={client} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('radio', { name: 'Light' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Settings write timed out. It may still finish in the background.',
+    );
+    fireEvent.click(screen.getByRole('radio', { name: 'Dark' }));
+    await screen.findByRole('radio', { name: 'Dark', checked: true });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('keeps an added dir when the theme changes', async () => {
     const user = userEvent.setup();
     const client = makeFakeClient([
