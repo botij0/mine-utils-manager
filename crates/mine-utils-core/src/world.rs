@@ -3,7 +3,7 @@
 //!
 //! Only direct children of `saves` are scanned, and a directory without
 //! `level.dat` is skipped, never an error. A corrupt `level.dat`, a missing
-//! version, or missing datapack lists render as an error card; the other
+//! version, or malformed datapack lists render as an error card; the other
 //! worlds still render.
 
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ pub struct WorldIssue {
 }
 
 /// One world as the UI lists it. `issue` is set for corrupt, version-less, or
-/// datapack-less worlds; those render an error card instead of write controls.
+/// worlds with malformed metadata; those render an error card instead of write controls.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct World {
@@ -216,7 +216,7 @@ fn read_world(dir: &Path, icons: &IconCache, status: &game_lock::GameStatus) -> 
         issue: None,
     };
     match read_capped(&level_dat_in(dir), level_dat::MAX_LEVEL_DAT_BYTES) {
-        Ok(bytes) => match level_dat::parse(&bytes) {
+        Ok(bytes) => match level_dat::parse_lenient(&bytes) {
             Ok(view) => {
                 if let Some(name) = view.level_name {
                     if !name.is_empty() {
@@ -375,10 +375,29 @@ mod tests {
     }
 
     #[test]
-    fn missing_datapacks_is_an_error_card() {
-        let (dir, icons) = game_with(&[("nopacks", Some(level_dat_bytes(Some("1.21.10"), false)))]);
+    fn missing_datapacks_lists_normally() {
+        let (dir, icons) = game_with(&[("nopacks", Some(level_dat_bytes(Some("1.12.2"), false)))]);
         let worlds = scan_worlds(&dir.path().join("game"), &icons);
-        assert!(worlds[0].issue.is_some());
+        assert_eq!(worlds[0].issue, None);
+        assert_eq!(worlds[0].version.as_ref().unwrap().name, "1.12.2");
+    }
+
+    #[test]
+    fn malformed_datapacks_is_an_error_card() {
+        let bytes = level_dat_bytes(Some("1.12.2"), false);
+        let mut root = level_dat::parse_nbt(&level_dat::gunzip(&bytes).unwrap()).unwrap();
+        if let fastnbt::Value::Compound(ref mut root) = root {
+            if let Some(fastnbt::Value::Compound(data)) = root.get_mut("Data") {
+                data.insert(
+                    "DataPacks".to_string(),
+                    fastnbt::Value::String("bad".to_string()),
+                );
+            }
+        }
+        let bytes = level_dat::gzip(&fastnbt::to_bytes(&root).unwrap());
+        let (dir, icons) = game_with(&[("bad", Some(bytes))]);
+        let worlds = scan_worlds(&dir.path().join("game"), &icons);
+        assert_eq!(worlds[0].issue.as_ref().unwrap().code, "level_dat");
     }
 
     #[test]

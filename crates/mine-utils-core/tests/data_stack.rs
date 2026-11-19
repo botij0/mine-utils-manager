@@ -761,6 +761,33 @@ fn legacy_level_bytes(seed: i64, level_name: &str) -> Vec<u8> {
 }
 
 #[test]
+fn legacy_world_loads_empty_and_refuses_writes() {
+    let world = temp_world(&[], &[]);
+    let bytes = legacy_level_bytes(42, "Old world");
+    std::fs::write(world.paths.level_dat_path(), &bytes).unwrap();
+    let stack = data_stack::load(&world.paths).unwrap();
+    assert!(stack.enabled.is_empty());
+    assert!(stack.disabled.is_empty());
+    let error =
+        data_stack::set_enabled_with_guard(&world.paths, "pack.zip", true, &PassGuard).unwrap_err();
+    assert!(error.to_string().contains("Data.DataPacks"));
+    assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), bytes);
+    let source = datapack_source(world._dir.path(), "old-pack");
+    let error = data_stack::import_datapack_with(
+        &world.paths,
+        &source,
+        mine_utils_core::ImportChoice::Default,
+        &world.icons,
+        &world.hashes,
+        &RecordingTrash::new(),
+        &PassGuard,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("before 1.13"));
+    assert!(!world.paths.datapacks_dir().join("old-pack").exists());
+}
+
+#[test]
 fn restore_of_a_pre_datapacks_backup_returns_an_empty_stack() {
     let world = temp_world(&["vanilla"], &[]);
     let backup = legacy_level_bytes(42, "Saved");

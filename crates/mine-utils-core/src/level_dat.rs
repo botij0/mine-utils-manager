@@ -191,6 +191,11 @@ fn lists_of(
 ) -> Result<(Vec<String>, Vec<String>), LevelDatError> {
     let packs = match data.get("DataPacks") {
         Some(Value::Compound(packs)) => packs,
+        None => return Err(LevelDatError::MissingDataPacks {
+            reason:
+                "Data.DataPacks is absent; Minecraft versions before 1.13 do not support datapacks"
+                    .to_string(),
+        }),
         _ => {
             return Err(LevelDatError::MissingDataPacks {
                 reason: "Data.DataPacks is not a compound".to_string(),
