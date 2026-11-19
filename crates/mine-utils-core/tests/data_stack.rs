@@ -922,6 +922,96 @@ fn the_first_datapack_data_version_gains_the_lists_when_enabled() {
 }
 
 #[test]
+fn a_1_13_name_without_data_version_gains_the_lists_when_enabled() {
+    let bytes = level_without_packs("1.13", None, 13, "Release");
+    let world = world_with_level(&bytes);
+    let stack =
+        data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard).unwrap();
+    assert_eq!(
+        stack
+            .enabled
+            .iter()
+            .map(|entry| entry.value().to_string())
+            .collect::<Vec<_>>(),
+        vec!["file/a.zip".to_string()]
+    );
+    assert!(stack.disabled.is_empty());
+    let written = std::fs::read(world.paths.level_dat_path()).unwrap();
+    assert_eq!(data_without_packs(&bytes), data_without_packs(&written));
+}
+
+#[test]
+fn older_or_absent_versions_keep_the_pre_1_13_refusal() {
+    let cases = [
+        ("1.20", Some(1443), 11),
+        ("1.12.2", Some(3463), 12),
+        ("1.12.2", Some(1343), 13),
+        ("1.12", None, 14),
+        ("17w42a", None, 15),
+    ];
+    for (name, data_version, seed) in cases {
+        let bytes = level_without_packs(name, data_version, seed, "Old");
+        let world = world_with_level(&bytes);
+        let error = data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard)
+            .unwrap_err();
+        assert_eq!(error.code(), "level_dat", "{name} {data_version:?}");
+        assert!(
+            error.to_string().contains(
+                "Data.DataPacks is absent; Minecraft versions before 1.13 do not support datapacks"
+            ),
+            "{name} {data_version:?}: {error}"
+        );
+        assert_eq!(
+            std::fs::read(world.paths.level_dat_path()).unwrap(),
+            bytes,
+            "{name} {data_version:?}"
+        );
+        let source = datapack_source(world._dir.path(), "old-pack");
+        let error = data_stack::import_datapack_with(
+            &world.paths,
+            &source,
+            mine_utils_core::ImportChoice::Default,
+            &world.icons,
+            &world.hashes,
+            &RecordingTrash::new(),
+            &PassGuard,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("before 1.13"),
+            "{name} {data_version:?}: {error}"
+        );
+        assert!(
+            !world.paths.datapacks_dir().join("old-pack").exists(),
+            "{name} {data_version:?}"
+        );
+    }
+}
+
+#[test]
+fn a_modern_non_compound_datapacks_tag_is_still_refused() {
+    use fastnbt::Value;
+    let bytes = level_without_packs("1.20", Some(3463), 5, "Bad");
+    let raw = level_dat::gunzip(&bytes).unwrap();
+    let mut value = level_dat::parse_nbt(&raw).unwrap();
+    let Value::Compound(root) = &mut value else {
+        panic!("root");
+    };
+    let Some(Value::Compound(data)) = root.get_mut("Data") else {
+        panic!("data");
+    };
+    data.insert("DataPacks".to_string(), Value::String("no".to_string()));
+    let bytes = level_dat::gzip(&fastnbt::to_bytes(&value).unwrap());
+    let world = world_with_level(&bytes);
+    let error =
+        data_stack::set_enabled_with_guard(&world.paths, "a.zip", true, &PassGuard).unwrap_err();
+    assert_eq!(error.code(), "level_dat");
+    assert!(error.to_string().contains("not a compound"), "{error}");
+    assert!(!error.to_string().contains("before 1.13"), "{error}");
+    assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), bytes);
+}
+
+#[test]
 fn restore_of_a_pre_datapacks_backup_returns_an_empty_stack() {
     let world = temp_world(&["vanilla"], &[]);
     let backup = legacy_level_bytes(42, "Saved");

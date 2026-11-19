@@ -139,6 +139,8 @@ A real pack folder containing a nested symlink shows the link path in its detail
 
 Datapacks belong to one world. Mine Utils reads them from `saves/<world>/datapacks` and stores their enabled and disabled lists in that world's `level.dat`.
 
+A world from Minecraft 1.13 or newer can lack those lists. Mine Utils still shows an empty stack. The next import or enable creates the lists. Mine Utils refuses the change when the world is older than 1.13, and when its version does not show 1.13 or newer. Open that world in Minecraft 1.13 or newer before editing datapacks here.
+
 ### Select a world
 
 Open **Worlds** and choose a world in the left rail. The rail shows the world's name, icon, and game version when available.
@@ -260,7 +262,7 @@ Restoring replaces the current `options.txt`. Mine Utils first saves the current
 2. In **Settings**, scroll to **World level.dat**.
 3. Find the world group and choose **Restore** beside a backup.
 
-If the backup and current world have different readable seeds, Mine Utils refuses the restore and changes nothing. A missing or corrupt current file, or an unreadable seed, still permits restore. Mine Utils backs up the current `level.dat` before a restore and can recreate a missing file. Return to **Worlds** afterward to review the restored datapack stack. A backup from before Minecraft 1.13 has an empty stack because those versions do not support datapacks. Mine Utils refuses datapack writes until the world is upgraded in Minecraft.
+If the backup and current world have different readable seeds, Mine Utils refuses the restore and changes nothing. A missing or corrupt current file, or an unreadable seed, still permits restore. Mine Utils backs up the current `level.dat` before a restore and can recreate a missing file. Return to **Worlds** afterward to review the restored datapack stack. A backup from before Minecraft 1.13 has an empty stack because those versions do not support datapacks. Mine Utils refuses datapack writes until the world is upgraded in Minecraft. A restored world from 1.13 or newer that lacks the lists stays empty until the next datapack write, which creates them.
 
 ## Safety and network behavior
 
