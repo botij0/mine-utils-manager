@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { pack } from '../../test/fake-packs';
@@ -27,11 +27,16 @@ describe('nested symlink pack details', () => {
     };
     render(<PacksPage client={client} gameRunning={null} />);
     await userEvent.click(await screen.findByRole('button', { name: /^Linked,/ }));
+    await waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: 'Enabled in the active stack' })).toBeEnabled(),
+    );
     await userEvent.click(screen.getByRole('checkbox', { name: 'Enabled in the active stack' }));
-    expect(await screen.findByText('Linked disabled')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Linked disabled')).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Enabled in the active stack' })).toBeDisabled();
+      expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+    });
     expect((await client.getResourceStack()).entries).toEqual([{ kind: 'foreign', value: 'vanilla' }]);
-    expect(screen.getByRole('checkbox', { name: 'Enabled in the active stack' })).toBeDisabled();
-    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
   });
 
   it('lets an enabled resource folder be disabled and trashed', async () => {

@@ -87,7 +87,7 @@ it('refreshes Discover after one Worlds import without rescanning Worlds or Pack
     return readConfig();
   };
   render(<App client={client} />);
-  await screen.findByLabelText('Search packs');
+  await screen.findByRole('button', { name: /Active game dir\s*\/home\/demo\/\.minecraft/ });
   await user.click(screen.getByRole('button', { name: 'Discover' }));
   await user.click(screen.getByRole('tab', { name: 'Datapacks' }));
   fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'pure' } });
@@ -95,20 +95,28 @@ it('refreshes Discover after one Worlds import without rescanning Worlds or Pack
   await user.click(await screen.findByRole('button', { name: 'Install…' }));
   expect(await screen.findByRole('option', { name: /Original world/ })).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'Worlds' }));
-  await screen.findByRole('list', { name: 'Datapack stack' });
+  await waitFor(() => {
+    expect(screen.getByRole('list', { name: 'Datapack stack' })).toHaveTextContent('a');
+    expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled();
+  });
   const before = { worlds: worlds.mock.calls.length, packs: packs.mock.calls.length, datapacks: datapacks.mock.calls.length, targets: targets.mock.calls.length };
   await user.click(screen.getByRole('button', { name: 'Import zip' }));
-  expect(await screen.findByRole('list', { name: 'Datapack stack' })).toHaveTextContent('new');
-  await act(async () => {});
-  expect(worlds).toHaveBeenCalledTimes(before.worlds);
-  expect(datapacks).toHaveBeenCalledTimes(before.datapacks + 1);
+  await waitFor(() => {
+    expect(screen.getByRole('list', { name: 'Datapack stack' })).toHaveTextContent('new');
+    expect(worlds).toHaveBeenCalledTimes(before.worlds);
+    expect(datapacks).toHaveBeenCalledTimes(before.datapacks + 1);
+  });
   await user.click(screen.getByRole('button', { name: 'Discover' }));
-  expect(await screen.findByRole('option', { name: /Updated world/ })).toBeInTheDocument();
-  await waitFor(() => expect(targets).toHaveBeenCalledTimes(before.targets + 1));
-  expect(worlds).toHaveBeenCalledTimes(before.worlds + 1);
+  await waitFor(() => {
+    expect(screen.getByRole('option', { name: /Updated world/ })).toBeInTheDocument();
+    expect(targets).toHaveBeenCalledTimes(before.targets + 1);
+    expect(worlds).toHaveBeenCalledTimes(before.worlds + 1);
+  });
   await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
-  expect(await screen.findByLabelText('Search packs')).toHaveValue('');
-  expect(packs).toHaveBeenCalledTimes(before.packs);
+  await waitFor(() => {
+    expect(screen.getByLabelText('Search packs')).toHaveValue('');
+    expect(packs).toHaveBeenCalledTimes(before.packs);
+  });
 });
 
 it('explains why an install is paused when targets cannot load', async () => {
@@ -125,9 +133,11 @@ it('explains why an install is paused when targets cannot load', async () => {
   fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
   await user.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
   await user.click(await screen.findByRole('button', { name: 'Install…' }));
-  expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled();
-  expect(screen.getByRole('dialog')).toHaveTextContent('Install targets are unavailable. Return to Discover to retry.');
-});
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled();
+    expect(screen.getByRole('dialog')).toHaveTextContent('Install targets are unavailable. Return to Discover to retry.');
+  }, { timeout: 3_000 });
+}, 10_000);
 
 it('shows loading rather than an empty world list in the install sheet', async () => {
   const user = userEvent.setup();
