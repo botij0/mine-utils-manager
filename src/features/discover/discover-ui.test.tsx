@@ -233,6 +233,26 @@ describe('discover dialogs', () => {
     expect(onInstalled).not.toHaveBeenCalled();
   });
 
+  it('shows the installed pack path when enabling fails', async () => {
+    const client = makeFakeClient([]);
+    client.installModrinthPack = async () => {
+      throw new IpcError(
+        'io',
+        'io error: Operation not permitted (os error 1). The pack was installed at /game/resourcepacks/fresh-1.9.zip but not enabled. Enable it in Minecraft.',
+      );
+    };
+    render(<DiscoverPage client={client} gameRunning={null} hasGameDir />);
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
+    fireEvent.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+
+    const sheet = within(screen.getByRole('dialog'));
+    expect(await sheet.findByRole('alert')).toHaveTextContent(
+      'The pack was installed at /game/resourcepacks/fresh-1.9.zip but not enabled. Enable it in Minecraft.',
+    );
+  });
+
   it('shows the running banner and locks Install as soon as an install returns game_running', async () => {
     const client = makeFakeClient([]);
     const running: GameRunning = {
