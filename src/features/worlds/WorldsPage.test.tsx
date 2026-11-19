@@ -814,6 +814,96 @@ describe('WorldsPage', () => {
       expect(await screen.findByRole('button', { name: 'fresh.zip, disabled' })).toBeInTheDocument();
     },
   );
+
+  it('keeps the stale stack sentence after the automatic refresh and clears it when Retry applies a listing', async () => {
+    const user = userEvent.setup();
+    let disk = ['a.zip', 'b.zip'];
+    const listSpy = vi.fn(async () => datapackListing(disk));
+    render(<WorldsPage client={pageClient({
+      listDatapacks: listSpy,
+      reorderDatapacks: async () => {
+        throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+      },
+    })} gameRunning={null} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    await within(grid).findByRole('button', { name: 'Move b.zip down' });
+    disk = ['a.zip', 'b.zip', 'c.zip'];
+    const readsAtMove = listSpy.mock.calls.length;
+    await user.click(within(grid).getByRole('button', { name: 'Move b.zip down' }));
+    expect(await screen.findByText('the stack changed on disk; reload it and try again')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'c.zip, enabled' })).toBeInTheDocument();
+    expect(screen.getByText('the stack changed on disk; reload it and try again')).toBeInTheDocument();
+    const readsAtRetry = listSpy.mock.calls.length;
+    expect(readsAtRetry).toBe(readsAtMove + 1);
+    await user.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => {
+      expect(screen.queryByText('the stack changed on disk; reload it and try again')).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: 'c.zip, enabled' })).toBeInTheDocument();
+    expect(listSpy.mock.calls.length).toBe(readsAtRetry + 1);
+  });
+
+  it('keeps the stale stack sentence when Retry cannot read the listing', async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    const listSpy = vi.fn(async () => {
+      reads += 1;
+      if (reads > 2) throw new IpcError('io', 'level.dat is unreadable');
+      return datapackListing(['a.zip', 'b.zip']);
+    });
+    render(<WorldsPage client={pageClient({
+      listDatapacks: listSpy,
+      reorderDatapacks: async () => {
+        throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+      },
+    })} gameRunning={null} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    await within(grid).findByRole('button', { name: 'Move b.zip down' });
+    await user.click(within(grid).getByRole('button', { name: 'Move b.zip down' }));
+    expect(await screen.findByText('the stack changed on disk; reload it and try again')).toBeInTheDocument();
+    await waitFor(() => expect(reads).toBe(2));
+    await user.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('level.dat is unreadable')).toBeInTheDocument();
+    expect(screen.getByText('the stack changed on disk; reload it and try again')).toBeInTheDocument();
+    expect(reads).toBe(3);
+  });
+
+  it('keeps a newer action error when a stale Retry listing lands late', async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    let releaseRetry!: (listing: Awaited<ReturnType<WorldsClient['listDatapacks']>>) => void;
+    const listSpy = vi.fn(() => {
+      reads += 1;
+      if (reads < 3) return Promise.resolve(datapackListing(['a.zip', 'b.zip']));
+      return new Promise<Awaited<ReturnType<WorldsClient['listDatapacks']>>>((resolve) => {
+        releaseRetry = resolve;
+      });
+    });
+    let toggles = 0;
+    render(<WorldsPage client={pageClient({
+      listDatapacks: listSpy,
+      setDatapackEnabled: async () => {
+        toggles += 1;
+        if (toggles === 1) {
+          throw new IpcError('stale_stack', 'the stack changed on disk; reload it and try again');
+        }
+        throw new IpcError('level_dat', 'level.dat rejected the write');
+      },
+    })} gameRunning={null} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    await user.click(within(grid).getByRole('button', { name: 'Disable a.zip' }));
+    expect(await screen.findByText('the stack changed on disk; reload it and try again')).toBeInTheDocument();
+    await waitFor(() => expect(reads).toBe(2));
+    await user.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(reads).toBe(3));
+    await user.click(within(grid).getByRole('button', { name: 'Disable a.zip' }));
+    expect(await screen.findByText('level.dat rejected the write')).toBeInTheDocument();
+    await act(async () => {
+      releaseRetry(datapackListing(['a.zip', 'b.zip']));
+    });
+    expect(screen.getByText('level.dat rejected the write')).toBeInTheDocument();
+    expect(screen.queryByText('the stack changed on disk; reload it and try again')).not.toBeInTheDocument();
+  });
 });
 
 it('restores an interrupted datapack Replace in the selected world', async () => {
