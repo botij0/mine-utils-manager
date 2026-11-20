@@ -63,6 +63,17 @@ export function dataSnapshotOf(stack: DataStack): DataSnapshot {
   };
 }
 
+/** Sorted multiset of every stack value. Order and the enabled split are not part of it. */
+function stackFileSet(stack: DataStack): string[] {
+  return [...stack.enabled, ...stack.disabled].map((entry) => entry.value).sort();
+}
+
+function sameStackFileSet(rendered: DataStack, returned: DataStack): boolean {
+  const left = stackFileSet(rendered);
+  const right = stackFileSet(returned);
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 export type Compatibility = 'compatible' | 'incompatible' | 'unknown';
 
 /** Whether the pack's declared range accepts the world's data format. A missing
@@ -268,6 +279,18 @@ export function useWorlds(
     }
   }, [client, selectedName, isCurrentRequest, reloadSignal]);
 
+  const applyReturnedStack = useCallback(
+    async (world: string, request: number, rendered: DataStack | null, next: DataStack) => {
+      if (!isCurrentRequest(world, request)) return;
+      if (rendered && sameStackFileSet(rendered, next)) {
+        setStack(next);
+        return;
+      }
+      await refreshListing();
+    },
+    [isCurrentRequest, refreshListing],
+  );
+
   useEffect(() => {
     if (!active || !selectedName || selectedRef.current !== selectedName) return;
     const key = JSON.stringify([reloadSignal, selectedName]);
@@ -312,13 +335,13 @@ export function useWorlds(
     async (filename: string, enabled: boolean) => {
       if (!selectedName) return;
       const world = selectedName;
+      const rendered = stack;
       const request = beginAction();
       try {
         // No pre-toggle fetch: the backend re-reads `level.dat` anyway, and
         // the extra round-trip only flashes the loading state.
         const next = await client.setDatapackEnabled(world, filename, enabled);
-        if (!isCurrentRequest(world, request)) return;
-        setStack(next);
+        await applyReturnedStack(world, request, rendered, next);
       } catch (err) {
         if (!isCurrentRequest(world, request)) return;
         setActionError(toAppError(err));
@@ -327,7 +350,7 @@ export function useWorlds(
         if (isCurrentRequest(world, request)) setBusy(false);
       }
     },
-    [client, selectedName, beginAction, isCurrentRequest],
+    [client, selectedName, stack, beginAction, isCurrentRequest, applyReturnedStack],
   );
 
   const reorderDatapacks = useCallback(
@@ -336,11 +359,9 @@ export function useWorlds(
       const world = selectedName;
       const request = beginAction();
       try {
-        // `order` came from this rendered stack, so the guard checks the file set
-        // the user saw; a datapack added since then yields stale_stack, not a raw order error.
+        // `order` was built from this rendered stack, so the backend can reject an order that no longer fits.
         const next = await client.reorderDatapacks(world, order, dataSnapshotOf(stack));
-        if (!isCurrentRequest(world, request)) return;
-        setStack(next);
+        await applyReturnedStack(world, request, stack, next);
       } catch (err) {
         if (!isCurrentRequest(world, request)) return;
         setActionError(toAppError(err));
@@ -349,7 +370,7 @@ export function useWorlds(
         if (isCurrentRequest(world, request)) setBusy(false);
       }
     },
-    [client, selectedName, stack, beginAction, isCurrentRequest],
+    [client, selectedName, stack, beginAction, isCurrentRequest, applyReturnedStack],
   );
 
   const importDatapack = useCallback(

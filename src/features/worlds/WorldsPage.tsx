@@ -171,7 +171,9 @@ export default function WorldsPage({
   const locked = stack?.world_locked ?? selected?.world_locked ?? null;
   const readOnly = selected?.issue !== null && selected?.issue !== undefined;
   const listingStale = listingWorld !== selected?.dir_name;
-  const writesBlocked = running !== null || locked !== null || readOnly || guardPause !== null || listingStale;
+  // Copying a pack into a locked world stays available. Every other pause is shared.
+  const writesPaused = running !== null || readOnly || guardPause !== null || listingStale;
+  const writesBlocked = writesPaused || locked !== null;
   const noGameDir = error?.code === 'no_active_game_dir' || packsError?.code === 'no_active_game_dir';
 
   const refreshAfterWriteError = (err: unknown) => {
@@ -358,7 +360,7 @@ export default function WorldsPage({
                   <button
                     type="button"
                     className="button button-primary"
-                    disabled={!selected || readOnly || busy || running !== null || guardPause !== null || listingStale}
+                    disabled={!selected || busy || writesPaused}
                     title={readOnly ? 'This world is read-only' : undefined}
                     onClick={() => void handleImportPick(false)}
                   >
@@ -367,7 +369,7 @@ export default function WorldsPage({
                   <button
                     type="button"
                     className="button"
-                    disabled={!selected || readOnly || busy || running !== null || guardPause !== null || listingStale}
+                    disabled={!selected || busy || writesPaused}
                     title={readOnly ? 'This world is read-only' : undefined}
                     onClick={() => void handleImportPick(true)}
                   >
