@@ -20,8 +20,7 @@ fn write_zip(path: &Path, mcmeta: &str, root: &str) {
     writer.finish().unwrap();
 }
 
-/// Scans one pack through the public entry. A `folder` pack is a directory
-/// with the same metadata and root, rather than a zip archive.
+/// Goes through the public `scan_packs` entry that the desktop app calls.
 fn scan_one(mcmeta: &str, root: &str, folder: bool) -> Pack {
     let dir = tempfile::tempdir().unwrap();
     let resourcepacks = dir.path().join("resourcepacks");
