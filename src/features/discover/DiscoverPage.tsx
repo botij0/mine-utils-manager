@@ -3,6 +3,7 @@ import { ipc, toAppError } from '../../lib/ipc';
 import type { IpcClient } from '../../lib/ipc';
 import type { GameRunning, ModrinthKind, World } from '../../lib/types';
 import GameRunningBanner from '../packs/GameRunningBanner';
+import type { GuardPause } from '../packs/GameRunningBanner';
 import InstallSheet from './InstallSheet';
 import ProjectDetail from './ProjectDetail';
 import ProjectGrid from './ProjectGrid';
@@ -19,12 +20,10 @@ interface DiscoverPageProps {
   reloadSignal?: string;
   gameDir?: string | null;
   client?: IpcClient;
-  /** From the app-level game guard poll. Undefined until the first check. */
-  gameRunning?: GameRunning | null;
-  /** No current guard answer: unknown, so installs stay paused. */
-  gameGuardUnknown?: boolean;
-  /** The unknown state is a new folder's first check, still pending. */
-  gameGuardChecking?: boolean;
+  gameRunning: GameRunning | null;
+  guardPause?: GuardPause;
+  guardBusy?: boolean;
+  lockDetectionSupported?: boolean;
   /** False when no game dir is active: installs have nowhere to go. */
   hasGameDir?: boolean;
   /** Force the app-level game guard to re-check now. */
@@ -39,8 +38,9 @@ export default function DiscoverPage({
   reloadSignal = '',
   gameDir = null,
   gameRunning,
-  gameGuardUnknown = false,
-  gameGuardChecking = false,
+  guardPause = null,
+  guardBusy = false,
+  lockDetectionSupported,
   hasGameDir = false,
   refreshGameRunning = () => {},
   onInstalled = () => {},
@@ -93,21 +93,18 @@ export default function DiscoverPage({
     if (targetWorld && worlds && !worlds.some((world) => world.dir_name === targetWorld)) setWorld(null);
   }, [worlds, targetWorld, setWorld]);
 
-  // Unknown (before the first check, or a failed check) blocks installs: the
-  // UI must never offer a write it cannot guard.
   const writesBlocked =
-    gameRunning === undefined ||
     gameRunning !== null ||
-    gameGuardUnknown ||
+    guardPause !== null ||
     !hasGameDir ||
     discover.targetsStatus !== 'ready';
   const blockedReason = !hasGameDir
     ? 'No game dir is active. Pick a game dir in Settings first, then install.'
     : gameRunning != null
       ? `Minecraft is running (${gameRunning.detail}); installs are paused until it closes.`
-      : gameGuardUnknown && !gameGuardChecking
+      : guardPause === 'unknown'
         ? 'Mine Utils could not check whether Minecraft is running; installs are paused until a check succeeds.'
-        : gameGuardUnknown || gameRunning === undefined
+        : guardPause === 'checking'
           ? 'Checking whether Minecraft is running; installs are paused until the check lands.'
           : null;
 
@@ -139,16 +136,14 @@ export default function DiscoverPage({
   return (
     <section className="panel">
       <h2>Discover</h2>
-      {gameRunning !== undefined || gameGuardUnknown ? (
-        <GameRunningBanner
-          running={gameRunning ?? null}
-          guardUnknown={gameGuardUnknown}
-          checking={gameGuardChecking}
-          staleLocks={[]}
-          supported
-          onRecheck={() => void refreshGameRunning()}
-        />
-      ) : null}
+      <GameRunningBanner
+        running={gameRunning}
+        guardPause={guardPause}
+        guardBusy={guardBusy}
+        staleLocks={[]}
+        supported={lockDetectionSupported}
+        onRecheck={() => void refreshGameRunning()}
+      />
       <SearchBar
         query={discover.query}
         onQueryChange={discover.setQuery}

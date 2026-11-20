@@ -5,6 +5,7 @@ import { ipc, pickPackPath, toAppError } from '../../lib/ipc';
 import { formatVersionLabel } from '../../lib/format';
 import { packFilename } from '../../lib/packPath';
 import type { DatapackImportOutcome, GameRunning } from '../../lib/types';
+import type { GuardPause } from '../packs/GameRunningBanner';
 import { StatusNote } from '../packs/PackEmptyState';
 import DatapackDetail from './DatapackDetail';
 import DatapackGrid, { type DatapackRow } from './DatapackGrid';
@@ -18,12 +19,9 @@ interface WorldsPageProps {
   gameDir?: string | null;
   client?: WorldsClient;
   onDataChanged?: () => void;
-  /** From the app-level game guard poll. Undefined until the first check. */
-  gameRunning?: GameRunning | null;
-  /** No current guard answer is unknown, so writes stay paused. */
-  gameGuardUnknown?: boolean;
-  /** The unknown state is a new folder's first check, still pending. */
-  gameGuardChecking?: boolean;
+  gameRunning: GameRunning | null;
+  guardPause?: GuardPause;
+  guardBusy?: boolean;
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
 }
@@ -34,9 +32,9 @@ export default function WorldsPage({
   reloadSignal = '',
   gameDir = null,
   onDataChanged,
-  gameRunning,
-  gameGuardUnknown = false,
-  gameGuardChecking = false,
+  gameRunning: running,
+  guardPause = null,
+  guardBusy = false,
   refreshGameRunning = () => {},
 }: WorldsPageProps) {
   const {
@@ -170,18 +168,10 @@ export default function WorldsPage({
 
   const selectedRow = rows.find((row) => (row.pack?.error?.code === 'pack_non_utf8_name' ? row.pack.id : row.filename) === selectedFilename) ?? null;
 
-  // Writes stop while the game runs, while this world is locked, while the
-  // file is unreadable, while the app-level guard check failed or has not
-  // answered yet, or while the shown rows belong to a previous selection (a
-  // switch is still listing). The stored stack value is not a guard answer.
-  const guardPending = gameRunning === undefined;
-  const guardUnknown = gameGuardUnknown || guardPending;
-  const guardChecking = gameGuardChecking || (guardPending && !gameGuardUnknown);
-  const running = gameRunning ?? null;
   const locked = stack?.world_locked ?? selected?.world_locked ?? null;
   const readOnly = selected?.issue !== null && selected?.issue !== undefined;
   const listingStale = listingWorld !== selected?.dir_name;
-  const writesBlocked = running !== null || locked !== null || readOnly || guardUnknown || listingStale;
+  const writesBlocked = running !== null || locked !== null || readOnly || guardPause !== null || listingStale;
   const noGameDir = error?.code === 'no_active_game_dir' || packsError?.code === 'no_active_game_dir';
 
   const refreshAfterWriteError = (err: unknown) => {
@@ -326,9 +316,9 @@ export default function WorldsPage({
               <>
                 <WorldHeader
                   world={selected}
-                  gameRunning={gameRunning}
-                  gameGuardUnknown={guardUnknown}
-                  gameGuardChecking={guardChecking}
+                  gameRunning={running}
+                  guardPause={guardPause}
+                  guardBusy={guardBusy}
                   staleLocks={locked || running ? [] : (stack?.stale_locks ?? [])}
                   refreshGameRunning={refreshGameRunning}
                   onRefresh={() => void refreshAfterGuard()}
@@ -368,7 +358,7 @@ export default function WorldsPage({
                   <button
                     type="button"
                     className="button button-primary"
-                    disabled={!selected || readOnly || busy || running !== null || guardUnknown || listingStale}
+                    disabled={!selected || readOnly || busy || running !== null || guardPause !== null || listingStale}
                     title={readOnly ? 'This world is read-only' : undefined}
                     onClick={() => void handleImportPick(false)}
                   >
@@ -377,7 +367,7 @@ export default function WorldsPage({
                   <button
                     type="button"
                     className="button"
-                    disabled={!selected || readOnly || busy || running !== null || guardUnknown || listingStale}
+                    disabled={!selected || readOnly || busy || running !== null || guardPause !== null || listingStale}
                     title={readOnly ? 'This world is read-only' : undefined}
                     onClick={() => void handleImportPick(true)}
                   >

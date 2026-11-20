@@ -147,7 +147,7 @@ describe('BackupsPanel', () => {
 
   it('disables restore when the guard check is unknown', async () => {
     render(
-      <BackupsPanel client={makeClient()} gameRunning={null} gameGuardUnknown />,
+      <BackupsPanel client={makeClient()} gameRunning={null} guardPause="unknown" />,
     );
 
     const buttons = await screen.findAllByRole('button', { name: /^Restore / });
@@ -167,11 +167,11 @@ describe('BackupsPanel', () => {
     ],
     [
       'Mine Utils could not check whether Minecraft is running',
-      { gameRunning: null, gameGuardUnknown: true },
+      { gameRunning: null, guardPause: 'unknown' as const },
     ],
     [
       'Checking whether Minecraft is running',
-      { gameRunning: undefined, gameGuardChecking: true, gameGuardUnknown: true },
+      { gameRunning: null, guardPause: 'checking' as const },
     ],
   ])('shows "%s" as visible text that every disabled Restore describes', async (reason, props) => {
     render(<BackupsPanel client={makeClient()} {...props} />);

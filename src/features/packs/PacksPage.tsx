@@ -11,6 +11,7 @@ import {
 import ActiveStack from './ActiveStack';
 import HoldingRecovery from './HoldingRecovery';
 import GameRunningBanner from './GameRunningBanner';
+import type { GuardPause } from './GameRunningBanner';
 import ImportSheet from './ImportSheet';
 import type { ImportPrompt } from './ImportSheet';
 import PackDetail from './PackDetail';
@@ -25,12 +26,9 @@ interface PacksPageProps {
   client?: PackClient;
   /** File and folder picker. Injected in tests. */
   pickPath?: (directory: boolean) => Promise<string | null>;
-  /** From the app-level game guard poll. Undefined until the first check. */
-  gameRunning?: GameRunning | null;
-  /** No current guard answer: unknown, so writes stay paused. */
-  gameGuardUnknown?: boolean;
-  /** The unknown state is a new folder's first check, still pending. */
-  gameGuardChecking?: boolean;
+  gameRunning: GameRunning | null;
+  guardPause?: GuardPause;
+  guardBusy?: boolean;
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
   /** From the app-level game guard poll. Undefined until the first check. */
@@ -61,9 +59,9 @@ export default function PacksPage({
   reloadSignal = '',
   gameDir = null,
   pickPath = pickPackPath,
-  gameRunning,
-  gameGuardUnknown = false,
-  gameGuardChecking = false,
+  gameRunning: running,
+  guardPause = null,
+  guardBusy = false,
   refreshGameRunning = () => {},
   lockDetectionSupported,
 }: PacksPageProps) {
@@ -98,13 +96,7 @@ export default function PacksPage({
   const [dragging, setDragging] = useState(false);
   const [toast, setToast] = useState<ToggleToast | null>(null);
 
-  // Undefined means no guard answer yet. The stored stack value is not one, so
-  // that state pauses writes with the checking reason, as Discover and Settings do.
-  const guardPending = gameRunning === undefined;
-  const guardUnknown = gameGuardUnknown || guardPending;
-  const guardChecking = gameGuardChecking || (guardPending && !gameGuardUnknown);
-  const running = gameRunning ?? null;
-  const writesBlocked = running !== null || guardUnknown || loading || stackLoading;
+  const writesBlocked = running !== null || guardPause !== null || loading || stackLoading;
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -410,8 +402,8 @@ export default function PacksPage({
               packs={packs}
               busy={busy || loading || stackLoading}
               running={running}
-              guardUnknown={guardUnknown}
-              guardChecking={guardChecking}
+              guardPause={guardPause}
+              guardBusy={guardBusy}
               onToggle={(filename, enabled) => void handleToggle(filename, enabled)}
               onReorder={(order) => void handleReorder(order)}
               onRecheck={() => {
@@ -427,8 +419,8 @@ export default function PacksPage({
             </div>
             <GameRunningBanner
               running={running}
-              guardUnknown={guardUnknown}
-              checking={guardChecking}
+              guardPause={guardPause}
+              guardBusy={guardBusy}
               staleLocks={[]}
               supported={lockDetectionSupported}
               onRecheck={() => {

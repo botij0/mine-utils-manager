@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ipc } from './lib/ipc';
 import type { IpcClient } from './lib/ipc';
-import type { ClientError, Config, GameRunning, Theme } from './lib/types';
+import type { ClientError, Config, GameGuard, GameRunning, Theme } from './lib/types';
 import { defaultConfig } from './lib/types';
 import { activeGameRunning, toAppError } from './lib/ipc';
 import DiscoverPage from './features/discover/DiscoverPage';
 import Onboarding from './features/onboarding/Onboarding';
+import type { GuardPause } from './features/packs/GameRunningBanner';
 import PacksPage from './features/packs/PacksPage';
 import SettingsPage from './features/settings/SettingsPage';
 import WorldsPage from './features/worlds/WorldsPage';
@@ -27,8 +28,8 @@ const DEFAULT_PAGE: PageId = 'packs';
 function processProbeBanner(
   processProbeAvailable: boolean | undefined,
   lockDetectionSupported: boolean | undefined,
-  guardPause: 'checking' | 'unknown' | null,
-  gameRunning: GameRunning | null | undefined,
+  guardPause: GuardPause,
+  gameRunning: GameRunning | null,
 ) {
   if (
     processProbeAvailable !== false ||
@@ -76,13 +77,17 @@ export default function App({ client = ipc }: AppProps) {
   const [config, setConfig] = useState<Config>(defaultConfig);
   const [error, setError] = useState<ClientError | null>(null);
   const [startupWarning, setStartupWarning] = useState<string | null>(null);
-  // Undefined until the first check lands, so the pages can tell "not yet
-  // checked" apart from a fresh "not running" result.
-  const [gameRunning, setGameRunning] = useState<GameRunning | null | undefined>(undefined);
-  const [processProbeAvailable, setProcessProbeAvailable] = useState<boolean | undefined>(true);
-  // Undefined until the first check lands, so no page claims lock detection early.
-  const [lockDetectionSupported, setLockDetectionSupported] = useState<boolean | undefined>(undefined);
-  const [guardPause, setGuardPause] = useState<'checking' | 'unknown' | null>(null);
+  const [guardState, setGuardState] = useState<{
+    dir: string | null;
+    answer: GameGuard | null;
+    pause: GuardPause;
+  }>({ dir: null, answer: null, pause: 'checking' });
+  const [guardBusy, setGuardBusy] = useState(false);
+  const currentGuard = guardState.dir === config.active_game_dir ? guardState : null;
+  const guardPause = currentGuard ? currentGuard.pause : 'checking';
+  const gameRunning = currentGuard?.answer?.running ?? null;
+  const processProbeAvailable = currentGuard?.answer?.process_probe_available;
+  const lockDetectionSupported = currentGuard?.answer?.detection_supported;
   // True once the stored config lands, so onboarding only shows for a real
   // first run and never for the default placeholder.
   const [configReady, setConfigReady] = useState(false);
@@ -99,8 +104,8 @@ export default function App({ client = ipc }: AppProps) {
     wanted: boolean;
     stale: boolean;
     deadline?: ReturnType<typeof setTimeout>;
-    dir?: string | null;
-  }>({ busy: false, wanted: false, stale: false });
+    dir: string | null;
+  }>({ busy: false, wanted: false, stale: false, dir: null });
 
   useEffect(() => {
     const onHashChange = () => {
@@ -139,36 +144,33 @@ export default function App({ client = ipc }: AppProps) {
     clearTimeout(slot.deadline);
     slot.deadline = setTimeout(() => {
       slot.stale = true;
-      setGuardPause('unknown');
+      setGuardState((state) => ({ ...state, pause: 'unknown' }));
     }, GUARD_TIMEOUT_MS);
   }, []);
 
   const refreshGameRunning = useCallback(() => {
     const slot = guard.current;
     const send = () => {
+      const dir = slot.dir;
       slot.busy = true;
       slot.wanted = false;
       slot.stale = false;
+      setGuardBusy(true);
       armGuardDeadline();
       const settle = (apply: () => void) => {
         slot.busy = false;
         clearTimeout(slot.deadline);
         if (!slot.stale) apply();
-        if (slot.wanted) send();
+        if (slot.wanted && !document.hidden) send();
+        else setGuardBusy(false);
       };
       activeGameRunning(client).then(
-        (guardStatus) =>
-          settle(() => {
-            setGameRunning(guardStatus.running);
-            setProcessProbeAvailable(guardStatus.process_probe_available);
-            setLockDetectionSupported(guardStatus.detection_supported);
-            setGuardPause(null);
-          }),
+        (answer) => settle(() => setGuardState({ dir, answer, pause: null })),
         // Keep the last known value: only a successful check may clear it.
-        () => settle(() => setGuardPause('unknown')),
+        () => settle(() => setGuardState((state) => ({ ...state, pause: 'unknown' }))),
       );
     };
-    if (slot.busy) slot.wanted = true;
+    if (slot.busy || document.hidden) slot.wanted = true;
     else send();
   }, [client, armGuardDeadline]);
 
@@ -178,9 +180,9 @@ export default function App({ client = ipc }: AppProps) {
   useEffect(() => {
     if (!configReady) return undefined;
     const slot = guard.current;
-    const folderChanged = slot.dir !== undefined && slot.dir !== config.active_game_dir;
+    const folderChanged = slot.dir !== config.active_game_dir;
     slot.dir = config.active_game_dir;
-    if (folderChanged) setGuardPause('checking');
+    if (folderChanged) setGuardState({ dir: slot.dir, answer: null, pause: 'checking' });
     if (folderChanged && slot.busy) {
       slot.stale = true;
       armGuardDeadline();
@@ -323,8 +325,8 @@ export default function App({ client = ipc }: AppProps) {
                 client={client}
                 gameRunning={gameRunning}
                 lockDetectionSupported={lockDetectionSupported}
-                gameGuardUnknown={guardPause !== null}
-                gameGuardChecking={guardPause === 'checking'}
+                guardPause={guardPause}
+                guardBusy={guardBusy}
                 refreshGameRunning={refreshGameRunning}
               />
             </div>
@@ -338,8 +340,8 @@ export default function App({ client = ipc }: AppProps) {
                 gameDir={config.active_game_dir}
                 client={client}
                 gameRunning={gameRunning}
-                gameGuardUnknown={guardPause !== null}
-                gameGuardChecking={guardPause === 'checking'}
+                guardPause={guardPause}
+                guardBusy={guardBusy}
                 refreshGameRunning={refreshGameRunning}
               />
             </div>
@@ -352,8 +354,9 @@ export default function App({ client = ipc }: AppProps) {
                 gameDir={config.active_game_dir}
                 client={client}
                 gameRunning={gameRunning}
-                gameGuardUnknown={guardPause !== null}
-                gameGuardChecking={guardPause === 'checking'}
+                lockDetectionSupported={lockDetectionSupported}
+                guardPause={guardPause}
+                guardBusy={guardBusy}
                 hasGameDir={config.active_game_dir != null}
                 refreshGameRunning={refreshGameRunning}
                 onInstalled={installed}
@@ -367,8 +370,7 @@ export default function App({ client = ipc }: AppProps) {
                 client={client}
                 config={config}
                 gameRunning={gameRunning}
-                gameGuardUnknown={guardPause !== null}
-                gameGuardChecking={guardPause === 'checking'}
+                guardPause={guardPause}
                 refreshGameRunning={refreshGameRunning}
                 onConfigChanged={setConfig}
                 onBackupRestored={backupRestored}

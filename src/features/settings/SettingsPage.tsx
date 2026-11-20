@@ -4,6 +4,7 @@ import { toAppError } from '../../lib/ipc';
 import { useMemo, useRef, useState } from 'react';
 import { SettingsWriteTimeoutError, isSettingsWriteTimeout } from '../../lib/types';
 import type { ClientError } from '../../lib/types';
+import type { GuardPause } from '../packs/GameRunningBanner';
 import GameDirSettings from '../game-dirs/GameDirSettings';
 import BackupsPanel from './BackupsPanel';
 
@@ -23,12 +24,8 @@ interface SettingsPageProps {
   config: Config;
   onConfigChanged: (config: Config) => void;
   onBackupRestored?: (file: 'options' | 'level') => void;
-  /** From the app-level game guard poll. Undefined until the first check. */
-  gameRunning: GameRunning | null | undefined;
-  /** No current guard answer: unknown, so writes stay paused. */
-  gameGuardUnknown?: boolean;
-  /** The unknown state is a new folder's first check, still pending. */
-  gameGuardChecking?: boolean;
+  gameRunning: GameRunning | null;
+  guardPause?: GuardPause;
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
 }
@@ -40,8 +37,7 @@ export default function SettingsPage({
   onConfigChanged,
   onBackupRestored,
   gameRunning,
-  gameGuardUnknown = false,
-  gameGuardChecking = false,
+  guardPause = null,
   refreshGameRunning = () => {},
 }: SettingsPageProps) {
   const [error, setError] = useState<ClientError | SettingsWriteTimeoutError | null>(null);
@@ -125,8 +121,7 @@ export default function SettingsPage({
         client={client}
         activeGameDir={config.active_game_dir}
         gameRunning={gameRunning}
-        gameGuardUnknown={gameGuardUnknown}
-        gameGuardChecking={gameGuardChecking}
+        guardPause={guardPause}
         refreshGameRunning={refreshGameRunning}
         onRestored={() => onBackupRestored?.('options')}
         onLevelRestored={() => onBackupRestored?.('level')}
