@@ -71,7 +71,7 @@ const sheetProps = {
   worlds: [],
   world: null,
   onWorldChange: () => {},
-  busy: false,
+  phase: 'idle' as const,
   writesBlocked: false,
   blockedReason: null,
   hasGameDir: true,
@@ -210,7 +210,7 @@ describe('discover dialogs', () => {
   it('keeps the busy install sheet open on Escape and offers Cancel', async () => {
     const onClose = vi.fn();
     const onCancel = vi.fn();
-    render(<InstallSheet {...sheetProps} busy onClose={onClose} onCancel={onCancel} />);
+    render(<InstallSheet {...sheetProps} phase="downloading" onClose={onClose} onCancel={onCancel} />);
     await userEvent.setup().keyboard('{Escape}');
     expect(onClose).not.toHaveBeenCalled();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Cancel' }));

@@ -6,7 +6,7 @@ import type {
 } from '../../lib/types';
 import { StatusNote } from '../packs/PackEmptyState';
 import DialogShell from './DialogShell';
-import type { TargetsStatus } from './useModrinth';
+import type { InstallPhase, TargetsStatus } from './useModrinth';
 
 interface InstallSheetProps {
   open: boolean;
@@ -20,8 +20,7 @@ interface InstallSheetProps {
   onRetryWorlds?: () => void;
   world: string | null;
   onWorldChange: (world: string | null) => void;
-  busy: boolean;
-  committing?: boolean;
+  phase: InstallPhase;
   writesBlocked: boolean;
   blockedReason: string | null;
   targetsStatus?: TargetsStatus;
@@ -34,6 +33,14 @@ interface InstallSheetProps {
   onInstall: () => void;
   onCancel: () => void;
 }
+
+const progressText = {
+  preparing: 'Preparing install…',
+  waiting_for_slot: 'Waiting for a download slot…',
+  downloading: 'Downloading…',
+  waiting_for_folder_lock: 'Waiting for the game folder lock…',
+  committing: 'Installation has started and will finish. Cancel is no longer available.',
+} satisfies Record<Exclude<InstallPhase, 'idle'>, string>;
 
 function resultText(result: ModrinthInstallOutcome): string {
   switch (result.outcome.status) {
@@ -64,8 +71,7 @@ export default function InstallSheet({
   onRetryWorlds,
   world,
   onWorldChange,
-  busy,
-  committing = false,
+  phase,
   writesBlocked,
   blockedReason,
   targetsStatus = 'ready',
@@ -78,6 +84,7 @@ export default function InstallSheet({
   onCancel,
 }: InstallSheetProps) {
   if (!open) return null;
+  const busy = phase !== 'idle';
   const installDisabled =
     busy ||
     writesBlocked ||
@@ -135,8 +142,7 @@ export default function InstallSheet({
         <StatusNote role="status">
           No game dir is active. Pick a game dir in Settings first, then install.
         </StatusNote>
-      ) : null}
-      {blockedReason ? (
+      ) : blockedReason ? (
         <StatusNote role="status">{blockedReason}</StatusNote>
       ) : targetsStatus === 'loading' ? (
         <StatusNote role="status">Loading install targets…</StatusNote>
@@ -152,9 +158,8 @@ export default function InstallSheet({
       ) : null}
       {busy ? (
         <StatusNote role="status">
-          {committing
-            ? 'Installation has started and will finish. Cancel is no longer available.'
-            : 'Downloading. Cancel is available until installation starts. Leaving this tab keeps the install running; return here for its result.'}
+          {progressText[phase]}
+          {phase !== 'committing' && ' Leaving this tab keeps the install running; return here for its result.'}
         </StatusNote>
       ) : null}
       {error ? (
@@ -173,7 +178,7 @@ export default function InstallSheet({
         <button
           type="button"
           className="button"
-          disabled={busy && committing}
+          disabled={phase === 'committing'}
           onClick={busy ? onCancel : onClose}
         >
           {result ? 'Close' : 'Cancel'}

@@ -4,6 +4,7 @@ use std::collections::{btree_map::Entry, BTreeMap};
 use ts_rs::{Config as TsConfig, TypeVisitor, TS};
 
 use crate::{
+    download::ModrinthInstallPhase,
     error::AppErrorWire,
     wire::{self, *},
     *,
@@ -90,6 +91,7 @@ impl WireExports {
             ModrinthVersion,
             ModrinthTargets,
             ModrinthInstallOutcome,
+            ModrinthInstallPhase,
             ProvenanceEntry,
             SearchKind,
             SearchSort,

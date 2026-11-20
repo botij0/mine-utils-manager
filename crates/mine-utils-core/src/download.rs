@@ -26,15 +26,22 @@ struct ReaderPermit;
 
 impl ReaderPermit {
     fn acquire(control: &InstallControl) -> Result<Self, DownloadError> {
+        let mut waiting = false;
         loop {
             control.check()?;
             let live = READER_WORKERS.load(Ordering::SeqCst);
-            if live < MAX_READER_WORKERS
-                && READER_WORKERS
+            if live < MAX_READER_WORKERS {
+                if READER_WORKERS
                     .compare_exchange(live, live + 1, Ordering::SeqCst, Ordering::SeqCst)
                     .is_ok()
-            {
-                return Ok(Self);
+                {
+                    return Ok(Self);
+                }
+                continue;
+            }
+            if !waiting {
+                control.report(ModrinthInstallPhase::WaitingForSlot);
+                waiting = true;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
@@ -47,14 +54,34 @@ impl Drop for ReaderPermit {
     }
 }
 
-const DOWNLOADING: u8 = 0;
+const CANCELLABLE: u8 = 0;
 const CANCELLED: u8 = 1;
 const COMMITTING: u8 = 2;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
+pub enum ModrinthInstallPhase {
+    WaitingForSlot,
+    Downloading,
+    WaitingForFolderLock,
+    Committing,
+}
+
+#[derive(Clone)]
 pub struct InstallControl {
     state: Arc<AtomicU8>,
     deadline: Instant,
+    progress: Option<Arc<dyn Fn(ModrinthInstallPhase) + Send + Sync>>,
+}
+
+impl std::fmt::Debug for InstallControl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstallControl")
+            .field("state", &self.state)
+            .field("deadline", &self.deadline)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for InstallControl {
@@ -66,14 +93,29 @@ impl Default for InstallControl {
 impl InstallControl {
     pub fn with_timeout(timeout: Duration) -> Self {
         Self {
-            state: Arc::new(AtomicU8::new(DOWNLOADING)),
+            state: Arc::new(AtomicU8::new(CANCELLABLE)),
             deadline: Instant::now() + timeout,
+            progress: None,
+        }
+    }
+
+    pub fn with_progress(
+        mut self,
+        progress: impl Fn(ModrinthInstallPhase) + Send + Sync + 'static,
+    ) -> Self {
+        self.progress = Some(Arc::new(progress));
+        self
+    }
+
+    pub(crate) fn report(&self, phase: ModrinthInstallPhase) {
+        if let Some(progress) = &self.progress {
+            progress(phase);
         }
     }
 
     pub fn cancel(&self) -> bool {
         self.state
-            .compare_exchange(DOWNLOADING, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+            .compare_exchange(CANCELLABLE, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
             || self.state.load(Ordering::SeqCst) == CANCELLED
     }
@@ -93,9 +135,10 @@ impl InstallControl {
     pub fn begin_commit(&self) -> Result<(), DownloadError> {
         self.check()?;
         self.state
-            .compare_exchange(DOWNLOADING, COMMITTING, Ordering::SeqCst, Ordering::SeqCst)
-            .map(|_| ())
-            .map_err(|_| DownloadError::Cancelled)
+            .compare_exchange(CANCELLABLE, COMMITTING, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| DownloadError::Cancelled)?;
+        self.report(ModrinthInstallPhase::Committing);
+        Ok(())
     }
 }
 
@@ -723,11 +766,16 @@ fn download_into<T: Transport + 'static>(
     control: &InstallControl,
 ) -> Result<(String, u64), DownloadError> {
     let permit = ReaderPermit::acquire(control)?;
+    control.report(ModrinthInstallPhase::Downloading);
     let (tx, rx) = mpsc::sync_channel(1);
     let client = client.clone();
     let url = url.to_string();
     let stream_url = url.clone();
-    let worker_control = control.clone();
+    let worker_control = InstallControl {
+        state: Arc::clone(&control.state),
+        deadline: control.deadline,
+        progress: None,
+    };
     // The worker owns only network bytes. The caller alone owns the temp,
     // so cancellation can delete it even while a socket read is blocked.
     std::thread::Builder::new()

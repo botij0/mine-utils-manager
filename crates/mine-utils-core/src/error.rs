@@ -11,6 +11,10 @@ pub enum AppError {
         error: Box<AppError>,
         message: String,
     },
+    InstalledButNotEnabled {
+        error: Box<AppError>,
+        path: PathBuf,
+    },
     Io(std::io::Error),
     InvalidGameDir {
         path: PathBuf,
@@ -64,7 +68,9 @@ impl AppError {
 
     pub fn error_code(&self) -> crate::ErrorCode {
         match self {
-            AppError::Context { error, .. } => error.error_code(),
+            AppError::Context { error, .. } | AppError::InstalledButNotEnabled { error, .. } => {
+                error.error_code()
+            }
             AppError::Io(_) => crate::ErrorCode::Io,
             AppError::InvalidGameDir { .. } => crate::ErrorCode::InvalidGameDir,
             AppError::UnknownGameDir { .. } => crate::ErrorCode::UnknownGameDir,
@@ -92,6 +98,11 @@ impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AppError::Context { error, message } => write!(f, "{error}. {message}"),
+            AppError::InstalledButNotEnabled { error, path } => write!(
+                f,
+                "{error}. The pack was installed at {} but not enabled. Enable it in Minecraft.",
+                path.display()
+            ),
             AppError::Io(err) => write!(f, "io error: {err}"),
             AppError::InvalidGameDir { path, reason } => {
                 write!(f, "invalid game dir {}: {reason}", path.display())
@@ -132,7 +143,9 @@ impl fmt::Display for AppError {
 impl std::error::Error for AppError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            AppError::Context { error, .. } => Some(error.as_ref()),
+            AppError::Context { error, .. } | AppError::InstalledButNotEnabled { error, .. } => {
+                Some(error.as_ref())
+            }
             AppError::Io(err) => Some(err),
             AppError::Pack(err) => Some(err),
             AppError::Options(err) => Some(err),
@@ -192,6 +205,9 @@ impl From<crate::provenance::ProvenanceError> for AppError {
 pub struct AppErrorWire {
     code: crate::ErrorCode,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "wire-types", ts(optional))]
+    installed_path: Option<String>,
 }
 
 impl Serialize for AppError {
@@ -199,6 +215,12 @@ impl Serialize for AppError {
         AppErrorWire {
             code: self.error_code(),
             message: self.to_string(),
+            installed_path: match self {
+                Self::InstalledButNotEnabled { path, .. } => {
+                    Some(path.to_string_lossy().into_owned())
+                }
+                _ => None,
+            },
         }
         .serialize(serializer)
     }

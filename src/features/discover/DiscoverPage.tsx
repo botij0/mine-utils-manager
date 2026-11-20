@@ -28,7 +28,6 @@ interface DiscoverPageProps {
   hasGameDir?: boolean;
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
-  /** Fires after a successful install so the app refreshes Packs/Worlds. */
   onInstalled?: (kind: ModrinthKind) => void;
 }
 
@@ -43,9 +42,9 @@ export default function DiscoverPage({
   lockDetectionSupported,
   hasGameDir = false,
   refreshGameRunning = () => {},
-  onInstalled = () => {},
+  onInstalled,
 }: DiscoverPageProps) {
-  const discover = useModrinth(client, active, reloadSignal, gameDir, () => void refreshGameRunning());
+  const discover = useModrinth(client, active, reloadSignal, gameDir, refreshGameRunning, onInstalled);
   const [worldsLoad, setWorldsLoad] = useState<WorldsLoad>({ status: 'loading' });
   const [worldsAttempt, setWorldsAttempt] = useState(0);
   const worlds = worldsLoad.status === 'ready' ? worldsLoad.worlds : null;
@@ -99,7 +98,7 @@ export default function DiscoverPage({
     !hasGameDir ||
     discover.targetsStatus !== 'ready';
   const blockedReason = !hasGameDir
-    ? 'No game dir is active. Pick a game dir in Settings first, then install.'
+    ? null
     : gameRunning != null
       ? `Minecraft is running (${gameRunning.detail}); installs are paused until it closes.`
       : guardPause === 'unknown'
@@ -124,13 +123,6 @@ export default function DiscoverPage({
   const closeInstall = () => {
     setInstallOpen(false);
     discover.clearInstall();
-  };
-
-  const onInstall = async () => {
-    const outcome = await discover.install();
-    if (outcome?.outcome.status === 'imported' || outcome?.outcome.status === 'locked') {
-      onInstalled(outcome.kind);
-    }
   };
 
   return (
@@ -235,8 +227,7 @@ export default function DiscoverPage({
           onRetryWorlds={reloadWorlds}
           world={discover.world}
           onWorldChange={discover.setWorld}
-          busy={discover.installBusy}
-          committing={discover.installCommitting}
+          phase={discover.installPhase}
           writesBlocked={writesBlocked}
           blockedReason={blockedReason}
           targetsStatus={discover.targetsStatus}
@@ -245,7 +236,7 @@ export default function DiscoverPage({
           result={discover.installResult}
           error={discover.installError}
           onClose={closeInstall}
-          onInstall={() => void onInstall()}
+          onInstall={() => void discover.install()}
           onCancel={() => void discover.cancelInstall()}
         />
       ) : discover.selected ? (

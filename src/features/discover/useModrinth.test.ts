@@ -180,18 +180,18 @@ describe('useModrinth', () => {
     );
     await act(async () => { await result.current.select(freshHit()); });
     act(() => { void result.current.install(); });
-    expect(result.current.installCommitting).toBe(false);
+    expect(result.current.installPhase).toBe('preparing');
     await act(async () => { rerender({ dir: '/b' }); });
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(result.current.installBusy).toBe(true);
-    expect(result.current.installCommitting).toBe(true);
+    expect(result.current.installPhase).toBe('committing');
   });
 
   it('returns a stale install outcome for refresh and keeps it out of the new project', async () => {
     const client = makeFakeClient([]);
     let release!: (outcome: ModrinthInstallOutcome) => void;
     client.installModrinthPack = () => new Promise((resolve) => { release = resolve; });
-    const { result } = renderHook(() => useModrinth(client));
+    const onInstalled = vi.fn();
+    const { result } = renderHook(() => useModrinth(client, true, '', null, undefined, onInstalled));
     await act(async () => { await result.current.select(freshHit()); });
     let pending!: Promise<ModrinthInstallOutcome | null>;
     act(() => { pending = result.current.install(); });
@@ -201,15 +201,16 @@ describe('useModrinth', () => {
     });
     let outcome: ModrinthInstallOutcome | null = null;
     await act(async () => {
-      release({ kind: 'resourcepack', outcome: { status: 'imported', pack: pack('fresh-1.9.zip') } });
+      release({ kind: 'resourcepack', outcome: { status: 'imported', pack: pack('fresh-1.9') } });
       outcome = await pending;
     });
     expect(outcome).toMatchObject({
       kind: 'resourcepack',
-      outcome: { status: 'imported', pack: { name: 'fresh-1.9.zip' } },
+      outcome: { status: 'imported', pack: { path: '/home/demo/.minecraft/resourcepacks/fresh-1.9.zip' } },
     });
     expect(result.current.selected?.title).toBe('other');
     expect(result.current.installResult).toBeNull();
+    expect(onInstalled.mock.calls).toEqual([['resourcepack']]);
   });
 
   it('refuses a second install until the first settles', async () => {
