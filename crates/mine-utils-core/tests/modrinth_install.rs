@@ -405,6 +405,115 @@ fn resource_pack_installs_enables_and_records_provenance() {
     assert_eq!(api.cdn_calls().len(), 1, "one download");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn resource_pack_install_reports_refused_options_rename() {
+    use std::process::Command;
+
+    if std::env::var_os("MINE_UTILS_TEST_OPTIONS_RENAME").is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("options_rename.so");
+        let compiled = Command::new("cc")
+            .args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Werror"])
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/support/options_rename.c"
+            ))
+            .arg("-o")
+            .arg(&shim)
+            .arg("-ldl")
+            .output()
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        for errno in [libc::EPERM, libc::EACCES] {
+            let run = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "resource_pack_install_reports_refused_options_rename",
+                    "--nocapture",
+                ])
+                .env("LD_PRELOAD", &shim)
+                .env("MINE_UTILS_TEST_OPTIONS_RENAME", errno.to_string())
+                .output()
+                .unwrap();
+            assert!(
+                run.status.success(),
+                "errno {errno}\n{}\n{}",
+                String::from_utf8_lossy(&run.stdout),
+                String::from_utf8_lossy(&run.stderr)
+            );
+            print!("{}", String::from_utf8_lossy(&run.stdout));
+        }
+        return;
+    }
+
+    let fx = fixture();
+    let bytes = resource_zip();
+    let (client, _) = client(
+        MockApi::new()
+            .with(
+                &versions_url(),
+                versions_json(
+                    RESOURCE_URL,
+                    RESOURCE_FILE,
+                    &sha512_hex(&bytes),
+                    &["1.21.10"],
+                ),
+            )
+            .with(RESOURCE_URL, bytes.clone()),
+    );
+    let prepared = prepare_modrinth_install(
+        &client,
+        &fx.game_dir,
+        None,
+        PROJECT,
+        VERSION,
+        RESOURCE_FILE,
+        "resourcepack",
+    )
+    .unwrap();
+    let error = finish_modrinth_install(
+        prepared,
+        &fx.stack_paths,
+        None,
+        &fx.data_dir,
+        &fx.icons,
+        &fx.hashes,
+    )
+    .unwrap_err();
+
+    let dest = fx.game_dir.join("resourcepacks/fresh-1.9.zip");
+    assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+    assert_eq!(
+        std::fs::read(fx.game_dir.join("options.txt")).unwrap(),
+        b"version:4707\nresourcePacks:[]\n"
+    );
+    assert_eq!(
+        std::fs::read_dir(&fx.game_dir).unwrap().count(),
+        3,
+        "the failed rename must not leave staging files beside options.txt"
+    );
+    let wire = serde_json::to_value(error).unwrap();
+    println!("{wire}");
+    assert_eq!(wire["code"], "io");
+    let errno = std::env::var("MINE_UTILS_TEST_OPTIONS_RENAME")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let cause = std::io::Error::from_raw_os_error(errno);
+    assert_eq!(
+        wire["message"],
+        format!(
+            "io error: {cause}. The pack was installed at {} but not enabled. Enable it in Minecraft.",
+            dest.display()
+        )
+    );
+}
+
 #[test]
 fn datapack_installs_into_the_selected_world_and_enables() {
     let fx = fixture();
