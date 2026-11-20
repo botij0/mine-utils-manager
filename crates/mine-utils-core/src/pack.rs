@@ -385,6 +385,21 @@ mod tests {
             PackError::OutsideRoot { path: p.clone() },
             PackError::Trash { path: p, reason: s },
         ];
+        for error in &errors {
+            match error {
+                PackError::NonUtf8Name { .. }
+                | PackError::UnknownKind { .. }
+                | PackError::BrokenArchive { .. }
+                | PackError::InvalidHolding { .. }
+                | PackError::MissingMeta { .. }
+                | PackError::Symlink { .. }
+                | PackError::Duplicate { .. }
+                | PackError::NameCollision { .. }
+                | PackError::NotFound { .. }
+                | PackError::OutsideRoot { .. }
+                | PackError::Trash { .. } => {}
+            }
+        }
         for error in errors {
             assert_eq!(
                 serde_json::to_value(PackIssueCode::from(&error)).unwrap(),
