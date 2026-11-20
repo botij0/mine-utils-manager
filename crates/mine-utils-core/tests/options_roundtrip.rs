@@ -572,3 +572,18 @@ fn temp_files_are_cleaned_from_the_options_dir() {
 }
 
 fn _assert_path_send(_: &Path) {}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_options_write_returns_specific_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    let path = dir.path().join("options.txt");
+    std::fs::write(&target, "original").unwrap();
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    let paths =
+        resource_stack::StackPaths::for_game_dir(dir.path(), dir.path(), Default::default());
+    let error = resource_stack::set_enabled(&paths, "Example.zip", true).unwrap_err();
+    assert_eq!(error.code(), "options_symlink");
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "original");
+}

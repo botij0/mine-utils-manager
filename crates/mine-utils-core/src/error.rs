@@ -27,6 +27,9 @@ pub enum AppError {
     Pack(crate::pack::PackError),
     Options(crate::options_txt::OptionsError),
     Stack(crate::resource_stack::StackError),
+    OptionsSymlink {
+        path: PathBuf,
+    },
     World {
         reason: String,
     },
@@ -70,6 +73,7 @@ impl AppError {
             AppError::Pack(err) => err.error_code(),
             AppError::Options(err) => err.error_code(),
             AppError::Stack(err) => err.error_code(),
+            AppError::OptionsSymlink { .. } => crate::ErrorCode::OptionsSymlink,
             AppError::World { .. } => crate::ErrorCode::World,
             AppError::LevelDat(err) => err.error_code(),
             AppError::DataStack(err) => err.error_code(),
@@ -104,6 +108,9 @@ impl fmt::Display for AppError {
             AppError::Pack(err) => write!(f, "{err}"),
             AppError::Options(err) => write!(f, "{err}"),
             AppError::Stack(err) => write!(f, "{err}"),
+            AppError::OptionsSymlink { path } => {
+                write!(f, "{} is a symlink and cannot be written", path.display())
+            }
             AppError::World { reason } => write!(f, "world error: {reason}"),
             AppError::LevelDat(err) => write!(f, "{err}"),
             AppError::DataStack(err) => write!(f, "{err}"),

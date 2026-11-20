@@ -268,3 +268,9 @@ it('preserves raw transport codes through repeated normalization', () => {
     code: 'unknown', rawCode: 'plugin_failure', message: 'Plugin failed',
   });
 });
+
+it('preserves the options symlink refusal for display', () => {
+  expect(toAppError({ code: 'options_symlink', message: '/game/options.txt is a symlink and cannot be written' })).toMatchObject({
+    code: 'options_symlink', message: '/game/options.txt is a symlink and cannot be written',
+  });
+});

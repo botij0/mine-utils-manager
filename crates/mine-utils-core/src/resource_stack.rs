@@ -1066,14 +1066,14 @@ mod tests {
 
         assert_eq!(load(&paths).unwrap().entries[0].value(), "vanilla");
         let err = set_enabled(&paths, "a.zip", true).unwrap_err();
-        assert_eq!(err.code(), "world");
+        assert_eq!(err.code(), "options_symlink");
         assert!(err.to_string().contains("symlink"));
         assert_eq!(std::fs::read_link(&paths.options_path).unwrap(), target);
         assert_eq!(std::fs::read(&target).unwrap(), original);
         assert_eq!(backup::list(&paths.backups_root).unwrap().len(), 1);
 
         let err = restore_backup(&paths, &backup).unwrap_err();
-        assert_eq!(err.code(), "world");
+        assert_eq!(err.code(), "options_symlink");
         assert!(err.to_string().contains("symlink"));
         assert_eq!(std::fs::read_link(&paths.options_path).unwrap(), target);
         assert_eq!(std::fs::read(&target).unwrap(), original);

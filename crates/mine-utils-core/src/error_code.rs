@@ -46,6 +46,7 @@ error_codes! {
     ModrinthStatus => "modrinth_status",
     ModrinthUrl => "modrinth_url",
     NoActiveGameDir => "no_active_game_dir",
+    OptionsSymlink => "options_symlink",
     OptionsTxt => "options_txt",
     PackBrokenArchive => "pack_broken_archive",
     PackDuplicate => "pack_duplicate",
