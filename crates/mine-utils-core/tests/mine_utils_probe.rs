@@ -1,5 +1,7 @@
 //! The `mine-utils-probe` binary run against temp game dirs, the way an
-//! operator runs it. Its JSON output is what these tests read.
+//! operator runs it. Its JSON output is what these tests read. Linux only:
+//! the tests place the app's data dir with the XDG variables.
+#![cfg(target_os = "linux")]
 
 use std::path::PathBuf;
 use std::process::Command;
