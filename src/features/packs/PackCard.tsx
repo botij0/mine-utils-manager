@@ -87,6 +87,7 @@ export default function PackCard({ pack, selected, onSelect }: PackCardProps) {
           <>
             <span className="chip">{packKindLabel(pack.kind)}</span>
             <span className="chip chip-muted">{packFormatLabel(pack)}</span>
+            {pack.warnings.length > 0 ? <span className="chip chip-warn">Warning</span> : null}
           </>
         )
       }

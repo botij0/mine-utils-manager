@@ -185,6 +185,47 @@ impl PackMeta {
         }
         self.pack_format.map(FormatRange::single)
     }
+
+    /// Warns when a pack at or above the kind's threshold declares fewer than
+    /// both `min_format` and `max_format`. `supported_formats` does not stand in
+    /// for them. A `Both` pack is also a resource pack, so the lower resource
+    /// threshold governs it.
+    pub fn format_warnings(&self, kind: PackKind) -> Vec<PackWarning> {
+        let Some(pack_format) = self.pack_format else {
+            return Vec::new();
+        };
+        let Some(threshold) = min_max_threshold(kind) else {
+            return Vec::new();
+        };
+        if pack_format.major < threshold {
+            return Vec::new();
+        }
+        let missing = match (self.min_format.is_none(), self.max_format.is_none()) {
+            (true, true) => "min_format and max_format",
+            (true, false) => "min_format",
+            (false, true) => "max_format",
+            (false, false) => return Vec::new(),
+        };
+        vec![PackWarning {
+            code: PackWarningCode::MissingMinMaxFormat,
+            message: format!(
+                "pack_format {} needs min_format and max_format, but pack.mcmeta is missing {missing}.",
+                pack_format.label()
+            ),
+        }]
+    }
+}
+
+/// The lowest `pack_format` major that needs both `min_format` and
+/// `max_format`. The embedded format table ends 1.21.8 at data 81 and resource
+/// 64, and starts 1.21.9 at data 88 and resource 69, so 82 and 65 are the first
+/// formats past 1.21.8. The thresholds come from audit issue #74.
+fn min_max_threshold(kind: PackKind) -> Option<u32> {
+    match kind {
+        PackKind::Data => Some(82),
+        PackKind::Resource | PackKind::Both => Some(65),
+        PackKind::Unknown => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

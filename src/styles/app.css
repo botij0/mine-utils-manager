@@ -490,6 +490,11 @@ button {
   color: var(--color-bg);
 }
 
+.chip-warn {
+  background: var(--color-warning, #8a6d00);
+  color: var(--color-bg);
+}
+
 .pack-detail {
   position: sticky;
   top: 0;

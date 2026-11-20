@@ -75,6 +75,12 @@ export default function PackDetail({
         </p>
       )}
 
+      {pack.warnings.map((warning) => (
+        <p className="panel-note" key={warning.message}>
+          {warning.message}
+        </p>
+      ))}
+
       <dl className="pack-facts">
         <dt>Game versions</dt>
         <dd>{packGameLabel(pack)}</dd>
