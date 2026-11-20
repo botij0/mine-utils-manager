@@ -500,6 +500,7 @@ fn resource_pack_install_reports_refused_options_rename() {
     let wire = serde_json::to_value(error).unwrap();
     println!("{wire}");
     assert_eq!(wire["code"], "io");
+    assert_eq!(wire["installed_path"], dest.to_str().unwrap());
     let errno = std::env::var("MINE_UTILS_TEST_OPTIONS_RENAME")
         .unwrap()
         .parse()
