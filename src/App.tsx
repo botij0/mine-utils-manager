@@ -80,7 +80,8 @@ export default function App({ client = ipc }: AppProps) {
   // checked" apart from a fresh "not running" result.
   const [gameRunning, setGameRunning] = useState<GameRunning | null | undefined>(undefined);
   const [processProbeAvailable, setProcessProbeAvailable] = useState<boolean | undefined>(true);
-  const [lockDetectionSupported, setLockDetectionSupported] = useState<boolean | undefined>(true);
+  // Undefined until the first check lands, so no page claims lock detection early.
+  const [lockDetectionSupported, setLockDetectionSupported] = useState<boolean | undefined>(undefined);
   const [guardPause, setGuardPause] = useState<'checking' | 'unknown' | null>(null);
   // True once the stored config lands, so onboarding only shows for a real
   // first run and never for the default placeholder.
@@ -321,6 +322,7 @@ export default function App({ client = ipc }: AppProps) {
                 gameDir={config.active_game_dir}
                 client={client}
                 gameRunning={gameRunning}
+                lockDetectionSupported={lockDetectionSupported}
                 gameGuardUnknown={guardPause !== null}
                 gameGuardChecking={guardPause === 'checking'}
                 refreshGameRunning={refreshGameRunning}

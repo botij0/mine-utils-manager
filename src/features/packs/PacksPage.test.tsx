@@ -549,6 +549,17 @@ describe('PacksPage', () => {
     expect(within(list).getByRole('checkbox')).toBeEnabled();
   });
 
+  it('does not claim lock detection before the stack loads when the guard reports it unsupported', async () => {
+    const client = makeFakeClient({ packs: [VANILLA_PACK] });
+    client.getResourceStack = () => new Promise<never>(() => {});
+    render(<PacksPage client={client} gameRunning={null} lockDetectionSupported={false} />);
+
+    expect(await screen.findByText('Loading the stack…')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Game lock detection is not supported here, so writes are never blocked automatically\./),
+    ).toBeInTheDocument();
+  });
+
   it('does not offer the stack toggle for a data pack', async () => {
     const user = userEvent.setup();
     const client = makeFakeClient({ packs: [VANILLA_PACK, AUTUMN_PACK] });

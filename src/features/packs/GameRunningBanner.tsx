@@ -7,7 +7,8 @@ interface GameRunningBannerProps {
   /** The unknown state is a new folder's first check, still pending. */
   checking?: boolean;
   staleLocks: string[];
-  supported: boolean;
+  /** Undefined until the support answer lands. No support claim is made then. */
+  supported?: boolean;
   onRecheck: () => void;
 }
 
@@ -61,7 +62,7 @@ export default function GameRunningBanner({
     );
   }
 
-  if (!supported) {
+  if (supported === false) {
     return (
       <div className="banner" role="status">
         Game lock detection is not supported here, so writes are never blocked
