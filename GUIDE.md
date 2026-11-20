@@ -170,6 +170,14 @@ Pack files copied directly into `datapacks` still appear even when `level.dat` d
 
 Mine Utils compares the world's data format with each pack's declared format range. A warning helps you spot a possible mismatch before launching the world. Select a datapack to see its format and compatibility details.
 
+Mine Utils checks a datapack only when both its declared range and the world's data format are known. These cases are not checked:
+
+- A world whose Minecraft version is newer than the format table. The world header says the version is newer than this build knows, names the newest version it does know, and says datapack compatibility is not checked.
+- A world whose version name the table does not list, such as a version before 1.13. The world header says Mine Utils does not know the data format of that version, and that datapack compatibility is not checked.
+- A datapack that declares no format range. Its row and details show no warning.
+
+In the first two cases, no datapack row shows a warning chip, and the details show no "This world needs data format" line. A missing warning does not mean a datapack is compatible.
+
 A warning is different from a broken-pack error. A broken pack cannot be inspected normally, but an enabled broken datapack can still be disabled so you can recover the world.
 
 ### Remove a missing reference
@@ -185,7 +193,7 @@ This removes the dead entry from `level.dat`. It does not try to enable a missin
 
 Select a datapack and choose **Delete**. Mine Utils disables the pack, moves it to the system trash, then removes its reference from the world. If the pack cannot be moved to the trash, it stays installed but disabled.
 
-When the datapack root is a symlink, Mine Utils does not delete it. Remove the link from `datapacks` in a file manager; the folder it points to is not touched.
+A datapack in `datapacks` that is a symlink cannot be deleted in Mine Utils. Its details show no **Delete** button, and a Delete request for it is refused before `level.dat` changes, so both the link and the folder it points to stay as they are. Remove the link from `datapacks` in a file manager.
 
 For a real datapack folder containing a nested symlink, details show the link path. Remove that link in a file manager before enabling the pack. You can still disable an enabled pack. Deleting moves the whole pack folder to the trash, including the link, without touching its target.
 
