@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ipc } from '../../lib/ipc';
+import { ipc, toAppError } from '../../lib/ipc';
 import type { IpcClient } from '../../lib/ipc';
 import type { GameRunning, ModrinthKind, World } from '../../lib/types';
 import GameRunningBanner from '../packs/GameRunningBanner';
@@ -8,6 +8,11 @@ import ProjectDetail from './ProjectDetail';
 import ProjectGrid from './ProjectGrid';
 import SearchBar from './SearchBar';
 import { useModrinth } from './useModrinth';
+
+type WorldsLoad =
+  | { status: 'loading' }
+  | { status: 'failed'; message: string }
+  | { status: 'ready'; worlds: World[] };
 
 interface DiscoverPageProps {
   active?: boolean;
@@ -41,34 +46,47 @@ export default function DiscoverPage({
   onInstalled = () => {},
 }: DiscoverPageProps) {
   const discover = useModrinth(client, active, reloadSignal, gameDir, () => void refreshGameRunning());
-  const [worlds, setWorlds] = useState<World[] | null>(null);
+  const [worldsLoad, setWorldsLoad] = useState<WorldsLoad>({ status: 'loading' });
+  const [worldsAttempt, setWorldsAttempt] = useState(0);
+  const worlds = worldsLoad.status === 'ready' ? worldsLoad.worlds : null;
   const [installOpen, setInstallOpen] = useState(false);
 
   const loadedWorlds = useRef<string | null>(null);
 
   useLayoutEffect(() => {
     loadedWorlds.current = null;
-    setWorlds(null);
+    setWorldsLoad({ status: 'loading' });
   }, [gameDir]);
 
   useEffect(() => {
     let cancelled = false;
     if (!active || discover.kind !== 'datapack' || loadedWorlds.current === reloadSignal) return;
+    setWorldsLoad((current) => (current.status === 'ready' ? current : { status: 'loading' }));
     client
       .listWorlds()
       .then((loaded) => {
         if (!cancelled) {
           loadedWorlds.current = reloadSignal;
-          setWorlds(loaded.filter((world) => !world.issue));
+          setWorldsLoad({
+            status: 'ready',
+            worlds: loaded.filter((world) => !world.issue),
+          });
         }
       })
-      .catch(() => {
-        if (!cancelled) setWorlds([]);
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setWorldsLoad({ status: 'failed', message: toAppError(err).message });
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [client, discover.kind, active, reloadSignal, gameDir]);
+  }, [client, discover.kind, active, reloadSignal, gameDir, worldsAttempt]);
+
+  const reloadWorlds = () => {
+    loadedWorlds.current = null;
+    setWorldsAttempt((attempt) => attempt + 1);
+  };
 
   const { world: targetWorld, setWorld } = discover;
   useEffect(() => {
@@ -78,7 +96,11 @@ export default function DiscoverPage({
   // Unknown (before the first check, or a failed check) blocks installs: the
   // UI must never offer a write it cannot guard.
   const writesBlocked =
-    gameRunning === undefined || gameRunning !== null || gameGuardUnknown || !hasGameDir || discover.targets === null;
+    gameRunning === undefined ||
+    gameRunning !== null ||
+    gameGuardUnknown ||
+    !hasGameDir ||
+    discover.targetsStatus !== 'ready';
   const blockedReason = !hasGameDir
     ? 'No game dir is active. Pick a game dir in Settings first, then install.'
     : gameRunning != null
@@ -87,9 +109,7 @@ export default function DiscoverPage({
         ? 'Mine Utils could not check whether Minecraft is running; installs are paused until a check succeeds.'
         : gameGuardUnknown || gameRunning === undefined
           ? 'Checking whether Minecraft is running; installs are paused until the check lands.'
-          : discover.targets === null
-            ? 'Install targets are unavailable. Return to Discover to retry.'
-            : null;
+          : null;
 
   const selectedVersion =
     discover.versions.find((version) => version.id === discover.selectedVersionId) ?? null;
@@ -215,13 +235,17 @@ export default function DiscoverPage({
           }
           filename={selectedFile?.filename ?? ''}
           worlds={worlds ?? []}
-          worldsLoading={worlds === null}
+          worldsLoading={worldsLoad.status === 'loading'}
+          worldsError={worldsLoad.status === 'failed' ? worldsLoad.message : null}
+          onRetryWorlds={reloadWorlds}
           world={discover.world}
           onWorldChange={discover.setWorld}
           busy={discover.installBusy}
           committing={discover.installCommitting}
           writesBlocked={writesBlocked}
           blockedReason={blockedReason}
+          targetsStatus={discover.targetsStatus}
+          onRetryTargets={discover.reloadTargets}
           hasGameDir={hasGameDir}
           result={discover.installResult}
           error={discover.installError}

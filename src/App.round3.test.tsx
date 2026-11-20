@@ -139,7 +139,8 @@ it('explains why an install is paused when targets cannot load', async () => {
   await user.click(await screen.findByRole('button', { name: 'Install…' }));
   await waitFor(() => {
     expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled();
-    expect(screen.getByRole('dialog')).toHaveTextContent('Install targets are unavailable. Return to Discover to retry.');
+    expect(screen.getByRole('dialog')).toHaveTextContent('Install targets are unavailable.');
+    expect(screen.getByRole('dialog')).not.toHaveTextContent('Return to Discover');
   }, { timeout: 3_000 });
 }, 10_000);
 
@@ -229,6 +230,39 @@ it('does not scan worlds again when Worlds is activated during a load', async ()
   });
   expect(await screen.findByRole('button', { name: /Survival 1\.17/ })).toHaveAttribute('aria-current', 'true');
   expect(listWorlds).toHaveBeenCalledTimes(1);
+});
+
+it('reloads Discover targets after a Worlds lock re-check', async () => {
+  const user = userEvent.setup();
+  const client = await clientWithWorld();
+  const locked = world({
+    world_locked: {
+      kind: 'session_lock',
+      detail: 'saves/Survival 1_17/session.lock is locked by pid 7',
+      lock_path: 'session.lock',
+      pid: 7,
+      command: null,
+    },
+  });
+  const versions: string[] = [];
+  client.listWorlds = async () => [locked];
+  client.modrinthTargets = async () => {
+    const version = `9.9.${versions.length}`;
+    versions.push(version);
+    return {
+      installed_versions: [version],
+      preferred_launcher: version,
+      world_version: null,
+    };
+  };
+  render(<App client={client} />);
+  await user.click(await screen.findByRole('button', { name: 'Discover' }));
+  expect(await screen.findByRole('option', { name: '9.9.0' })).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Worlds' }));
+  await user.click(await screen.findByRole('button', { name: 'Re-check' }));
+  await user.click(screen.getByRole('button', { name: 'Discover' }));
+  expect(await screen.findByRole('option', { name: '9.9.1' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: '9.9.0' })).not.toBeInTheDocument();
 });
 
 it('shows loading rather than an empty world list in the install sheet', async () => {

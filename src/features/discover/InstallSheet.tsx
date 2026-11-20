@@ -6,6 +6,7 @@ import type {
 } from '../../lib/types';
 import { StatusNote } from '../packs/PackEmptyState';
 import DialogShell from './DialogShell';
+import type { TargetsStatus } from './useModrinth';
 
 interface InstallSheetProps {
   open: boolean;
@@ -15,12 +16,16 @@ interface InstallSheetProps {
   filename: string;
   worlds: World[];
   worldsLoading?: boolean;
+  worldsError?: string | null;
+  onRetryWorlds?: () => void;
   world: string | null;
   onWorldChange: (world: string | null) => void;
   busy: boolean;
   committing?: boolean;
   writesBlocked: boolean;
   blockedReason: string | null;
+  targetsStatus?: TargetsStatus;
+  onRetryTargets?: () => void;
   /** False when no game dir is active: installs have nowhere to go. */
   hasGameDir: boolean;
   result: ModrinthInstallOutcome | null;
@@ -55,12 +60,16 @@ export default function InstallSheet({
   filename,
   worlds,
   worldsLoading = false,
+  worldsError = null,
+  onRetryWorlds,
   world,
   onWorldChange,
   busy,
   committing = false,
   writesBlocked,
   blockedReason,
+  targetsStatus = 'ready',
+  onRetryTargets,
   hasGameDir,
   result,
   error,
@@ -92,6 +101,15 @@ export default function InstallSheet({
           <label htmlFor="discover-world">Target world</label>
           {worldsLoading ? (
             <StatusNote role="status">Loading worlds…</StatusNote>
+          ) : worldsError ? (
+            <p className="error" role="alert">
+              {worldsError}{' '}
+              {onRetryWorlds ? (
+                <button type="button" className="button" onClick={onRetryWorlds}>
+                  Retry
+                </button>
+              ) : null}
+            </p>
           ) : worlds.length === 0 ? (
             <StatusNote role="status">
               No worlds yet. Create or open a world in Minecraft first, then
@@ -118,7 +136,20 @@ export default function InstallSheet({
           No game dir is active. Pick a game dir in Settings first, then install.
         </StatusNote>
       ) : null}
-      {blockedReason ? <StatusNote role="status">{blockedReason}</StatusNote> : null}
+      {blockedReason ? (
+        <StatusNote role="status">{blockedReason}</StatusNote>
+      ) : targetsStatus === 'loading' ? (
+        <StatusNote role="status">Loading install targets…</StatusNote>
+      ) : targetsStatus === 'failed' ? (
+        <p className="error" role="alert">
+          Install targets are unavailable.{' '}
+          {onRetryTargets ? (
+            <button type="button" className="button" onClick={onRetryTargets}>
+              Retry
+            </button>
+          ) : null}
+        </p>
+      ) : null}
       {busy ? (
         <StatusNote role="status">
           {committing

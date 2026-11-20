@@ -76,6 +76,13 @@ const EMPTY_PAGINATION: PaginationState = {
   error: null,
 };
 
+export type TargetsStatus = 'loading' | 'failed' | 'ready';
+
+type TargetsLoad =
+  | { status: 'loading' }
+  | { status: 'failed' }
+  | { status: 'ready'; targets: ModrinthTargets };
+
 export interface ModrinthState {
   query: string;
   setQuery: (query: string) => void;
@@ -96,6 +103,8 @@ export interface ModrinthState {
   loadMoreError: IpcError | null;
   loadMore: () => Promise<void>;
   targets: ModrinthTargets | null;
+  targetsStatus: TargetsStatus;
+  reloadTargets: () => void;
   /** The game version the picker prefers: the launcher version for resource
    *  packs, the selected world's version for datapacks. */
   targetVersion: string | null;
@@ -141,7 +150,9 @@ export function useModrinth(
   const [error, setError] = useState<IpcError | null>(null);
   const [offline, setOffline] = useState(false);
   const [pagination, setPagination] = useState<PaginationState>(EMPTY_PAGINATION);
-  const [targets, setTargets] = useState<ModrinthTargets | null>(null);
+  const [targetsLoad, setTargetsLoad] = useState<TargetsLoad>({ status: 'loading' });
+  const [targetsAttempt, setTargetsAttempt] = useState(0);
+  const targets = targetsLoad.status === 'ready' ? targetsLoad.targets : null;
   const [world, setWorld] = useState<string | null>(null);
   const [selected, setSelected] = useState<ModrinthSearchHit | null>(null);
   const [project, setProject] = useState<ModrinthProject | null>(null);
@@ -170,7 +181,7 @@ export function useModrinth(
   useLayoutEffect(() => {
     loadedTargets.current = null;
     setWorld(null);
-    setTargets(null);
+    setTargetsLoad({ status: 'loading' });
     setInstallResult(null);
     setInstallError(null);
   }, [gameDir]);
@@ -208,22 +219,22 @@ export function useModrinth(
     const key = JSON.stringify([reloadSignal, world]);
     if (!active || loadedTargets.current === key) return;
     let cancelled = false;
-    setTargets(null);
+    setTargetsLoad({ status: 'loading' });
     client
       .modrinthTargets(world)
       .then((loaded) => {
         if (!cancelled && mounted.current) {
           loadedTargets.current = key;
-          setTargets(loaded);
+          setTargetsLoad({ status: 'ready', targets: loaded });
         }
       })
       .catch(() => {
-        if (!cancelled && mounted.current) setTargets(null);
+        if (!cancelled && mounted.current) setTargetsLoad({ status: 'failed' });
       });
     return () => {
       cancelled = true;
     };
-  }, [client, world, active, reloadSignal, gameDir]);
+  }, [client, world, active, reloadSignal, gameDir, targetsAttempt]);
 
   const targetVersion =
     kind === 'datapack'
@@ -418,6 +429,11 @@ export function useModrinth(
     setRetryNonce((nonce) => nonce + 1);
   }, []);
 
+  const reloadTargets = useCallback(() => {
+    loadedTargets.current = null;
+    setTargetsAttempt((attempt) => attempt + 1);
+  }, []);
+
   const install = useCallback(async (): Promise<ModrinthInstallOutcome | null> => {
     if (!selected || installId.current) return null;
     const version = versions.find((item) => item.id === selectedVersionId) ?? null;
@@ -508,6 +524,8 @@ export function useModrinth(
     loadMoreError: pagination.error,
     loadMore,
     targets,
+    targetsStatus: targetsLoad.status,
+    reloadTargets,
     targetVersion,
     world,
     setWorld,
