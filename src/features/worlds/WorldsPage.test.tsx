@@ -230,6 +230,8 @@ describe('WorldsPage', () => {
     expect(await screen.findByText(/is locked/)).toBeInTheDocument();
     const enable = await screen.findByRole('button', { name: 'Enable a.zip' });
     expect(enable).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Import zip' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Import folder' })).toBeEnabled();
   });
 
   it('toggles a datapack and refreshes the stack', async () => {
@@ -904,6 +906,137 @@ describe('WorldsPage', () => {
     });
     expect(screen.getByText('level.dat rejected the write')).toBeInTheDocument();
     expect(screen.queryByText('the stack changed on disk; reload it and try again')).not.toBeInTheDocument();
+  });
+
+  it('refreshes the listing when a move returns a new file set', async () => {
+    const user = userEvent.setup();
+    const found = stack({
+      enabled: [stackEntry('file/b.zip'), stackEntry('file/a.zip')],
+      disabled: [stackEntry('file/c.zip')],
+    });
+    let onDisk = datapackListing(['a.zip', 'b.zip']);
+    const listSpy = vi.fn(async () => onDisk);
+    const reorder = vi.fn(async () => {
+      onDisk = {
+        packs: {
+          packs: [datapack('a.zip'), datapack('b.zip'), datapack('c.zip')],
+          count: 3,
+          holding_entries: [],
+          bytes_read: 1,
+          elapsed_ms: 1,
+        },
+        stack: found,
+      };
+      return found;
+    });
+    render(<WorldsPage client={pageClient({ listDatapacks: listSpy, reorderDatapacks: reorder })} gameRunning={null} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    await within(grid).findByRole('button', { name: 'Move b.zip down' });
+    const readsAtMove = listSpy.mock.calls.length;
+    await user.click(within(grid).getByRole('button', { name: 'Move b.zip down' }));
+    const card = await screen.findByRole('button', { name: 'c.zip, disabled' });
+    expect(within(card).queryByText('File missing from datapacks')).not.toBeInTheDocument();
+    expect(within(card).getByText('1.17 to 1.17.1')).toBeInTheDocument();
+    expect(listSpy.mock.calls.length).toBe(readsAtMove + 1);
+  });
+
+  it('does not refresh the listing when a move keeps the file set', async () => {
+    const user = userEvent.setup();
+    const listSpy = vi.fn(async () => datapackListing(['a.zip', 'b.zip']));
+    const reorder = vi.fn(async () => stack({
+      enabled: [stackEntry('file/b.zip'), stackEntry('file/a.zip')],
+      disabled: [],
+    }));
+    render(<WorldsPage client={pageClient({ listDatapacks: listSpy, reorderDatapacks: reorder })} gameRunning={null} />);
+    const grid = await screen.findByRole('list', { name: 'Datapack stack' });
+    await within(grid).findByRole('button', { name: 'Move b.zip down' });
+    const readsAtMove = listSpy.mock.calls.length;
+    await user.click(within(grid).getByRole('button', { name: 'Move b.zip down' }));
+    await waitFor(() => {
+      const labels = within(grid)
+        .getAllByRole('button', { name: /, enabled$/ })
+        .map((card) => card.getAttribute('aria-label'));
+      expect(labels).toEqual(['a.zip, enabled', 'b.zip, enabled']);
+    });
+    expect(listSpy.mock.calls.length).toBe(readsAtMove);
+  });
+
+  it('refreshes the listing when a toggle returns a new file set', async () => {
+    const user = userEvent.setup();
+    const found = stack({
+      enabled: [],
+      disabled: [stackEntry('file/a.zip'), stackEntry('file/extra.zip')],
+    });
+    let onDisk = datapackListing(['a.zip']);
+    const listSpy = vi.fn(async () => onDisk);
+    const setEnabled = vi.fn(async () => {
+      onDisk = {
+        packs: {
+          packs: [datapack('a.zip'), datapack('extra.zip')],
+          count: 2,
+          holding_entries: [],
+          bytes_read: 1,
+          elapsed_ms: 1,
+        },
+        stack: found,
+      };
+      return found;
+    });
+    render(<WorldsPage client={pageClient({ listDatapacks: listSpy, setDatapackEnabled: setEnabled })} gameRunning={null} />);
+    await screen.findByRole('button', { name: 'Disable a.zip' });
+    const readsAtToggle = listSpy.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Disable a.zip' }));
+    const card = await screen.findByRole('button', { name: 'extra.zip, disabled' });
+    expect(within(card).queryByText('File missing from datapacks')).not.toBeInTheDocument();
+    expect(within(card).getByText('1.17 to 1.17.1')).toBeInTheDocument();
+    expect(listSpy.mock.calls.length).toBe(readsAtToggle + 1);
+  });
+
+  it('does not refresh the listing when a toggle keeps the file set', async () => {
+    const user = userEvent.setup();
+    const listSpy = vi.fn(async () => datapackListing(['a.zip']));
+    const setEnabled = vi.fn(async () => stack({
+      enabled: [],
+      disabled: [stackEntry('file/a.zip')],
+    }));
+    render(<WorldsPage client={pageClient({ listDatapacks: listSpy, setDatapackEnabled: setEnabled })} gameRunning={null} />);
+    await screen.findByRole('button', { name: 'Disable a.zip' });
+    const readsAtToggle = listSpy.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Disable a.zip' }));
+    expect(await screen.findByRole('button', { name: 'a.zip, disabled' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'a.zip, enabled' })).not.toBeInTheDocument();
+    expect(listSpy.mock.calls.length).toBe(readsAtToggle);
+  });
+
+  it('disables imports when the game is running even if the world is locked', async () => {
+    const running: GameRunning = {
+      kind: 'process', detail: 'java', lock_path: null, pid: 42, command: 'java',
+    };
+    const lockedWorld = world({
+      world_locked: {
+        kind: 'session_lock',
+        detail: 'saves/Survival 1_17/session.lock is locked by pid 7',
+        lock_path: 'session.lock',
+        pid: 7,
+        command: null,
+      },
+    });
+    const client = pageClient({
+      listWorlds: async () => [lockedWorld],
+      listDatapacks: async () => ({
+        packs: { packs: [datapack('a.zip')], count: 1, holding_entries: [], bytes_read: 1, elapsed_ms: 1 },
+        stack: stack({
+          enabled: [stackEntry('file/a.zip')],
+          disabled: [],
+          world_locked: lockedWorld.world_locked,
+        }),
+      }),
+    });
+    render(<WorldsPage client={client} gameRunning={running} />);
+    await screen.findByRole('list', { name: 'Datapack stack' });
+    expect(screen.getByRole('button', { name: 'Import zip' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Disable a.zip' })).toBeDisabled();
   });
 });
 

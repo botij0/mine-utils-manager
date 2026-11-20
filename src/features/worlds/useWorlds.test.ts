@@ -4,7 +4,7 @@ import type { WorldsClient } from '../../lib/ipc';
 import { defaultConfig } from '../../lib/types';
 import type { DatapackListing, DataStack } from '../../lib/types';
 import { worldsClient } from '../../test/fake-ipc';
-import { datapack, datapackListing, stack, world } from '../../test/fake-packs';
+import { datapack, datapackListing, stack, stackEntry, world } from '../../test/fake-packs';
 import { checkCompatibility, compatibilityWarning, useWorlds } from './useWorlds';
 
 describe('useWorlds', () => {
@@ -331,7 +331,10 @@ describe('useWorlds', () => {
     const listedAtWrite: number[] = [];
     const reorder = vi.fn(async () => {
       listedAtWrite.push(listDatapacks.mock.calls.length);
-      return stack();
+      return stack({
+        enabled: [stackEntry('file/b.zip'), stackEntry('file/a.zip')],
+        disabled: [],
+      });
     });
     const client = worldsClient({ listDatapacks, reorderDatapacks: reorder });
     const { result } = renderHook(() => useWorlds(client));
