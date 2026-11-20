@@ -241,6 +241,22 @@ pub struct PackIssue {
     pub symlink_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
+pub enum PackWarningCode {
+    MissingMinMaxFormat,
+}
+
+/// A problem that leaves a pack readable and enabled but that the game would
+/// reject. Unlike `PackIssue`, a warning never turns the card into an error card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
+pub struct PackWarning {
+    pub code: PackWarningCode,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct Pack {
@@ -264,6 +280,7 @@ pub struct Pack {
     pub game_label: Option<String>,
     pub icon: Option<PackIcon>,
     pub error: Option<PackIssue>,
+    pub warnings: Vec<PackWarning>,
     pub bytes_read: u64,
 }
 

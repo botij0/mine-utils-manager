@@ -41,6 +41,7 @@ function importedOutcome(): ModrinthInstallOutcome {
         game_label: null,
         icon: null,
         error: null,
+        warnings: [],
         bytes_read: 0,
       },
     },

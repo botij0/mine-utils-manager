@@ -213,6 +213,7 @@ fn finish_pack(
         game_label,
         icon,
         error,
+        warnings: Vec::new(),
         meta,
         bytes_read,
     }
