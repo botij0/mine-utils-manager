@@ -219,7 +219,6 @@ fn finish_pack(
 }
 
 fn error_pack(path: &Path, location: PackLocation, err: PackError, bytes_read: u64) -> Pack {
-    let code = err.code().to_string();
     finish_pack(
         path,
         location,
@@ -227,7 +226,7 @@ fn error_pack(path: &Path, location: PackLocation, err: PackError, bytes_read: u
         crate::pack::PackMeta::default(),
         None,
         Some(PackIssue {
-            code,
+            code: (&err).into(),
             message: err.to_string(),
             symlink_path: match &err {
                 PackError::Symlink { path } => Some(path.clone()),
@@ -562,7 +561,10 @@ mod tests {
             .iter()
             .find(|pack| pack.name == "Broken")
             .unwrap();
-        assert_eq!(broken.error.as_ref().unwrap().code, "pack_broken_archive");
+        assert_eq!(
+            broken.error.as_ref().unwrap().code,
+            crate::pack::PackIssueCode::PackBrokenArchive
+        );
         let good = listing
             .packs
             .iter()
@@ -644,7 +646,10 @@ mod tests {
         assert_eq!(listing.count, 1, "no recursion into nested dirs");
         let card = &listing.packs[0];
         assert_eq!(card.name, "nested");
-        assert_eq!(card.error.as_ref().unwrap().code, "pack_missing_meta");
+        assert_eq!(
+            card.error.as_ref().unwrap().code,
+            crate::pack::PackIssueCode::PackMissingMeta
+        );
         assert!(
             card.error.as_ref().unwrap().message.contains("nested"),
             "the error names the pack: {}",
@@ -758,7 +763,10 @@ mod tests {
             .iter()
             .find(|pack| pack.name == "Linked")
             .unwrap();
-        assert_eq!(linked.error.as_ref().unwrap().code, "pack_symlink");
+        assert_eq!(
+            linked.error.as_ref().unwrap().code,
+            crate::pack::PackIssueCode::PackSymlink
+        );
         let real = listing
             .packs
             .iter()
@@ -826,7 +834,10 @@ mod tests {
 
         let listing = scan_packs(root.path(), &icons).unwrap();
         let card = &listing.packs[0];
-        assert_eq!(card.error.as_ref().unwrap().code, "pack_broken_archive");
+        assert_eq!(
+            card.error.as_ref().unwrap().code,
+            crate::pack::PackIssueCode::PackBrokenArchive
+        );
         assert!(
             card.error.as_ref().unwrap().message.contains("larger than"),
             "{:?}",

@@ -33,11 +33,19 @@ pub struct WorldVersion {
     pub newest_known_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
+pub enum WorldIssueCode {
+    LevelDat,
+    StaleStack,
+}
+
 /// Why a world is read-only. The write controls hide while this is set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
 pub struct WorldIssue {
-    pub code: String,
+    pub code: WorldIssueCode,
     pub message: String,
 }
 
@@ -205,7 +213,10 @@ pub(crate) fn is_level_file(path: &Path) -> bool {
 
 fn issue(err: &level_dat::LevelDatError) -> WorldIssue {
     WorldIssue {
-        code: err.code().to_string(),
+        code: match err {
+            level_dat::LevelDatError::StaleFile => WorldIssueCode::StaleStack,
+            _ => WorldIssueCode::LevelDat,
+        },
         message: err.to_string(),
     }
 }
@@ -290,7 +301,7 @@ fn read_world(dir: &Path, icons: &IconCache, status: &game_lock::GameStatus) -> 
         },
         Err(err) => {
             world.issue = Some(WorldIssue {
-                code: "level_dat".to_string(),
+                code: WorldIssueCode::LevelDat,
                 message: format!("could not read level.dat: {err}"),
             });
         }
@@ -390,7 +401,10 @@ mod tests {
         ]);
         let worlds = scan_worlds(&dir.path().join("game"), &icons);
         assert_eq!(worlds.len(), 2);
-        assert_eq!(worlds[0].issue.as_ref().unwrap().code, "level_dat");
+        assert_eq!(
+            worlds[0].issue.as_ref().unwrap().code,
+            WorldIssueCode::LevelDat
+        );
         assert!(worlds[0]
             .issue
             .as_ref()
@@ -452,7 +466,10 @@ mod tests {
         let bytes = level_dat::gzip(&fastnbt::to_bytes(&root).unwrap());
         let (dir, icons) = game_with(&[("bad", Some(bytes))]);
         let worlds = scan_worlds(&dir.path().join("game"), &icons);
-        assert_eq!(worlds[0].issue.as_ref().unwrap().code, "level_dat");
+        assert_eq!(
+            worlds[0].issue.as_ref().unwrap().code,
+            WorldIssueCode::LevelDat
+        );
     }
 
     #[test]

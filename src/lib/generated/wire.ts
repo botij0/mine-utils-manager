@@ -76,7 +76,8 @@ format: FormatVersion | null,
  */
 format_range: FormatRange | null, game_label: string | null, icon: PackIcon | null, error: PackIssue | null, bytes_read: number, };
 export type PackIcon = { sha256: string, path: string, };
-export type PackIssue = { code: string, message: string, symlink_path?: string, };
+export type PackIssue = { code: PackIssueCode, message: string, symlink_path?: string, };
+export type PackIssueCode = "pack_non_utf8_name" | "pack_unknown_kind" | "pack_broken_archive" | "pack_missing_meta" | "pack_symlink" | "pack_duplicate" | "pack_name_collision" | "pack_not_found" | "pack_outside_root" | "pack_trash";
 export type PackKind = "resource" | "data" | "both" | "unknown";
 export type PackListing = { packs: Array<Pack>, count: number, holding_entries: Array<HoldingEntry>,
 /**
@@ -111,7 +112,8 @@ export type StackEntry = { "kind": "file", value: string, filename: string, } | 
 export type StackSnapshot = { resource: Array<string>, incompatible: Array<string>, };
 export type Theme = "system" | "light" | "dark";
 export type World = { dir_name: string, path: string, level_name: string, version: WorldVersion | null, icon: PackIcon | null, running: GameRunning | null, world_locked: GameRunning | null, stale_lock: boolean, detection_supported: boolean, issue: WorldIssue | null, };
-export type WorldIssue = { code: string, message: string, };
+export type WorldIssue = { code: WorldIssueCode, message: string, };
+export type WorldIssueCode = "level_dat" | "stale_stack";
 export type WorldVersion = { name: string, data_format: FormatVersion | null, newest_known_version: string | null, };
 
 export const ERROR_CODES: readonly ErrorCode[] = ["backup","config","download_cancelled","download_exists","download_filename","download_hash_mismatch","download_host","download_io","download_not_zip","download_offline","download_status","download_timeout","download_too_large","download_wrong_root","game_running","invalid_game_dir","io","level_backup","level_dat","modrinth_body","modrinth_offline","modrinth_parse","modrinth_redirect","modrinth_status","modrinth_url","no_active_game_dir","options_symlink","options_txt","pack_broken_archive","pack_duplicate","pack_missing_meta","pack_name_collision","pack_non_utf8_name","pack_not_found","pack_outside_root","pack_symlink","pack_trash","pack_unknown_kind","provenance_corrupt","provenance_io","resource_stack","stale_stack","unknown_game_dir","world","world_mismatch"];

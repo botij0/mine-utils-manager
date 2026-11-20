@@ -1,4 +1,6 @@
 mod commands;
+#[cfg(test)]
+mod wire_checks;
 
 use mine_utils_core::{load_config, AppPaths, Config, ConfigStore};
 use tauri::Manager;

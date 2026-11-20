@@ -583,24 +583,20 @@ pub fn read_capped(body: Box<dyn Read + Send>, url: &str) -> Result<Vec<u8>, Mod
 }
 
 /// Which Modrinth project type the Discover tab lists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
-#[cfg_attr(
-    feature = "wire-types",
-    ts(rename = "ModrinthKind", rename_all = "lowercase")
-)]
+#[cfg_attr(feature = "wire-types", ts(rename = "ModrinthKind"))]
 pub enum SearchKind {
     ResourcePack,
     Datapack,
 }
 
 /// The sort orders the Discover page offers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "wire-types", derive(ts_rs::TS))]
-#[cfg_attr(
-    feature = "wire-types",
-    ts(rename = "ModrinthSort", rename_all = "lowercase")
-)]
+#[cfg_attr(feature = "wire-types", ts(rename = "ModrinthSort"))]
 pub enum SearchSort {
     Relevance,
     Downloads,
