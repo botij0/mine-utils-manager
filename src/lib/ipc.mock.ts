@@ -802,11 +802,20 @@ export function setMockGameState(state: MockGameState) {
   mockGameState = state;
 }
 
+export type MockOptionsFile = 'present' | 'missing' | 'symlink';
+
+const mockOptions = { file: 'present' as MockOptionsFile };
+
+export function setMockOptionsFile(file: MockOptionsFile) {
+  mockOptions.file = file;
+}
+
 /** Reset the mock stack and backups between browser demos or tests. */
 export function resetMockStack() {
   mockStack = { resource: [...INITIAL_STACK.resource], incompatible: [] };
   mockBackups = [...INITIAL_BACKUPS];
   mockGameState = 'none';
+  mockOptions.file = 'present';
   resourceHoldings = [demoHolding];
   datapackHoldings.clear();
   mockWorldStacks = JSON.parse(JSON.stringify(INITIAL_WORLD_STACKS)) as typeof INITIAL_WORLD_STACKS;
