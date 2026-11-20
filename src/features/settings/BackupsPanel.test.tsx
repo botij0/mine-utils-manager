@@ -210,7 +210,9 @@ describe('BackupsPanel', () => {
 
     for (const button of within(optionsTable).getAllByRole('button', { name: /^Restore / })) {
       expect(button).toBeEnabled();
+      expect(button).not.toHaveAttribute('aria-describedby');
     }
+    expect(screen.queryByText(/before restoring|could not check|Checking whether/)).not.toBeInTheDocument();
   });
 
   it('restores a backup and reports the refreshed stack', async () => {
