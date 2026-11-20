@@ -138,3 +138,26 @@ fn type_segment(ty: &Type) -> Option<&syn::PathSegment> {
     let Type::Path(path) = ty else { return None };
     path.path.segments.last()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn injected_app_handle_is_not_a_wire_argument() {
+        let source = syn::parse_file("fn probe(app: tauri::AppHandle, name: String) {}").unwrap();
+        let mut registered = BTreeSet::from(["crate::commands::probe".to_owned()]);
+        let mut checks = String::new();
+        write_checks(
+            &mut checks,
+            &mut registered,
+            "crate::commands",
+            &source.items,
+        )
+        .unwrap();
+        assert!(
+            checks.contains("|(arg_1, ), (arg_0, ): (tauri::AppHandle, )|"),
+            "{checks}"
+        );
+    }
+}

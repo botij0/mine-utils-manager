@@ -24,6 +24,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2"
 
 [dev-dependencies]
+syn = { version = "2", features = ["full", "visit"] }
 mine-utils-core = { workspace = true, features = ["wire-types"] }
 tempfile = "3"
 tauri = { version = "2", features = ["test"] }
