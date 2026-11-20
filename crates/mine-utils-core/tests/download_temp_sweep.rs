@@ -1,5 +1,9 @@
 #![cfg(unix)]
 
+#[cfg(unix)]
+#[path = "support/sweep_eligible.rs"]
+mod sweep_eligible;
+
 use std::io::{BufRead, Cursor, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -85,6 +89,9 @@ fn listing(dir: &Path) -> Vec<String> {
 
 #[test]
 fn sweep_keeps_recent_temps_and_non_regular_or_malformed_entries() {
+    if !sweep_eligible::eligible(std::env::temp_dir().as_path()) {
+        return;
+    }
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir().unwrap();
@@ -251,6 +258,9 @@ fn live_owner_survives(mode: &str, phase: &str) {
 
 #[test]
 fn sweep_keeps_live_downloads_across_executables_and_pid_namespaces() {
+    if !sweep_eligible::eligible(std::env::temp_dir().as_path()) {
+        return;
+    }
     for mode in ["copied", "replaced", "unlinked"] {
         for phase in ["streaming", "verified"] {
             live_owner_survives(mode, phase);
@@ -305,6 +315,9 @@ fn sweep_never_follows_a_symlinked_target_directory() {
 
 #[test]
 fn next_download_sweeps_an_abandoned_temp_from_a_moved_folder() {
+    if !sweep_eligible::eligible(std::env::temp_dir().as_path()) {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let target = root.path().join("resourcepacks");
     std::fs::create_dir(&target).unwrap();

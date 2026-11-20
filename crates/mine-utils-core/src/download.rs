@@ -528,8 +528,10 @@ fn is_local_download_filesystem(parent: &same_file::Handle) -> bool {
 #[cfg(target_os = "linux")]
 fn is_local_linux_filesystem(fs_type: u32) -> bool {
     const RAMFS_MAGIC: u32 = 0x858458f6;
+    const ZFS_SUPER_MAGIC: u32 = 0x2fc12fc1;
 
-    // Locks on network and FUSE mounts may not exclude owners on another mount.
+    // Local ext2/3/4, btrfs, XFS, F2FS, tmpfs, ramfs and ZFS share
+    // kernel flock state across local mounts. Network and FUSE mounts may not.
     // Unknown filesystems stay excluded until their locking semantics are known.
     [
         libc::EXT4_SUPER_MAGIC as u32,
@@ -538,6 +540,7 @@ fn is_local_linux_filesystem(fs_type: u32) -> bool {
         libc::F2FS_SUPER_MAGIC as u32,
         libc::TMPFS_MAGIC as u32,
         RAMFS_MAGIC,
+        ZFS_SUPER_MAGIC,
     ]
     .contains(&fs_type)
 }
@@ -931,7 +934,7 @@ mod tests {
     #[test]
     fn only_known_local_filesystems_allow_sweeping() {
         for local in [
-            0xef53, 0x9123683e, 0x58465342, 0xf2f52010, 0x01021994, 0x858458f6,
+            0xef53, 0x9123683e, 0x58465342, 0xf2f52010, 0x01021994, 0x858458f6, 0x2fc12fc1,
         ] {
             assert!(is_local_linux_filesystem(local), "{local:#x}");
         }
