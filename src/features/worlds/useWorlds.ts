@@ -35,8 +35,10 @@ export interface WorldsState {
   listingWorld: string | null;
   busy: boolean;
   actionError: IpcError | null;
+  clearStaleActionError: () => void;
   reload: () => Promise<void>;
-  refreshListing: () => Promise<void>;
+  /** True when this call applied a listing. False when a newer read won or the read failed. */
+  refreshListing: () => Promise<boolean>;
   toggleDatapack: (filename: string, enabled: boolean) => Promise<void>;
   reorderDatapacks: (order: string[]) => Promise<void>;
   importDatapack: (
@@ -128,7 +130,10 @@ export function useWorlds(
   selectedRef.current = selectedName;
   const worldsRequest = useRef(0);
   const listingRequest = useRef(0);
+  // Set when the world list applies. A failure leaves it unset so the next activation retries.
   const loadedSignal = useRef<string | null>(null);
+  // Set while this signal's world list has not settled, so another activation does not start a second scan.
+  const inflightSignal = useRef<string | null>(null);
   const loadedListing = useRef<string | null>(null);
 
   useLayoutEffect(() => {
@@ -137,6 +142,7 @@ export function useWorlds(
     listingRequest.current += 1;
     requestId.current += 1;
     loadedSignal.current = null;
+    inflightSignal.current = null;
     loadedListing.current = null;
     selectedRef.current = null;
     setSelectedName(null);
@@ -177,13 +183,17 @@ export function useWorlds(
 
   const reload = useCallback(async () => {
     const request = ++worldsRequest.current;
-    loadedSignal.current = null;
+    const signal = reloadSignal;
+    inflightSignal.current = signal;
     setLoading(true);
     try {
       const [next, config] = await Promise.all([client.listWorlds(), client.getConfig()]);
       if (!mounted.current || request !== worldsRequest.current) return;
-      if (gameDir !== null && config.active_game_dir !== gameDir) return;
-      loadedSignal.current = reloadSignal;
+      if (gameDir !== null && config.active_game_dir !== gameDir) {
+        loadedSignal.current = null;
+        return;
+      }
+      loadedSignal.current = signal;
       setWorlds(next);
       setError(null);
       setSelectedName((prev) => {
@@ -193,27 +203,32 @@ export function useWorlds(
       });
     } catch (err) {
       if (!mounted.current || request !== worldsRequest.current) return;
+      loadedSignal.current = null;
       setError(toAppError(err));
       setWorlds([]);
     } finally {
-      if (mounted.current && request === worldsRequest.current) setLoading(false);
+      if (request === worldsRequest.current) {
+        inflightSignal.current = null;
+        if (mounted.current) setLoading(false);
+      }
     }
   }, [client, gameDir, reloadSignal]);
 
   useEffect(() => {
     if (!active || loadedSignal.current === reloadSignal) return;
+    if (inflightSignal.current === reloadSignal) return;
     void reload();
   }, [reload, active, reloadSignal, gameDir]);
 
   const selected = worlds.find((world) => world.dir_name === selectedName) ?? null;
 
-  const refreshListing = useCallback(async () => {
+  const refreshListing = useCallback(async (): Promise<boolean> => {
     if (!selectedName || selectedRef.current !== selectedName) {
       setPacks([]);
       setHoldings([]);
       setStack(null);
       setListingWorld(null);
-      return;
+      return false;
     }
     // Capture the selection and the latest request: a late listing for a
     // previous world, or one overtaken by a mutation, never repopulates the
@@ -228,14 +243,15 @@ export function useWorlds(
     setStackError(null);
     try {
       const listing = await client.listDatapacks(world);
-      if (!isCurrentRequest(world, request) || listingId !== listingRequest.current) return;
+      if (!isCurrentRequest(world, request) || listingId !== listingRequest.current) return false;
       loadedListing.current = JSON.stringify([reloadSignal, world]);
       setPacks(listing.packs.packs);
       setHoldings(listing.packs.holding_entries);
       setStack(listing.stack);
       setListingWorld(world);
+      return true;
     } catch (err) {
-      if (!isCurrentRequest(world, request) || listingId !== listingRequest.current) return;
+      if (!isCurrentRequest(world, request) || listingId !== listingRequest.current) return false;
       const appError = toAppError(err);
       setPacks([]);
       setHoldings([]);
@@ -243,6 +259,7 @@ export function useWorlds(
       setListingWorld(world);
       setPacksError(appError);
       setStackError(appError);
+      return false;
     } finally {
       if (isCurrentRequest(world, request) && listingId === listingRequest.current) {
         setPacksLoading(false);
@@ -421,6 +438,10 @@ export function useWorlds(
 
   const clearActionError = useCallback(() => setActionError(null), []);
 
+  const clearStaleActionError = useCallback(() => {
+    setActionError((current) => (current?.code === 'stale_stack' ? null : current));
+  }, []);
+
   return {
     holdings,
     restoreHolding,
@@ -438,6 +459,7 @@ export function useWorlds(
     listingWorld,
     busy,
     actionError,
+    clearStaleActionError,
     reload,
     refreshListing,
     toggleDatapack,

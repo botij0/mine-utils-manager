@@ -29,7 +29,8 @@ export interface PacksState {
   stackLoading: boolean;
   /** The stack-read failure. A pack-list failure never lands here. */
   stackError: IpcError | null;
-  reload: () => Promise<void>;
+  /** True when this call applied the pack list. False when a newer read won or the read failed. */
+  reload: () => Promise<boolean>;
   /** True when this call applied a stack. False when a newer read won or the read failed. */
   refreshStack: () => Promise<boolean>;
   importPack: (path: string, choice?: ImportChoice) => Promise<ImportOutcome>;
@@ -70,12 +71,19 @@ export function usePacks(
   const mounted = useRef(true);
   const packRequest = useRef(0);
   const stackRequest = useRef(0);
+  // Set when both reads apply. A failure leaves it unset so the next activation retries.
   const loadedSignal = useRef<string | null>(null);
+  // Set while this signal's reads have not settled, so another activation does not start a second pair.
+  const inflightSignal = useRef<string | null>(null);
+  // Bumped on a game-dir change so a late completion cannot clear the replacement attempt.
+  const loadAttempt = useRef(0);
 
   useLayoutEffect(() => {
     packRequest.current += 1;
     stackRequest.current += 1;
+    loadAttempt.current += 1;
     loadedSignal.current = null;
+    inflightSignal.current = null;
     setPacks([]);
     setHoldings([]);
     setStats(null);
@@ -93,21 +101,23 @@ export function usePacks(
     };
   }, []);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (): Promise<boolean> => {
     const request = ++packRequest.current;
     setLoading(true);
     try {
       const listing = await client.listResourcePacks();
-      if (!mounted.current || request !== packRequest.current) return;
+      if (!mounted.current || request !== packRequest.current) return false;
       setPacks(listing.packs);
       setHoldings(listing.holding_entries);
       setStats({ bytesRead: listing.bytes_read, elapsedMs: listing.elapsed_ms });
       setError(null);
+      return true;
     } catch (err) {
-      if (!mounted.current || request !== packRequest.current) return;
+      if (!mounted.current || request !== packRequest.current) return false;
       setError(toAppError(err));
       setPacks([]);
       setHoldings([]);
+      return false;
     } finally {
       if (mounted.current && request === packRequest.current) setLoading(false);
     }
@@ -136,9 +146,15 @@ export function usePacks(
 
   useEffect(() => {
     if (!active || loadedSignal.current === reloadSignal) return;
-    loadedSignal.current = reloadSignal;
-    void reload();
-    void refreshStack();
+    if (inflightSignal.current === reloadSignal) return;
+    const signal = reloadSignal;
+    const attempt = ++loadAttempt.current;
+    inflightSignal.current = signal;
+    void Promise.all([reload(), refreshStack()]).then(([listed, stacked]) => {
+      if (loadAttempt.current !== attempt) return;
+      inflightSignal.current = null;
+      if (listed && stacked) loadedSignal.current = signal;
+    });
   }, [reload, refreshStack, active, reloadSignal, gameDir]);
 
   const importPack = useCallback(

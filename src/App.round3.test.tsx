@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import App from './App';
 import { IpcError } from './lib/types';
 import { gameDir, makeFakeClient } from './test/fake-ipc';
-import { datapackListing, world } from './test/fake-packs';
+import { datapackListing, pack, world } from './test/fake-packs';
 
 vi.mock('./lib/ipc', async (original) => ({
   ...await original<typeof import('./lib/ipc')>(),
@@ -142,6 +142,94 @@ it('explains why an install is paused when targets cannot load', async () => {
     expect(screen.getByRole('dialog')).toHaveTextContent('Install targets are unavailable. Return to Discover to retry.');
   }, { timeout: 3_000 });
 }, 10_000);
+
+async function packsClient() {
+  const client = makeFakeClient({
+    gameDirs: [gameDir('/home/demo/.minecraft', true, true)],
+    packs: [pack('Alpha')],
+  });
+  await client.setActiveGameDir('/home/demo/.minecraft');
+  client.listWorlds = async () => [world()];
+  return client;
+}
+
+it('retries a failed pack list on the next Packs activation', async () => {
+  const user = userEvent.setup();
+  const client = await packsClient();
+  const read = client.listResourcePacks.bind(client);
+  let fail = true;
+  let calls = 0;
+  client.listResourcePacks = async () => {
+    calls += 1;
+    if (fail) throw new IpcError('io', 'pack read failed');
+    return read();
+  };
+  render(<App client={client} />);
+  expect(await screen.findByText('pack read failed')).toBeInTheDocument();
+  const failedCalls = calls;
+  fail = false;
+  await user.click(screen.getByRole('button', { name: 'Settings' }));
+  await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+  await waitFor(() => expect(calls).toBe(failedCalls + 1));
+  expect(await screen.findByRole('button', { name: /Alpha/ })).toBeInTheDocument();
+  expect(screen.queryByText('pack read failed')).not.toBeInTheDocument();
+});
+
+it('retries a failed resource stack on the next Packs activation', async () => {
+  const user = userEvent.setup();
+  const client = await packsClient();
+  const read = client.getResourceStack.bind(client);
+  let fail = true;
+  let calls = 0;
+  client.getResourceStack = async () => {
+    calls += 1;
+    if (fail) throw new IpcError('options_txt', 'options.txt is unreadable');
+    return read();
+  };
+  render(<App client={client} />);
+  expect(await screen.findByText('options.txt is unreadable')).toBeInTheDocument();
+  const failedCalls = calls;
+  fail = false;
+  await user.click(screen.getByRole('button', { name: 'Settings' }));
+  await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+  await waitFor(() => expect(calls).toBe(failedCalls + 1));
+  expect(await screen.findByRole('list', { name: 'Stack order' })).toHaveTextContent('vanilla');
+  expect(screen.queryByText('options.txt is unreadable')).not.toBeInTheDocument();
+});
+
+it('does not scan worlds again when Worlds is activated during a load', async () => {
+  const user = userEvent.setup();
+  const client = await clientWithWorld();
+  const rows = [world()];
+  let release!: (value: typeof rows) => void;
+  const pending = new Promise<typeof rows>((resolve) => {
+    release = resolve;
+  });
+  const listWorlds = vi.spyOn(client, 'listWorlds').mockImplementation(() => pending);
+  render(<App client={client} />);
+  await screen.findByRole(
+    'button',
+    { name: /Active game dir\s*\/home\/demo\/\.minecraft/ },
+  );
+  await user.click(screen.getByRole('button', { name: 'Worlds' }));
+  expect(
+    within(await screen.findByRole('navigation', { name: 'Worlds' })).getByText('Loading worlds…'),
+  ).toBeInTheDocument();
+  expect(listWorlds).toHaveBeenCalledTimes(1);
+  await user.click(screen.getByRole('button', { name: 'Settings' }));
+  await user.click(screen.getByRole('button', { name: 'Worlds' }));
+  await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
+  await user.click(screen.getByRole('button', { name: 'Worlds' }));
+  expect(listWorlds).toHaveBeenCalledTimes(1);
+  expect(
+    within(screen.getByRole('navigation', { name: 'Worlds' })).getByText('Loading worlds…'),
+  ).toBeInTheDocument();
+  await act(async () => {
+    release(rows);
+  });
+  expect(await screen.findByRole('button', { name: /Survival 1\.17/ })).toHaveAttribute('aria-current', 'true');
+  expect(listWorlds).toHaveBeenCalledTimes(1);
+});
 
 it('shows loading rather than an empty world list in the install sheet', async () => {
   const user = userEvent.setup();
