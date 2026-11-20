@@ -68,8 +68,7 @@ impl Install {
         // The app's data dir is `$XDG_DATA_HOME/mine-utils` on Linux.
         let data_dir = self.home.join("data").join("mine-utils");
         let root = level_backup::root_for(&data_dir, &self.game);
-        let outcome =
-            level_backup::create(&root, world, level, &BackupsConfig::default()).unwrap();
+        let outcome = level_backup::create(&root, world, level, &BackupsConfig::default()).unwrap();
         outcome
             .created
             .expect("backups are on by default")
