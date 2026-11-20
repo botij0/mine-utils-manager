@@ -577,6 +577,7 @@ describe('WorldsPage', () => {
     ).toBeInTheDocument();
     const detail = screen.getByRole('region', { name: 'Datapack details' });
     expect(within(detail).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+    expect(within(detail).getByRole('button', { name: 'Enable' })).toBeDisabled();
   });
 
   it('hides the stale-lock note while writes are paused', async () => {
