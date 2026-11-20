@@ -1842,3 +1842,48 @@ fn replace_removes_only_empty_holdings_left_by_another_process() {
     assert!(folder.join(&current).is_dir());
     assert!(folder.join(legacy).is_dir());
 }
+
+#[cfg(unix)]
+#[test]
+fn enable_refuses_symlinked_datapack_entries() {
+    use std::os::unix::fs::symlink;
+    for folder in [true, false] {
+        let world = temp_world(&["vanilla"], &["file/linked"]);
+        let target = world._dir.path().join("target");
+        if folder {
+            std::fs::create_dir(&target).unwrap();
+            std::fs::write(target.join("marker"), b"untouched").unwrap();
+        } else {
+            std::fs::write(&target, b"untouched").unwrap();
+        }
+        let link = world.paths.datapacks_dir().join("linked");
+        symlink(&target, &link).unwrap();
+        let before = std::fs::read(world.paths.level_dat_path()).unwrap();
+        let result = data_stack::set_enabled(&world.paths, "linked", true);
+        println!(
+            "folder={folder} result={result:?} level={:?} target={:?}",
+            view(&world.paths),
+            if folder {
+                std::fs::read(target.join("marker"))
+            } else {
+                std::fs::read(&target)
+            }
+            .unwrap()
+        );
+        assert_eq!(result.unwrap_err().code(), "pack_symlink");
+        assert_eq!(std::fs::read(world.paths.level_dat_path()).unwrap(), before);
+        assert!(std::fs::symlink_metadata(link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            if folder {
+                std::fs::read(target.join("marker"))
+            } else {
+                std::fs::read(&target)
+            }
+            .unwrap(),
+            b"untouched"
+        );
+    }
+}
