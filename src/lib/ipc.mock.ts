@@ -338,8 +338,9 @@ export const mockClient: IpcClient = {
     return makeState(next);
   },
   async setLastWorld(path: string) {
+    assertActiveGameDir();
     const config = loadConfig();
-    if (!config.active_game_dir || !mockWorldList().some((world) => `${config.active_game_dir}/saves/${world.dir_name}` === path)) {
+    if (!mockWorldList().some((world) => `${config.active_game_dir}/saves/${world.dir_name}` === path)) {
       throw new IpcError('world', 'world does not exist');
     }
     config.last_world = path;
@@ -383,6 +384,7 @@ export const mockClient: IpcClient = {
   },
   async restoreDatapackHolding(world, holdingName) {
     await delay();
+    assertActiveGameDir();
     mockAssertDatapackWritable(world);
     const holdings = datapackHoldings.get(world) ?? [demoHolding];
     const holding = holdings.find((entry) => entry.holdingName === holdingName);
@@ -400,6 +402,7 @@ export const mockClient: IpcClient = {
   },
   async importResourcePack(path: string, choice: ImportChoice = 'default'): Promise<ImportOutcome> {
     await delay();
+    assertActiveGameDir();
     assertWritable();
     const base = path.split('/').filter(Boolean).at(-1) ?? path;
     const lower = base.toLowerCase();
@@ -455,10 +458,12 @@ export const mockClient: IpcClient = {
   },
   async deleteResourcePack(path: string) {
     await delay();
-    assertWritable();
+    assertActiveGameDir();
     if (!mockPacks.some((pack) => pack.path === path)) {
       throw new IpcError('pack_not_found', `pack ${path} does not exist`);
     }
+    assertWritable();
+    assertOptionsNotSymlink();
     mockPacks = mockPacks.filter((pack) => pack.path !== path);
     mockStack = {
       ...mockStack,
@@ -472,7 +477,9 @@ export const mockClient: IpcClient = {
   },
   async setResourcePackEnabled(filename: string, enabled: boolean) {
     await delay();
+    assertActiveGameDir();
     assertWritable();
+    assertOptionsForWrite();
     const value = `file/${filename}`;
     if (enabled) {
       if (!mockStack.resource.includes(value)) {
@@ -488,18 +495,15 @@ export const mockClient: IpcClient = {
   },
   async reorderResourceStack(order: string[], expected: StackSnapshot) {
     await delay();
+    assertActiveGameDir();
     assertWritable();
+    assertOptionsForWrite();
     mockReorder(order, expected);
     return mockResourceStack();
   },
   async listOptionsBackups() {
     await delay();
-    if (!loadConfig().active_game_dir) {
-      throw new IpcError(
-        'no_active_game_dir',
-        'no active game dir; pick one in Settings first',
-      );
-    }
+    assertActiveGameDir();
     return mockBackups.map(({ file_name, bytes, display }) => ({
       file_name,
       bytes,
@@ -508,7 +512,9 @@ export const mockClient: IpcClient = {
   },
   async restoreOptionsBackup(backup: string) {
     await delay();
+    assertActiveGameDir();
     assertWritable();
+    assertOptionsNotSymlink();
     const found = mockBackups.find((entry) => entry.file_name === backup);
     if (!found) {
       throw new IpcError('backup', `backup failed: no backup named ${backup}`);
@@ -537,6 +543,7 @@ export const mockClient: IpcClient = {
   },
   async listDatapacks(world: string) {
     await delay();
+    assertActiveGameDir();
     return mockDatapackListing(world);
   },
   async importDatapack(
@@ -545,15 +552,18 @@ export const mockClient: IpcClient = {
     choice: ImportChoice = 'default',
   ): Promise<DatapackImportOutcome> {
     await delay();
+    assertActiveGameDir();
     return mockImportDatapack(world, path, choice);
   },
   async deleteDatapack(world: string, path: string): Promise<DatapackDeleteOutcome> {
     await delay();
+    assertActiveGameDir();
     mockDeleteDatapack(world, path);
     return { removed_references: true, stack: mockDataStack(world) };
   },
   async removeDatapackReference(world: string, filename: string) {
     await delay();
+    assertActiveGameDir();
     mockAssertDatapackWritable(world);
     const state = stackStateOf(world);
     const value = `file/${filename}`;
@@ -564,18 +574,21 @@ export const mockClient: IpcClient = {
   },
   async setDatapackEnabled(world: string, filename: string, enabled: boolean) {
     await delay();
+    assertActiveGameDir();
     mockAssertDatapackWritable(world);
     mockSetDatapackEnabled(world, filename, enabled);
     return mockDataStack(world);
   },
   async reorderDatapacks(world: string, order: string[], expected: DataSnapshot) {
     await delay();
+    assertActiveGameDir();
     mockAssertDatapackWritable(world);
     mockReorderDatapacks(world, order, expected);
     return mockDataStack(world);
   },
   async listLevelBackups(world: string) {
     await delay();
+    assertActiveGameDir();
     return mockLevelBackups
       .filter((entry) => entry.world === world)
       .map(({ file_name, bytes, display, world: entryWorld }) => ({
@@ -587,6 +600,7 @@ export const mockClient: IpcClient = {
   },
   async listAllLevelBackups() {
     await delay();
+    assertActiveGameDir();
     return mockLevelBackups.map(({ file_name, bytes, display, world }) => ({
       file_name,
       bytes,
@@ -596,6 +610,7 @@ export const mockClient: IpcClient = {
   },
   async restoreLevelBackup(world: string, backup: string) {
     await delay();
+    assertActiveGameDir();
     mockAssertDatapackWritable(world);
     const found = mockLevelBackups.find(
       (entry) => entry.world === world && entry.file_name === backup,
@@ -678,6 +693,7 @@ export const mockClient: IpcClient = {
   },
   async modrinthTargets(world?: string | null) {
     await delay();
+    assertActiveGameDir();
     return modrinthTargets(world ? '1.21.1' : null);
   },
   async cancelModrinthInstall(installId: string) {
@@ -694,11 +710,13 @@ export const mockClient: IpcClient = {
       if (!args.world) {
         throw new IpcError('modrinth_parse', 'a datapack install needs a target world');
       }
+      refuseUnreadableWorld(args.world);
       if (mockWorldStacks[args.world] === undefined) {
         throw new IpcError('world', `world ${args.world} does not exist`);
       }
       if (mockLockedWorld !== args.world) assertWritable();
     } else {
+      assertOptionsPresent();
       assertWritable();
     }
     const lower = args.filename.toLowerCase();
@@ -710,9 +728,30 @@ export const mockClient: IpcClient = {
       throw new IpcError('modrinth_offline', 'Modrinth is unreachable (simulated offline); check the network');
     }
     if (args.kind === 'datapack') {
-      const outcome = mockImportDatapack(args.world!, args.filename, 'default');
+      const world = args.world!;
+      const installed = (mockWorldPacks[world] ?? []).some((item) => item.filename === args.filename);
+      // commit_source reuses identical bytes at this name. import_datapack then returns Imported.
+      if (installed) {
+        if (mockLockedWorld === world) {
+          return {
+            kind: 'datapack',
+            outcome: {
+              status: 'locked',
+              filename: args.filename,
+              detail: `/home/demo/.minecraft/saves/${world}/session.lock is locked by pid 4242`,
+            },
+          } as ModrinthInstallOutcome;
+        }
+        mockSetDatapackEnabled(world, args.filename, true);
+        return {
+          kind: 'datapack',
+          outcome: { status: 'imported', filename: args.filename },
+        } as ModrinthInstallOutcome;
+      }
+      const outcome = mockImportDatapack(world, args.filename, 'default');
       return { kind: 'datapack', outcome } as ModrinthInstallOutcome;
     }
+    assertOptionsNotSymlink();
     const entry = `file/${args.filename}`;
     const existing = mockPacks.find((pack) => pack.path.endsWith(`/${args.filename}`));
     if (existing) {
@@ -1139,9 +1178,7 @@ function mockImportDatapack(
   choice: ImportChoice,
 ): DatapackImportOutcome {
   const base = path.split('/').filter(Boolean).at(-1) ?? path;
-  if (world === 'Broken World') {
-    throw new IpcError('level_dat', 'level.dat is read-only');
-  }
+  refuseUnreadableWorld(world);
   if (mockWorldStacks[world] === undefined) {
     throw new IpcError('world', `world ${world} does not exist`);
   }
@@ -1242,6 +1279,38 @@ function mockResourceStack(): ResourceStack {
 
 function assertActiveGameDir() {
   if (!loadConfig().active_game_dir) throw new IpcError('no_active_game_dir', 'no active game dir; pick one in Settings first');
+}
+
+function optionsPath(): string {
+  assertActiveGameDir();
+  return `${loadConfig().active_game_dir}/options.txt`;
+}
+
+function assertOptionsPresent() {
+  if (mockOptions.file !== 'missing') return;
+  throw new IpcError(
+    'options_txt',
+    `options.txt is missing at ${optionsPath()}; launch Minecraft once so it writes the file, then try again`,
+  );
+}
+
+function assertOptionsNotSymlink() {
+  if (mockOptions.file !== 'symlink') return;
+  throw new IpcError(
+    'options_symlink',
+    `${optionsPath()} is a symlink and cannot be written`,
+  );
+}
+
+function assertOptionsForWrite() {
+  assertOptionsNotSymlink();
+  assertOptionsPresent();
+}
+
+function refuseUnreadableWorld(world: string) {
+  const listed = mockWorldList().find((entry) => entry.dir_name === world);
+  if (listed?.issue?.code !== 'level_dat') return;
+  throw new IpcError('world', `world error: world ${world} has no readable level.dat`);
 }
 
 function assertWritable() {

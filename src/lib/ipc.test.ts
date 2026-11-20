@@ -133,10 +133,11 @@ describe('typed error mapping', () => {
 });
 
 describe('mock world import guards', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetMockWorlds();
     setMockGameState('none');
     setMockLockedWorld(null);
+    await ipc.setActiveGameDir('/home/demo/.minecraft');
   });
 
   it('copies but disables a new pack when the game runs and the world is locked', async () => {
@@ -167,9 +168,10 @@ describe('mock world import guards', () => {
 });
 
 describe('mock resource import guards', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetMockPacks();
     setMockGameState('none');
+    await ipc.setActiveGameDir('/home/demo/.minecraft');
   });
 
   it('refuses local resource imports while Minecraft runs', async () => {
@@ -360,6 +362,26 @@ describe('mock parity with the Rust backend', () => {
     const listing = await ipc.listDatapacks('Survival 1_17');
     expect(listing.stack.enabled.map((entry) => entry.value)).toContain('file/fresh-data.zip');
     expect(listing.stack.disabled.map((entry) => entry.value)).not.toContain('file/fresh-data.zip');
+  });
+
+  it('leaves a locked datapack disabled when the same bytes are installed again', async () => {
+    expect(await ipc.installModrinthPack(datapackInstall)).toMatchObject({
+      kind: 'datapack',
+      outcome: { status: 'imported', filename: 'fresh-data.zip' },
+    });
+    await ipc.setDatapackEnabled('Survival 1_17', 'fresh-data.zip', false);
+    setMockLockedWorld('Survival 1_17');
+    expect(await ipc.installModrinthPack(datapackInstall)).toMatchObject({
+      kind: 'datapack',
+      outcome: {
+        status: 'locked',
+        filename: 'fresh-data.zip',
+        detail: '/home/demo/.minecraft/saves/Survival 1_17/session.lock is locked by pid 4242',
+      },
+    });
+    const listing = await ipc.listDatapacks('Survival 1_17');
+    expect(listing.stack.enabled.map((entry) => entry.value)).not.toContain('file/fresh-data.zip');
+    expect(listing.stack.disabled.map((entry) => entry.value)).toContain('file/fresh-data.zip');
   });
 
   it('refuses options.txt writes when the file is a symlink', async () => {
