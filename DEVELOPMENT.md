@@ -94,6 +94,10 @@ pnpm tauri build --no-bundle
 
 The CI workflow runs frontend, core Rust, and Tauri jobs on Ubuntu 24.04. Its Tauri job also builds the desktop app without bundles.
 
+## Check command signatures
+
+Run `env -u APPIMAGE cargo test -p mine-utils command_wire_types_are_exported` to check registered Tauri command arguments and return payloads against the Rust wire exports. The build script generates the test from `src/lib.rs` registrations and command signatures. It excludes `State` and `AppHandle` injected arguments. Other injected types such as `Window` are treated as wire types. The scanner reads Rust files directly in `src/commands` and inline modules, but not command subdirectories. Move commands into those files or extend the scanner before registering them.
+
 ## Generate IPC wire types
 
 Rust owns the serialized DTOs and `ErrorCode` list. After changing a wire type

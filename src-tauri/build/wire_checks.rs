@@ -114,6 +114,10 @@ fn write_checks(
             if type_segment(&argument.ty).is_some_and(|segment| segment.ident == "State") {
                 write!(state, "{name}, ")?;
                 state_types.push_str("tauri::State<'static, _>, ");
+            } else if type_segment(&argument.ty).is_some_and(|segment| segment.ident == "AppHandle")
+            {
+                write!(state, "{name}, ")?;
+                state_types.push_str("tauri::AppHandle, ");
             } else {
                 write!(args, "{name}, ")?;
             }
