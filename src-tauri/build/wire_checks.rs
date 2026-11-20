@@ -43,16 +43,11 @@ pub fn generate() -> Result<(), Box<dyn std::error::Error>> {
         registered.insert(format!("crate::{}", segments.join("::")));
     }
 
-    let mut sources = fs::read_dir(source_dir)?.collect::<Result<Vec<_>, _>>()?;
-    sources.sort_by_key(|entry| entry.file_name());
+    let sources = command_sources(source_dir)?;
     let mut checks = String::from(
         "#[test]\nfn command_wire_types_are_exported() {\n    let exports = WireExports::collect();\n",
     );
-    for source in sources {
-        let path = source.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
-            continue;
-        }
+    for path in sources {
         let module = path.file_stem().unwrap().to_str().unwrap();
         let module = if module == "mod" {
             "crate::commands".to_owned()
@@ -75,6 +70,15 @@ pub fn generate() -> Result<(), Box<dyn std::error::Error>> {
     let output_dir = PathBuf::from(env::var_os("OUT_DIR").ok_or("missing OUT_DIR")?);
     fs::write(output_dir.join("command_wire_checks.rs"), checks)?;
     Ok(())
+}
+
+fn command_sources(source_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut sources = fs::read_dir(source_dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    sources.retain(|path| path.extension().and_then(|extension| extension.to_str()) == Some("rs"));
+    sources.sort();
+    Ok(sources)
 }
 
 fn write_checks(
@@ -146,6 +150,18 @@ fn type_segment(ty: &Type) -> Option<&syn::PathSegment> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_sources_do_not_include_subdirectories() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("top.rs"), "").unwrap();
+        fs::create_dir(dir.path().join("nested")).unwrap();
+        fs::write(dir.path().join("nested/command.rs"), "").unwrap();
+        assert_eq!(
+            command_sources(dir.path()).unwrap(),
+            vec![dir.path().join("top.rs")]
+        );
+    }
 
     #[test]
     fn injected_app_handle_is_not_a_wire_argument() {
