@@ -171,6 +171,7 @@ function makePack(
     game_label: gameLabel,
     icon: icon ? { sha256: `mock-${name}`, url: icon } : null,
     error: null,
+    warnings: [],
     bytes_read: 4096,
   };
 }

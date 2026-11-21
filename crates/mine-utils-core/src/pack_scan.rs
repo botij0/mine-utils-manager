@@ -199,6 +199,7 @@ fn finish_pack(
     let game_label = range
         .as_ref()
         .and_then(|range| table.game_label(kind, range));
+    let warnings = meta.format_warnings(kind);
     Pack {
         id: path.to_string_lossy().to_string(),
         name: display_name(path),
@@ -213,6 +214,7 @@ fn finish_pack(
         game_label,
         icon,
         error,
+        warnings,
         meta,
         bytes_read,
     }

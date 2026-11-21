@@ -74,7 +74,7 @@ format: FormatVersion | null,
  * from `max_format` or `supported_formats`, means any minor of that major:
  * its `minor` is `FormatVersion::ANY_MINOR` (2147483647 on the wire).
  */
-format_range: FormatRange | null, game_label: string | null, icon: PackIcon | null, error: PackIssue | null, bytes_read: number, };
+format_range: FormatRange | null, game_label: string | null, icon: PackIcon | null, error: PackIssue | null, warnings: Array<PackWarning>, bytes_read: number, };
 export type PackIcon = { sha256: string, path: string, };
 export type PackIssue = { code: PackIssueCode, message: string, symlink_path?: string, };
 export type PackIssueCode = "pack_non_utf8_name" | "pack_unknown_kind" | "pack_broken_archive" | "pack_missing_meta" | "pack_symlink" | "pack_duplicate" | "pack_name_collision" | "pack_not_found" | "pack_outside_root" | "pack_trash";
@@ -86,6 +86,8 @@ export type PackListing = { packs: Array<Pack>, count: number, holding_entries: 
 bytes_read: number, elapsed_ms: number, };
 export type PackLocation = "zip" | "directory";
 export type PackMeta = { pack_format: FormatVersion | null, min_format: FormatVersion | null, max_format: FormatVersion | null, supported_formats: FormatRange | null, description: string, };
+export type PackWarning = { code: PackWarningCode, message: string, };
+export type PackWarningCode = "missing_min_max_format";
 export type ResourceStack = {
 /**
  * Load order, low to high. The UI shows the reverse, so the top card is

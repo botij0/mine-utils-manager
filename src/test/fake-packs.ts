@@ -80,6 +80,7 @@ export function pack(name: string, overrides: Partial<Pack> = {}): Pack {
     game_label: '1.21 to 1.21.3',
     icon: null,
     error: null,
+    warnings: [],
     bytes_read: 512,
     ...overrides,
   };
@@ -112,6 +113,7 @@ export function datapack(
     game_label: '1.17 to 1.17.1',
     icon: null,
     error: null,
+    warnings: [],
     bytes_read: 128,
     ...overrides,
   };

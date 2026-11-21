@@ -64,7 +64,7 @@ pub use modrinth::{
 pub use options_txt::{read_options, write_options, OptionsError, OptionsTxt};
 pub use pack::{
     FormatRange, FormatVersion, ImportChoice, ImportOutcome, Pack, PackError, PackIcon, PackIssue,
-    PackKind, PackLocation, PackMeta,
+    PackKind, PackLocation, PackMeta, PackWarning, PackWarningCode,
 };
 pub use pack_import::{import_pack, import_pack_with, HashCache, SystemTrash, TrashService};
 pub use pack_scan::{
