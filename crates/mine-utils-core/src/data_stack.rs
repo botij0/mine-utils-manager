@@ -343,6 +343,10 @@ pub fn set_enabled_with_guard(
 ) -> Result<DataStack, AppError> {
     if enabled {
         validate_filename(filename).map_err(AppError::from)?;
+        let path = paths.datapacks_dir.join(filename);
+        if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            return Err(PackError::Symlink { path }.into());
+        }
     }
     if validate_filename(filename).is_ok() {
         pack_scan::reject_ambiguous_name(

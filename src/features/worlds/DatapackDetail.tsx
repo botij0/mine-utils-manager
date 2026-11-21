@@ -55,7 +55,7 @@ export default function DatapackDetail({
         </p>
         {symlink ? (
           <p className="panel-note">
-            This entry is a link, not a real pack. Mine Utils never deletes links. Remove the link
+            This entry is a link, not a real pack. Mine Utils cannot enable or delete links. Remove the link
             from datapacks in a file manager; the folder it points at is never touched.
           </p>
         ) : null}
@@ -72,7 +72,7 @@ export default function DatapackDetail({
             <button
               type="button"
               className="button"
-              disabled={writesBlocked || busy || (nestedSymlink && !enabled)}
+              disabled={writesBlocked || busy || ((nestedSymlink || symlink) && !enabled)}
               onClick={() => onToggle(filename, !enabled)}
             >
               {enabled ? 'Disable' : 'Enable'}
