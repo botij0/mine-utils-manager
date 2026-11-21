@@ -80,6 +80,14 @@ const EMPTY_PAGINATION: PaginationState = {
 export type TargetsStatus = 'loading' | 'failed' | 'ready';
 export type InstallPhase = 'idle' | 'preparing' | ModrinthInstallPhase;
 
+/** At most one install runs. Only `projectId` displays `phase`. */
+type InFlightInstall = {
+  id: string;
+  projectId: string;
+  projectTitle: string;
+  phase: Exclude<InstallPhase, 'idle'>;
+};
+
 type TargetsLoad =
   | { status: 'loading' }
   | { status: 'failed' }
@@ -122,6 +130,8 @@ export interface ModrinthState {
   setSelectedVersionId: (id: string) => void;
   cancelInstall: () => Promise<void>;
   installPhase: InstallPhase;
+  /** Set when a different project still holds the only install slot. */
+  installOverlap: string | null;
   installResult: ModrinthInstallOutcome | null;
   installError: IpcError | null;
   install: () => Promise<ModrinthInstallOutcome | null>;
@@ -162,7 +172,7 @@ export function useModrinth(
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<IpcError | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
-  const [installPhase, setInstallPhase] = useState<InstallPhase>('idle');
+  const [inFlight, setInFlight] = useState<InFlightInstall | null>(null);
   const [installResult, setInstallResult] = useState<ModrinthInstallOutcome | null>(null);
   const [installError, setInstallError] = useState<IpcError | null>(null);
   const installId = useRef<string | null>(null);
@@ -196,7 +206,11 @@ export function useModrinth(
       void client
         .cancelModrinthInstall(id)
         .then((cancelled) => {
-          if (!cancelled && mounted.current && installId.current === id) setInstallPhase('committing');
+          if (!cancelled && mounted.current && installId.current === id) {
+            setInFlight((current) =>
+              current && current.id === id ? { ...current, phase: 'committing' } : current,
+            );
+          }
         })
         .catch(() => {});
     };
@@ -445,7 +459,12 @@ export function useModrinth(
     const token = selectToken.current;
     const id = crypto.randomUUID();
     installId.current = id;
-    setInstallPhase('preparing');
+    setInFlight({
+      id,
+      projectId: selected.project_id,
+      projectTitle: selected.title,
+      phase: 'preparing',
+    });
     setInstallError(null);
     try {
       const outcome = await client.installModrinthPack({
@@ -456,9 +475,11 @@ export function useModrinth(
         kind,
         world: kind === 'datapack' ? (world ?? undefined) : undefined,
       }, (phase) => {
-        if (mounted.current && installId.current === id) {
-          setInstallPhase((current) => current === 'committing' ? current : phase);
-        }
+        if (!mounted.current || installId.current !== id) return;
+        setInFlight((current) => {
+          if (!current || current.id !== id || current.phase === 'committing') return current;
+          return { ...current, phase };
+        });
       });
       if (mounted.current && selectToken.current === token) setInstallResult(outcome);
       if (outcome.outcome.status === 'imported' || outcome.outcome.status === 'locked') {
@@ -473,7 +494,7 @@ export function useModrinth(
       return null;
     } finally {
       installId.current = null;
-      if (mounted.current) setInstallPhase('idle');
+      if (mounted.current) setInFlight((current) => (current?.id === id ? null : current));
     }
   }, [client, kind, selected, selectedVersionId, versions, world]);
 
@@ -484,7 +505,9 @@ export function useModrinth(
     try {
       const cancelled = await client.cancelModrinthInstall(id);
       if (!cancelled && mounted.current && installId.current === id) {
-        setInstallPhase('committing');
+        setInFlight((current) =>
+          current && current.id === id ? { ...current, phase: 'committing' } : current,
+        );
       }
     } catch (err) {
       if (mounted.current && installId.current === id && selectToken.current === token) {
@@ -512,6 +535,12 @@ export function useModrinth(
   }, []);
 
   const querySettled = query.trim() === debouncedQuery;
+  const installPhase: InstallPhase =
+    inFlight && selected?.project_id === inFlight.projectId ? inFlight.phase : 'idle';
+  const installOverlap =
+    inFlight && selected && selected.project_id !== inFlight.projectId
+      ? `${inFlight.projectTitle} is still installing. Wait for it to finish before installing ${selected.title}.`
+      : null;
 
   return {
     query,
@@ -548,6 +577,7 @@ export function useModrinth(
     setSelectedVersionId: chooseVersion,
     cancelInstall,
     installPhase,
+    installOverlap,
     installResult,
     installError,
     install,
