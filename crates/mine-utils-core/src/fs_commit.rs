@@ -417,6 +417,75 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn eperm_after_a_nonempty_folder_replaces_the_claim_is_an_import_collision() {
+        use crate::icon_cache::IconCache;
+        use crate::pack::{ImportChoice, ImportOutcome};
+        use crate::pack_import::{import_pack_with_commit, HashCache, SystemTrash};
+
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("Pack");
+        std::fs::create_dir_all(source.join("assets")).unwrap();
+        std::fs::write(
+            source.join("pack.mcmeta"),
+            br#"{"pack":{"pack_format":55,"description":"Imported"}}"#,
+        )
+        .unwrap();
+        let resourcepacks = root.path().join("resourcepacks");
+        let rival = root.path().join("rival");
+        std::fs::create_dir(&rival).unwrap();
+        std::fs::write(rival.join("rival.txt"), b"rival bytes").unwrap();
+
+        let outcome = import_pack_with_commit(
+            &source,
+            &resourcepacks,
+            &IconCache::new(root.path()),
+            ImportChoice::Default,
+            &HashCache::new(),
+            &SystemTrash,
+            |temp, dest| {
+                checked_rename(
+                    temp,
+                    dest,
+                    |path| std::fs::symlink_metadata(path),
+                    |_, to| {
+                        std::fs::remove_dir(to).unwrap();
+                        std::fs::rename(&rival, to).unwrap();
+                        Err(std::io::Error::from_raw_os_error(libc::EPERM))
+                    },
+                )
+            },
+        );
+
+        assert!(
+            matches!(&outcome, Ok(ImportOutcome::Collision { name }) if name == "Pack"),
+            "expected a collision for Pack, got {outcome:?}"
+        );
+        assert_eq!(
+            std::fs::read(resourcepacks.join("Pack/rival.txt")).unwrap(),
+            b"rival bytes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn eperm_without_a_rival_keeps_the_permission_error() {
+        let root = tempfile::tempdir().unwrap();
+        let temp = root.path().join(".Pack.tmp");
+        std::fs::create_dir(&temp).unwrap();
+        let dest = root.path().join("Pack");
+
+        let result = checked_rename(
+            &temp,
+            &dest,
+            |path| std::fs::symlink_metadata(path),
+            |_, _| Err(std::io::Error::from_raw_os_error(libc::EPERM)),
+        );
+
+        assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EPERM));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_claim_that_cannot_be_read_back_is_removed() {
         let root = tempfile::tempdir().unwrap();
         let temp = root.path().join(".Pack.tmp");
