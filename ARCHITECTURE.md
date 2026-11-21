@@ -117,6 +117,10 @@ There is no global frontend store or router dependency. `App.tsx` owns app-level
 
 The module also converts cache paths to scoped `asset://` URLs and normalizes backend errors into `IpcError` values with `code` and `message` fields.
 
+The desktop build generates a test for registered command signatures. It checks serialized arguments and return payloads against the Rust wire exports. `DEVELOPMENT.md` describes how to run the test and its scanner limits.
+
+World scan issues use `level_dat` for malformed level data and `stale_stack` for a stale file, matching `LevelDatError::error_code()`. The message retains the specific failure for display.
+
 The browser mock is a UI development aid, not a safety reference. The Rust backend remains responsible for real validation, snapshots, locking, and persistence.
 
 ## Desktop shell and startup

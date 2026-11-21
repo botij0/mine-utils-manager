@@ -361,6 +361,53 @@ pub enum ImportChoice {
 mod tests {
     use super::*;
 
+    #[test]
+    fn pack_issue_codes_agree_with_error_codes() {
+        let s = String::new();
+        let p = PathBuf::new();
+        let errors = [
+            PackError::NonUtf8Name { name: s.clone() },
+            PackError::UnknownKind { name: s.clone() },
+            PackError::BrokenArchive {
+                name: s.clone(),
+                reason: s.clone(),
+            },
+            PackError::InvalidHolding { name: s.clone() },
+            PackError::MissingMeta { name: s.clone() },
+            PackError::Symlink { path: p.clone() },
+            PackError::Duplicate {
+                name: s.clone(),
+                sha256: s.clone(),
+                existing: s.clone(),
+            },
+            PackError::NameCollision { name: s.clone() },
+            PackError::NotFound { path: p.clone() },
+            PackError::OutsideRoot { path: p.clone() },
+            PackError::Trash { path: p, reason: s },
+        ];
+        for error in &errors {
+            match error {
+                PackError::NonUtf8Name { .. }
+                | PackError::UnknownKind { .. }
+                | PackError::BrokenArchive { .. }
+                | PackError::InvalidHolding { .. }
+                | PackError::MissingMeta { .. }
+                | PackError::Symlink { .. }
+                | PackError::Duplicate { .. }
+                | PackError::NameCollision { .. }
+                | PackError::NotFound { .. }
+                | PackError::OutsideRoot { .. }
+                | PackError::Trash { .. } => {}
+            }
+        }
+        for error in errors {
+            assert_eq!(
+                serde_json::to_value(PackIssueCode::from(&error)).unwrap(),
+                error.code()
+            );
+        }
+    }
+
     fn closed(min: u32, max: u32) -> FormatRange {
         FormatRange::closed(
             FormatVersion::from_major(min),
