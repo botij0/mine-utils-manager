@@ -8,7 +8,7 @@ import type {
   ModrinthSearchPage,
 } from '../../lib/types';
 import { makeFakeClient } from '../../test/fake-ipc';
-import { freshHit, gameDir, mismatchHit, pack } from '../../test/fake-packs';
+import { findMockProject, freshHit, gameDir, mismatchHit, pack } from '../../test/fake-packs';
 import type { ModrinthState } from './useModrinth';
 import {
   SEARCH_DEBOUNCE_MS,
@@ -239,6 +239,63 @@ describe('useModrinth', () => {
       });
     });
     expect(projects).toEqual(['7q7JnQD0', '7q7JnQD0']);
+  });
+
+  it('keeps one install phase on its project and refuses another project until it settles', async () => {
+    const client = makeFakeClient([]);
+    const started: string[] = [];
+    const pending: Array<(outcome: ModrinthInstallOutcome) => void> = [];
+    client.installModrinthPack = (args, onProgress) => {
+      started.push(args.projectId);
+      onProgress?.('downloading');
+      return new Promise((resolve) => {
+        pending.push(resolve);
+      });
+    };
+    const other = findMockProject('bbbb');
+    if (!other) throw new Error('missing bbbb fixture');
+    const otherHit = { ...other, versions: [...other.versions] };
+    const { result } = renderHook(() => useModrinth(client));
+    await act(async () => { await result.current.select(freshHit()); });
+    let first!: Promise<ModrinthInstallOutcome | null>;
+    act(() => { first = result.current.install(); });
+    expect(result.current.installPhase).toBe('downloading');
+    expect(started).toEqual(['7q7JnQD0']);
+
+    await act(async () => { await result.current.select(otherHit); });
+    expect(result.current.selected?.title).toBe('Other Pack');
+    expect(result.current.installPhase).toBe('idle');
+    expect(result.current).toMatchObject({
+      installOverlap:
+        'Fresh Animations is still installing. Wait for it to finish before installing Other Pack.',
+    });
+    await act(async () => {
+      expect(await result.current.install()).toBeNull();
+    });
+    expect(started).toEqual(['7q7JnQD0']);
+
+    await act(async () => { await result.current.select(freshHit()); });
+    expect(result.current.installPhase).toBe('downloading');
+    expect(result.current).toMatchObject({ installOverlap: null });
+
+    await act(async () => { await result.current.select(otherHit); });
+    await act(async () => {
+      pending[0]({ kind: 'resourcepack', outcome: { status: 'skipped' } });
+      await first;
+    });
+    expect(result.current.selected?.title).toBe('Other Pack');
+    expect(result.current.installPhase).toBe('idle');
+    expect(result.current).toMatchObject({ installOverlap: null });
+
+    let second!: Promise<ModrinthInstallOutcome | null>;
+    act(() => { second = result.current.install(); });
+    expect(started).toEqual(['7q7JnQD0', 'bbbb']);
+    expect(result.current.installPhase).toBe('downloading');
+    await act(async () => {
+      pending[1]({ kind: 'resourcepack', outcome: { status: 'skipped' } });
+      await second;
+    });
+    expect(result.current.installPhase).toBe('idle');
   });
 
   it('reports a hash mismatch with the expected and actual hashes', async () => {

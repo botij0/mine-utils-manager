@@ -14,7 +14,7 @@ import type {
   ModrinthSearchPage,
 } from '../../lib/types';
 import { makeFakeClient } from '../../test/fake-ipc';
-import { fakeVersions, freshHit } from '../../test/fake-packs';
+import { fakeVersions, findMockProject, freshHit } from '../../test/fake-packs';
 import { isTrustedIconUrl } from './icon';
 
 function importedOutcome(): ModrinthInstallOutcome {
@@ -205,6 +205,56 @@ describe('discover dialogs', () => {
     expect(dialogs[0]).toHaveAttribute('aria-modal', 'true');
     await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows no other project phase on this install sheet and refuses the second install', async () => {
+    const client = makeFakeClient([]);
+    const calls: string[] = [];
+    const releases: Array<(outcome: ModrinthInstallOutcome) => void> = [];
+    const other = findMockProject('bbbb');
+    if (!other) throw new Error('missing bbbb fixture');
+    client.searchModrinth = async () => ({
+      hits: [freshHit(), { ...other, versions: [...other.versions] }],
+      has_more: false,
+    });
+    client.installModrinthPack = (args, onProgress) => {
+      calls.push(args.projectId);
+      onProgress?.('waiting_for_slot');
+      return new Promise((resolve) => {
+        releases.push(resolve);
+      });
+    };
+
+    render(<DiscoverPage client={client} gameRunning={null} hasGameDir />);
+    fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'pack' } });
+    fireEvent.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    expect(await screen.findByText(/Waiting for a download slot/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Other Pack,/ }));
+    const sheet = within(await screen.findByRole('dialog', { name: 'Install Other Pack' }));
+    expect(sheet.queryByText(/Waiting for a download slot/)).toBeNull();
+    expect(sheet.queryByText(/Downloading/)).toBeNull();
+    expect(sheet.queryByText(/Waiting for the game folder lock/)).toBeNull();
+    expect(sheet.queryByText(/Preparing install/)).toBeNull();
+    expect(sheet.getByText(
+      'Fresh Animations is still installing. Wait for it to finish before installing Other Pack.',
+    )).toBeInTheDocument();
+    expect(sheet.getByRole('button', { name: 'Install' })).toBeDisabled();
+    fireEvent.click(sheet.getByRole('button', { name: 'Install' }));
+    expect(calls).toEqual(['7q7JnQD0']);
+
+    releases[0]({ kind: 'resourcepack', outcome: { status: 'skipped' } });
+    await waitFor(() => {
+      expect(sheet.queryByText(/still installing/)).toBeNull();
+    });
+    expect(sheet.getByRole('button', { name: 'Install' })).toBeEnabled();
+    fireEvent.click(sheet.getByRole('button', { name: 'Install' }));
+    expect(calls).toEqual(['7q7JnQD0', 'bbbb']);
+    expect(sheet.getByText(/Waiting for a download slot/)).toBeInTheDocument();
+    releases[1]({ kind: 'resourcepack', outcome: { status: 'skipped' } });
+    expect(await sheet.findByText(/Import skipped/)).toBeInTheDocument();
   });
 
   it('keeps the busy install sheet open on Escape and offers Cancel', async () => {
