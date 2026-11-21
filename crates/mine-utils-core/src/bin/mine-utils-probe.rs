@@ -208,9 +208,11 @@ fn run() -> Result<String, String> {
             let paths = data_paths(game_dir(args.next())?, &world_name)?;
             let started = Instant::now();
             let stack = data_stack::restore_backup(&paths, &name).map_err(|err| err.to_string())?;
+            let (world_format, newest_known_version) = world_version(&paths);
             serde_json::to_string_pretty(&serde_json::json!({
                 "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
-                "world_format": world_format_name(&paths),
+                "world_format": world_format,
+                "newest_known_version": newest_known_version,
                 "stack": stack,
             }))
             .map_err(|err| err.to_string())
@@ -442,10 +444,20 @@ fn data_paths(game_dir: PathBuf, world_name: &str) -> Result<DataPaths, String> 
     ))
 }
 
-fn world_format_name(paths: &DataPaths) -> Option<String> {
-    let bytes = std::fs::read(paths.level_dat_path()).ok()?;
-    let view = mine_utils_core::level_dat::parse(&bytes).ok()?;
-    mine_utils_core::data_format_for_version(&view.version_name).map(|format| format.label())
+/// The data format label, and the newest version the table covers when the
+/// world is newer than it. Both are `None` when level.dat cannot be read.
+fn world_version(paths: &DataPaths) -> (Option<String>, Option<String>) {
+    let parsed = std::fs::read(paths.level_dat_path())
+        .ok()
+        .and_then(|bytes| mine_utils_core::level_dat::parse(&bytes).ok());
+    match parsed {
+        Some(view) => (
+            mine_utils_core::data_format_for_version(&view.version_name)
+                .map(|format| format.label()),
+            mine_utils_core::newest_known_version_if_newer(&view.version_name),
+        ),
+        None => (None, None),
+    }
 }
 
 const USAGE: &str = "usage: mine-utils-probe <subcommand>\n\
