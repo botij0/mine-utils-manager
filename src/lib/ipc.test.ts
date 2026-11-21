@@ -1,9 +1,19 @@
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { createElement } from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
+import App from '../App';
 import { ipc, isTauriRuntime, toAppError } from './ipc';
-import { resetMockPacks, resetMockWorlds, setMockGameState, setMockLockedWorld, setMockWorldSeed, resetMockStack } from './ipc.mock';
+import { resetMockPacks, resetMockWorlds, setMockGameState, setMockLockedWorld, setMockOptionsFile, setMockWorldSeed, resetMockStack } from './ipc.mock';
+
+const NO_ACTIVE_GAME_DIR = {
+  code: 'no_active_game_dir',
+  message: 'no active game dir; pick one in Settings first',
+};
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.location.hash = '';
 });
 
 describe('transport switch', () => {
@@ -123,10 +133,11 @@ describe('typed error mapping', () => {
 });
 
 describe('mock world import guards', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetMockWorlds();
     setMockGameState('none');
     setMockLockedWorld(null);
+    await ipc.setActiveGameDir('/home/demo/.minecraft');
   });
 
   it('copies but disables a new pack when the game runs and the world is locked', async () => {
@@ -157,9 +168,10 @@ describe('mock world import guards', () => {
 });
 
 describe('mock resource import guards', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetMockPacks();
     setMockGameState('none');
+    await ipc.setActiveGameDir('/home/demo/.minecraft');
   });
 
   it('refuses local resource imports while Minecraft runs', async () => {
@@ -272,5 +284,129 @@ it('preserves raw transport codes through repeated normalization', () => {
 it('preserves the options symlink refusal for display', () => {
   expect(toAppError({ code: 'options_symlink', message: '/game/options.txt is a symlink and cannot be written' })).toMatchObject({
     code: 'options_symlink', message: '/game/options.txt is a symlink and cannot be written',
+  });
+});
+
+describe('mock parity with the Rust backend', () => {
+  const datapackInstall = {
+    projectId: 'demo',
+    versionId: '1',
+    filename: 'fresh-data.zip',
+    kind: 'datapack' as const,
+    world: 'Survival 1_17',
+  };
+
+  beforeEach(async () => {
+    resetMockPacks();
+    resetMockStack();
+    resetMockWorlds();
+    setMockGameState('none');
+    setMockLockedWorld(null);
+    setMockOptionsFile('present');
+    await ipc.setActiveGameDir('/home/demo/.minecraft');
+  });
+
+  it('rejects mutating and datapack calls when no folder is selected', async () => {
+    window.localStorage.clear();
+    await expect(ipc.setResourcePackEnabled('Re-covered.zip', false)).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.importResourcePack('/tmp/fresh-pack.zip')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.deleteResourcePack('/home/demo/.minecraft/resourcepacks/Re-covered.zip')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.reorderResourceStack([], { resource: [], incompatible: [] })).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.restoreOptionsBackup('20261025T101500.000000000-options.txt')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.listDatapacks('Survival 1_17')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.importDatapack('Survival 1_17', '/tmp/fresh-pack.zip')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.deleteDatapack('Survival 1_17', '/tmp/fresh-pack.zip')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.removeDatapackReference('Survival 1_17', 'fresh-pack.zip')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.setDatapackEnabled('Survival 1_17', 'fresh-pack.zip', false)).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.reorderDatapacks('Survival 1_17', [], { enabled: [], disabled: [] })).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.listLevelBackups('Survival 1_17')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.listAllLevelBackups()).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.restoreLevelBackup('Survival 1_17', '20261025T101500.000000000-Survival 1_17-level.dat')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.restoreDatapackHolding('Survival 1_17', 'missing')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.restoreResourceHolding('missing')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.modrinthTargets()).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.setLastWorld('/home/demo/.minecraft/saves/Survival 1_17')).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+    await expect(ipc.installModrinthPack(datapackInstall)).rejects.toMatchObject(NO_ACTIVE_GAME_DIR);
+  });
+
+  it('refuses a resource-pack install before download when options.txt is missing', async () => {
+    setMockOptionsFile('missing');
+    await expect(ipc.installModrinthPack({
+      projectId: 'demo',
+      versionId: '1',
+      filename: 'offline.zip',
+      kind: 'resourcepack',
+    })).rejects.toMatchObject({
+      code: 'options_txt',
+      message: 'options.txt is missing at /home/demo/.minecraft/options.txt; launch Minecraft once so it writes the file, then try again',
+    });
+  });
+
+  it('returns world when a datapack import targets the broken world', async () => {
+    await expect(ipc.importDatapack('Broken World', '/tmp/fresh-pack.zip')).rejects.toMatchObject({
+      code: 'world',
+      message: 'world error: world Broken World has no readable level.dat',
+    });
+  });
+
+  it('reuses identical datapack bytes and returns imported', async () => {
+    expect(await ipc.installModrinthPack(datapackInstall)).toMatchObject({
+      kind: 'datapack',
+      outcome: { status: 'imported', filename: 'fresh-data.zip' },
+    });
+    await ipc.setDatapackEnabled('Survival 1_17', 'fresh-data.zip', false);
+    expect(await ipc.installModrinthPack(datapackInstall)).toMatchObject({
+      kind: 'datapack',
+      outcome: { status: 'imported', filename: 'fresh-data.zip' },
+    });
+    const listing = await ipc.listDatapacks('Survival 1_17');
+    expect(listing.stack.enabled.map((entry) => entry.value)).toContain('file/fresh-data.zip');
+    expect(listing.stack.disabled.map((entry) => entry.value)).not.toContain('file/fresh-data.zip');
+  });
+
+  it('leaves a locked datapack disabled when the same bytes are installed again', async () => {
+    expect(await ipc.installModrinthPack(datapackInstall)).toMatchObject({
+      kind: 'datapack',
+      outcome: { status: 'imported', filename: 'fresh-data.zip' },
+    });
+    await ipc.setDatapackEnabled('Survival 1_17', 'fresh-data.zip', false);
+    setMockLockedWorld('Survival 1_17');
+    expect(await ipc.installModrinthPack(datapackInstall)).toMatchObject({
+      kind: 'datapack',
+      outcome: {
+        status: 'locked',
+        filename: 'fresh-data.zip',
+        detail: '/home/demo/.minecraft/saves/Survival 1_17/session.lock is locked by pid 4242',
+      },
+    });
+    const listing = await ipc.listDatapacks('Survival 1_17');
+    expect(listing.stack.enabled.map((entry) => entry.value)).not.toContain('file/fresh-data.zip');
+    expect(listing.stack.disabled.map((entry) => entry.value)).toContain('file/fresh-data.zip');
+  });
+
+  it('refuses options.txt writes when the file is a symlink', async () => {
+    setMockOptionsFile('symlink');
+    await expect(ipc.setResourcePackEnabled('Re-covered.zip', false)).rejects.toMatchObject({
+      code: 'options_symlink',
+      message: '/home/demo/.minecraft/options.txt is a symlink and cannot be written',
+    });
+    await expect(ipc.restoreOptionsBackup('20261025T101500.000000000-options.txt')).rejects.toMatchObject({
+      code: 'options_symlink',
+      message: '/home/demo/.minecraft/options.txt is a symlink and cannot be written',
+    });
+    const entries = (await ipc.getResourceStack()).entries.map((entry) => entry.value);
+    expect(entries).toContain('file/Re-covered.zip');
+  });
+
+  it('does not list level.dat backups in Settings when no folder is selected', async () => {
+    window.localStorage.clear();
+    window.location.hash = '#settings';
+    const user = userEvent.setup();
+    render(createElement(App));
+    await user.click(await screen.findByRole('button', { name: 'Skip for now' }));
+    await waitFor(() => {
+      expect(screen.queryByText('20261025T101500.000000000-Survival 1_17-level.dat')).not.toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('no active game dir; pick one in Settings first');
+    });
   });
 });
