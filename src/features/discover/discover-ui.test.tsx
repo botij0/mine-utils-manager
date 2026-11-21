@@ -144,11 +144,11 @@ describe('discover dialogs', () => {
     const { default: DiscoverPage } = await import('./DiscoverPage');
     const client = makeFakeClient([]);
     const { rerender } = render(
-      <DiscoverPage client={client} gameRunning={undefined} gameGuardUnknown hasGameDir />,
+      <DiscoverPage client={client} gameRunning={null} guardPause="unknown" hasGameDir />,
     );
     expect(screen.getByText(/Game guard unavailable/)).toBeInTheDocument();
     rerender(
-      <DiscoverPage client={client} gameRunning={undefined} gameGuardUnknown={false} hasGameDir />,
+      <DiscoverPage client={client} gameRunning={null} guardPause="checking" hasGameDir />,
     );
     expect(screen.queryByText(/Game guard unavailable/)).toBeNull();
   });
@@ -156,7 +156,7 @@ describe('discover dialogs', () => {
   it('tells a failed guard check apart from one still running in the install sheet', async () => {
     const client = makeFakeClient([]);
     const { rerender } = render(
-      <DiscoverPage client={client} gameRunning={null} gameGuardUnknown hasGameDir />,
+      <DiscoverPage client={client} gameRunning={null} guardPause="unknown" hasGameDir />,
     );
     fireEvent.change(screen.getByLabelText('Search Modrinth'), {
       target: { value: 'fresh' },
@@ -173,8 +173,7 @@ describe('discover dialogs', () => {
       <DiscoverPage
         client={client}
         gameRunning={null}
-        gameGuardUnknown
-        gameGuardChecking
+        guardPause="checking"
         hasGameDir
       />,
     );

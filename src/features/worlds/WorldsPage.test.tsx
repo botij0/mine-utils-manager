@@ -89,7 +89,7 @@ describe('WorldsPage', () => {
     const running: GameRunning = {
       kind: 'process', detail: 'java', lock_path: null, pid: 42, command: 'java',
     };
-    rerender(<WorldsPage client={client} gameRunning={state === 'running' ? running : null} gameGuardUnknown={state === 'unknown'} />);
+    rerender(<WorldsPage client={client} gameRunning={state === 'running' ? running : null} guardPause={state === 'unknown' ? 'unknown' : null} />);
     expect(screen.getByRole('button', { name: 'Import zip' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled();
   }, 20_000);
@@ -105,7 +105,7 @@ describe('WorldsPage', () => {
         return { ...listing, stack: { ...listing.stack, running } };
       },
     });
-    const { rerender } = render(<WorldsPage client={client} />);
+    const { rerender } = render(<WorldsPage client={client} gameRunning={null} guardPause="checking" />);
 
     expect(
       await screen.findByText(/^Checking whether Minecraft is running; writes are paused/),

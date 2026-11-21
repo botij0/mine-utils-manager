@@ -22,6 +22,7 @@ import type {
 } from '../../lib/types';
 import { packFilename } from '../../lib/packPath';
 import GameRunningBanner from './GameRunningBanner';
+import type { GuardPause } from './GameRunningBanner';
 import { toLoadOrder } from './loadOrder';
 import StackEntryCard from './StackEntry';
 
@@ -32,10 +33,8 @@ interface ActiveStackProps {
   /** The live game guard state; the app polls it, so the banner can appear
    *  while the page is open. */
   running: GameRunning | null;
-  /** No current guard answer: unknown, so writes stay blocked. */
-  guardUnknown?: boolean;
-  /** The unknown state is a new folder's first check, still pending. */
-  guardChecking?: boolean;
+  guardPause?: GuardPause;
+  guardBusy?: boolean;
   onToggle: (filename: string, enabled: boolean) => void;
   onReorder: (order: string[]) => void;
   onRecheck: () => void;
@@ -59,8 +58,8 @@ export default function ActiveStack({
   packs,
   busy,
   running,
-  guardUnknown = false,
-  guardChecking = false,
+  guardPause = null,
+  guardBusy = false,
   onToggle,
   onReorder,
   onRecheck,
@@ -77,7 +76,7 @@ export default function ActiveStack({
     [uiEntries],
   );
   const byFilename = useMemo(() => packByFilename(packs), [packs]);
-  const blocked = busy || running !== null || guardUnknown;
+  const blocked = busy || running !== null || guardPause !== null;
 
   const indexOfId = (id: UniqueIdentifier) => ids.indexOf(String(id));
   const draggedLabel = useRef('');
@@ -152,8 +151,8 @@ export default function ActiveStack({
 
       <GameRunningBanner
         running={running}
-        guardUnknown={guardUnknown}
-        checking={guardChecking}
+        guardPause={guardPause}
+        guardBusy={guardBusy}
         staleLocks={stack.stale_locks}
         supported={stack.detection_supported}
         onRecheck={onRecheck}

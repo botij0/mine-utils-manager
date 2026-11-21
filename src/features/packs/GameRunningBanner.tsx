@@ -1,28 +1,21 @@
 import type { GameRunning } from '../../lib/types';
 
+export type GuardPause = 'checking' | 'unknown' | null;
+
 interface GameRunningBannerProps {
   running: GameRunning | null;
-  /** True when no current guard answer exists, so the state is unknown. */
-  guardUnknown: boolean;
-  /** The unknown state is a new folder's first check, still pending. */
-  checking?: boolean;
+  guardPause: GuardPause;
+  guardBusy?: boolean;
   staleLocks: string[];
   /** Undefined until the support answer lands. No support claim is made then. */
   supported?: boolean;
   onRecheck: () => void;
 }
 
-/**
- * Blocks every write while Minecraft is open, naming the lock path or the
- * process so the operator knows what to close. A failed check is unknown, so it
- * pauses writes instead of claiming the game stopped. A new folder's first
- * check pauses writes with a neutral status line, not an alert. A stale
- * `session.lock` nobody holds is only noted; it never blocks.
- */
 export default function GameRunningBanner({
   running,
-  guardUnknown,
-  checking = false,
+  guardPause,
+  guardBusy = false,
   staleLocks,
   supported,
   onRecheck,
@@ -33,14 +26,14 @@ export default function GameRunningBanner({
         <div>
           <strong>Minecraft is running.</strong> Writes are paused: {running.detail}.
         </div>
-        <button type="button" className="button" onClick={onRecheck}>
+        <button type="button" className="button" onClick={onRecheck} disabled={guardBusy}>
           Recheck
         </button>
       </div>
     );
   }
 
-  if (guardUnknown && checking) {
+  if (guardPause === 'checking') {
     return (
       <div key="checking" className="banner" role="status">
         Checking whether Minecraft is running; writes are paused until the check lands.
@@ -48,14 +41,14 @@ export default function GameRunningBanner({
     );
   }
 
-  if (guardUnknown) {
+  if (guardPause === 'unknown') {
     return (
       <div key="unknown" className="banner banner-danger" role="alert">
         <div>
           <strong>Game guard unavailable.</strong> Mine Utils could not check
           whether Minecraft is running, so writes are paused.
         </div>
-        <button type="button" className="button" onClick={onRecheck}>
+        <button type="button" className="button" onClick={onRecheck} disabled={guardBusy}>
           Recheck
         </button>
       </div>

@@ -8,18 +8,15 @@ import type {
   LevelBackupInfo,
   ResourceStack,
 } from '../../lib/types';
+import type { GuardPause } from '../packs/GameRunningBanner';
 
 interface BackupsPanelProps {
   active?: boolean;
   client: BackupsClient;
   /** Changes here must reload the list; a game-running change must not. */
   activeGameDir?: string | null;
-  /** The app-level guard answer. Undefined until the first check lands. */
-  gameRunning: GameRunning | null | undefined;
-  /** No current app-level guard answer: unknown, so restores stay disabled. */
-  gameGuardUnknown?: boolean;
-  /** The unknown state is a new folder's first check, still pending. */
-  gameGuardChecking?: boolean;
+  gameRunning: GameRunning | null;
+  guardPause?: GuardPause;
   /** Ask the app-level poll to re-check after a `game_running` error. */
   refreshGameRunning?: () => void | Promise<void>;
   onRestored?: (stack: ResourceStack) => void;
@@ -44,8 +41,7 @@ export default function BackupsPanel({
   active = true,
   activeGameDir,
   gameRunning,
-  gameGuardUnknown = false,
-  gameGuardChecking = false,
+  guardPause = null,
   refreshGameRunning = () => {},
   onRestored,
   onLevelRestored,
@@ -62,12 +58,12 @@ export default function BackupsPanel({
   const [levelError, setLevelError] = useState<IpcError | null>(null);
   const [levelRestoring, setLevelRestoring] = useState<string | null>(null);
 
-  const blocked = gameRunning !== null || gameGuardUnknown;
+  const blocked = gameRunning !== null || guardPause !== null;
   const restoreReason = gameRunning
     ? 'Close Minecraft before restoring'
-    : gameGuardUnknown && !gameGuardChecking
+    : guardPause === 'unknown'
       ? 'Mine Utils could not check whether Minecraft is running'
-      : gameGuardUnknown || gameRunning === undefined
+      : guardPause === 'checking'
         ? 'Checking whether Minecraft is running'
         : undefined;
   const reasonId = useId();

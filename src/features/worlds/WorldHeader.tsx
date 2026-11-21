@@ -1,16 +1,14 @@
 import GameRunningBanner from '../packs/GameRunningBanner';
+import type { GuardPause } from '../packs/GameRunningBanner';
 import { formatVersionLabel } from '../../lib/format';
 import { hideBrokenImage, worldInitials } from '../../lib/avatar';
 import type { GameRunning, World } from '../../lib/types';
 
 interface WorldHeaderProps {
   world: World;
-  /** From the app-level game guard poll. Undefined until the first check. */
-  gameRunning?: GameRunning | null;
-  /** No current app-level guard answer is unknown, so writes stay paused. */
-  gameGuardUnknown?: boolean;
-  /** The unknown state is a new folder's first check, still pending. */
-  gameGuardChecking?: boolean;
+  gameRunning: GameRunning | null;
+  guardPause: GuardPause;
+  guardBusy: boolean;
   /** Stale `session.lock` files from the world's stack. Never blocking. */
   staleLocks?: string[];
   /** Force the app-level game guard to re-check now. */
@@ -23,14 +21,13 @@ interface WorldHeaderProps {
  *  world names its lock in a banner; the write controls below stay disabled. */
 export default function WorldHeader({
   world,
-  gameRunning,
-  gameGuardUnknown = false,
-  gameGuardChecking = false,
+  gameRunning: running,
+  guardPause,
+  guardBusy,
   staleLocks = [],
   refreshGameRunning,
   onRefresh,
 }: WorldHeaderProps) {
-  const running = gameRunning ?? null;
   const locked = world.world_locked;
   const refresh = onRefresh ?? refreshGameRunning;
   return (
@@ -73,22 +70,22 @@ export default function WorldHeader({
           <p className="banner" role="status">
             This world is locked ({locked.detail}). Imports are copied but left disabled until the
             lock releases. Toggles, reorders, deletes, and restores are disabled.{' '}
-            <button type="button" className="button" onClick={() => void refresh?.()}>
+            <button type="button" className="button" onClick={() => void refresh?.()} disabled={guardBusy}>
               Re-check
             </button>
           </p>
         ) : running ? (
           <p className="banner" role="status">
             Minecraft is running ({running.detail}). Close it before Mine Utils writes level.dat.{' '}
-            <button type="button" className="button" onClick={() => void refresh?.()}>
+            <button type="button" className="button" onClick={() => void refresh?.()} disabled={guardBusy}>
               Re-check
             </button>
           </p>
         ) : null}
         <GameRunningBanner
           running={null}
-          guardUnknown={!locked && !running && gameGuardUnknown}
-          checking={gameGuardChecking}
+          guardPause={locked || running ? null : guardPause}
+          guardBusy={guardBusy}
           staleLocks={staleLocks}
           supported={world.detection_supported}
           onRecheck={() => void refresh?.()}

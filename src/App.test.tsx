@@ -76,6 +76,29 @@ function stackResponse(running: GameRunning | null) {
 }
 
 describe('App', () => {
+  it('shows Discover lock detection support only after the guard answers', async () => {
+    window.location.hash = 'discover';
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const client = await shellClient();
+    const calls: Array<(status: GameGuard) => void> = [];
+    client.getGameGuard = () => new Promise((resolve) => calls.push(resolve));
+    render(<App client={client} />);
+
+    const unsupported = /Game lock detection is not supported here/;
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(screen.queryByText(unsupported)).not.toBeInTheDocument();
+
+    await act(async () => {
+      calls[0]({
+        running: null,
+        stale_locks: [],
+        detection_supported: false,
+        process_probe_available: true,
+      });
+    });
+    expect(screen.getByText(unsupported)).toHaveAttribute('role', 'status');
+  });
+
   it('reports unavailable process detection without pausing writes', async () => {
     const client = await shellClient();
     client.getResourceStack = async () => stackResponse(null);
@@ -373,7 +396,8 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /^Restore / })).toBeEnabled();
   });
 
-  it('shows a neutral checking line while the check a folder switch sent is pending', async () => {
+  it('replaces the previous folder’s running banner while the new folder check is pending', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const user = userEvent.setup();
     const client = makeFakeClient([
       gameDir('/home/demo/.minecraft', true, true),
@@ -386,9 +410,15 @@ describe('App', () => {
     client.getGameGuard = () =>
       client.config.active_game_dir === '/home/demo/prism'
         ? new Promise((resolve) => held.push(() => resolve(guard())))
-        : guard();
+        : Promise.resolve({
+          running: RUNNING,
+          stale_locks: [],
+          detection_supported: true,
+          process_probe_available: true,
+        });
     render(<App client={client} />);
 
+    expect(await screen.findByRole('alert')).toHaveTextContent('pid 4242 runs java');
     await user.click(await screen.findByRole('button', { name: 'Settings' }));
     await user.click(await screen.findByRole('button', { name: /^Use / }));
     await user.click(screen.getByRole('button', { name: 'Resource Packs' }));
@@ -399,6 +429,7 @@ describe('App', () => {
       'status',
     );
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(/pid 4242 runs java/)).not.toBeInTheDocument();
     expect(within(list).getByRole('button', { name: /^Remove / })).toBeDisabled();
 
     await user.click(screen.getByRole('button', { name: 'Discover' }));
@@ -797,6 +828,51 @@ describe('App', () => {
     });
     expect(checks).toBe(2);
   });
+
+  it('keeps a queued guard check until the window is visible if the current check settles hidden', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const client = await shellClient();
+    const calls = holdGuardCalls(client);
+    render(<App client={client} />);
+    await waitFor(() => expect(calls).toHaveLength(1));
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+      setDocumentHidden(true);
+      calls[0].answer(null);
+    });
+    expect(calls.map(({ dir }) => dir)).toEqual(['/home/demo/.minecraft']);
+
+    await act(async () => {
+      setDocumentHidden(false);
+    });
+    expect(calls.map(({ dir }) => dir)).toEqual(['/home/demo/.minecraft', '/home/demo/.minecraft']);
+  });
+
+  it('disables Recheck in Packs and Worlds while a guard check is outstanding', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const client = await shellClient();
+    client.getResourceStack = async () => stackResponse(null);
+    client.listWorlds = async () => [world()];
+    const calls = holdGuardCalls(client);
+    render(<App client={client} />);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    await act(async () => calls[0].answer(RUNNING));
+
+    expect(await screen.findByRole('button', { name: 'Recheck' })).toBeEnabled();
+    await act(async () => vi.advanceTimersByTime(5000));
+    expect(calls).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Recheck' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Worlds' }));
+    expect(await screen.findByRole('button', { name: 'Re-check' })).toBeDisabled();
+    await act(async () => calls[1].answer(RUNNING));
+    expect(screen.getByRole('button', { name: 'Re-check' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resource Packs' }));
+    expect(screen.getByRole('button', { name: 'Recheck' })).toBeEnabled();
+  });
+
   it('keeps one guard call outstanding when Settings opens first and the user moves around', async () => {
     window.location.hash = 'settings';
     const user = userEvent.setup();
@@ -890,6 +966,24 @@ describe('App', () => {
       expect(screen.getByRole('button', { name: 'Import pack' })).toBeEnabled();
       expect(within(packs).getByRole('button', { name: /^Remove / })).toBeEnabled();
     });
+  });
+
+  it('ignores a resource pack drop until the first guard check answers', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const client = await shellClient();
+    client.getResourceStack = async () => stackResponse(null);
+    const calls = holdGuardCalls(client);
+    render(<App client={client} />);
+    const list = await screen.findByRole('list', { name: 'Stack order' });
+    const file = { path: '/drop/Pack.zip' };
+
+    expect(screen.getByText(/^Checking whether Minecraft is running/)).toBeInTheDocument();
+    fireEvent.drop(list, { dataTransfer: { files: [file] } });
+    expect(client.imports).toEqual([]);
+
+    await act(async () => calls[0].answer(null));
+    fireEvent.drop(list, { dataTransfer: { files: [file] } });
+    await waitFor(() => expect(client.imports).toEqual(['/drop/Pack.zip']));
   });
 
   it('shows unknown one window after a hidden folder switch finds a timed-out check still hung', async () => {

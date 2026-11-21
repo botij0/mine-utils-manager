@@ -38,7 +38,7 @@ describe('PacksPage', () => {
     expect(screen.getByRole('button', { name: 'Import pack' })).toBeEnabled();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Import pack' }));
     await userEvent.setup().type(screen.getByLabelText('Pack path'), '/tmp/Fresh.zip');
-    rerender(<PacksPage client={client} gameRunning={guard === 'running' ? running : null} gameGuardUnknown={guard === 'unknown'} />);
+    rerender(<PacksPage client={client} gameRunning={guard === 'running' ? running : null} guardPause={guard === 'unknown' ? 'unknown' : null} />);
     expect(screen.getByRole('button', { name: 'Import pack' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled();
   });
@@ -406,7 +406,7 @@ describe('PacksPage', () => {
       detection_supported: true,
     });
     render(
-      <PacksPage client={client} gameRunning={null} gameGuardUnknown />,
+      <PacksPage client={client} gameRunning={null} guardPause="unknown" />,
     );
 
     const list = await screen.findByRole('list', { name: 'Stack order' });
@@ -536,7 +536,7 @@ describe('PacksPage', () => {
       stale_locks: [],
       detection_supported: true,
     });
-    const { rerender } = render(<PacksPage client={client} />);
+    const { rerender } = render(<PacksPage client={client} gameRunning={null} guardPause="checking" />);
 
     const list = await screen.findByRole('list', { name: 'Stack order' });
     expect(screen.getByRole('button', { name: 'Import pack' })).toBeDisabled();
@@ -709,7 +709,7 @@ describe('PacksPage', () => {
       if (failing) throw new IpcError('options_txt', 'options.txt is unreadable');
       return read();
     };
-    render(<PacksPage client={client} gameRunning={null} gameGuardUnknown />);
+    render(<PacksPage client={client} gameRunning={null} guardPause="unknown" />);
     await screen.findByRole('list', { name: 'Stack order' });
 
     failing = true;
