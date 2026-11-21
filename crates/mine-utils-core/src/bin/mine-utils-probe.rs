@@ -208,11 +208,16 @@ fn run() -> Result<String, String> {
             let paths = data_paths(game_dir(args.next())?, &world_name)?;
             let started = Instant::now();
             let stack = data_stack::restore_backup(&paths, &name).map_err(|err| err.to_string())?;
-            let (world_format, newest_known_version) = world_version(&paths);
+            let (world_format, newest_known_version, level_dat_error) = match world_version(&paths)
+            {
+                Ok((format, newest)) => (format, newest, None),
+                Err(err) => (None, None, Some(err)),
+            };
             serde_json::to_string_pretty(&serde_json::json!({
                 "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
                 "world_format": world_format,
                 "newest_known_version": newest_known_version,
+                "level_dat_error": level_dat_error,
                 "stack": stack,
             }))
             .map_err(|err| err.to_string())
@@ -445,19 +450,16 @@ fn data_paths(game_dir: PathBuf, world_name: &str) -> Result<DataPaths, String> 
 }
 
 /// The data format label, and the newest version the table covers when the
-/// world is newer than it. Both are `None` when level.dat cannot be read.
-fn world_version(paths: &DataPaths) -> (Option<String>, Option<String>) {
-    let parsed = std::fs::read(paths.level_dat_path())
-        .ok()
-        .and_then(|bytes| mine_utils_core::level_dat::parse(&bytes).ok());
-    match parsed {
-        Some(view) => (
-            mine_utils_core::data_format_for_version(&view.version_name)
-                .map(|format| format.label()),
-            mine_utils_core::newest_known_version_if_newer(&view.version_name),
-        ),
-        None => (None, None),
-    }
+/// world is newer than it. An error names why level.dat cannot be read, in the
+/// same wording the world scan uses.
+fn world_version(paths: &DataPaths) -> Result<(Option<String>, Option<String>), String> {
+    let bytes = std::fs::read(paths.level_dat_path())
+        .map_err(|err| format!("could not read level.dat: {err}"))?;
+    let view = mine_utils_core::level_dat::parse(&bytes).map_err(|err| err.to_string())?;
+    Ok((
+        mine_utils_core::data_format_for_version(&view.version_name).map(|format| format.label()),
+        mine_utils_core::newest_known_version_if_newer(&view.version_name),
+    ))
 }
 
 const USAGE: &str = "usage: mine-utils-probe <subcommand>\n\

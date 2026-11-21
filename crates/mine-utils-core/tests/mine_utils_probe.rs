@@ -136,6 +136,7 @@ fn restore_level_backup_names_the_newest_known_version_for_a_world_newer_than_th
     let out = install.restore_level_backup("known", &backup);
     assert_eq!(out["world_format"], json!(null));
     assert_eq!(out["newest_known_version"], json!("26.3"));
+    assert_eq!(out.get("level_dat_error"), Some(&json!(null)));
 }
 
 #[test]
@@ -146,6 +147,7 @@ fn restore_level_backup_reports_a_null_newest_known_version_for_a_covered_world(
     let out = install.restore_level_backup("known", &backup);
     assert_eq!(out["world_format"], json!("88"));
     assert_eq!(out.get("newest_known_version"), Some(&json!(null)));
+    assert_eq!(out.get("level_dat_error"), Some(&json!(null)));
 }
 
 #[test]
