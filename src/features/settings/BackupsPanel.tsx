@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { BackupsClient } from '../../lib/ipc';
 import { toAppError } from '../../lib/ipc';
 import type {
@@ -63,13 +63,16 @@ export default function BackupsPanel({
   const [levelRestoring, setLevelRestoring] = useState<string | null>(null);
 
   const blocked = gameRunning !== null || gameGuardUnknown;
-  const restoreTitle = gameRunning
+  const restoreReason = gameRunning
     ? 'Close Minecraft before restoring'
     : gameGuardUnknown && !gameGuardChecking
       ? 'Mine Utils could not check whether Minecraft is running'
       : gameGuardUnknown || gameRunning === undefined
         ? 'Checking whether Minecraft is running'
         : undefined;
+  const reasonId = useId();
+  const optionsReasonId = `${reasonId}-options`;
+  const levelReasonId = `${reasonId}-level`;
 
   // A changed game dir replaces the whole table. The five-second running poll
   // object identity is deliberately not a dependency: it would flash the list.
@@ -226,6 +229,11 @@ export default function BackupsPanel({
         </p>
       ) : null}
 
+      {restoreReason && !loading && backups.length > 0 ? (
+        <p id={optionsReasonId} className="panel-note">
+          {restoreReason}
+        </p>
+      ) : null}
       {loading ? (
         <p className="empty-note">Loading backups…</p>
       ) : !error && backups.length === 0 ? (
@@ -253,7 +261,8 @@ export default function BackupsPanel({
                     type="button"
                     className="button"
                     disabled={blocked || restoring !== null}
-                    title={restoreTitle}
+                    title={restoreReason}
+                    aria-describedby={restoreReason ? optionsReasonId : undefined}
                     aria-label={restoreName(restoring === backup.file_name, backup.display)}
                     onClick={() => void handleRestore(backup.file_name)}
                   >
@@ -280,6 +289,11 @@ export default function BackupsPanel({
         </p>
       ) : null}
 
+      {restoreReason && !levelLoading && levelGroups.length > 0 ? (
+        <p id={levelReasonId} className="panel-note">
+          {restoreReason}
+        </p>
+      ) : null}
       {levelLoading ? (
         <p className="empty-note">Loading world backups…</p>
       ) : levelGroups.length === 0 ? (
@@ -315,7 +329,8 @@ export default function BackupsPanel({
                             type="button"
                             className="button"
                             disabled={blocked || levelRestoring !== null}
-                            title={restoreTitle}
+                            title={restoreReason}
+                            aria-describedby={restoreReason ? levelReasonId : undefined}
                             aria-label={restoreName(levelRestoring === key, backup.display, group.label)}
                             onClick={() => void handleLevelRestore(group.dirName, group.label, backup.file_name)}
                           >

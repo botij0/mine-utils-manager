@@ -160,6 +160,40 @@ describe('BackupsPanel', () => {
     }
   });
 
+  it.each([
+    [
+      'Close Minecraft before restoring',
+      { gameRunning: RUNNING },
+    ],
+    [
+      'Mine Utils could not check whether Minecraft is running',
+      { gameRunning: null, gameGuardUnknown: true },
+    ],
+    [
+      'Checking whether Minecraft is running',
+      { gameRunning: undefined, gameGuardChecking: true, gameGuardUnknown: true },
+    ],
+  ])('shows "%s" as visible text that every disabled Restore describes', async (reason, props) => {
+    render(<BackupsPanel client={makeClient()} {...props} />);
+
+    const optionsTable = (await screen.findAllByRole('table'))[0];
+    const level = await screen.findByRole('region', { name: 'Survival 1_17 backups' });
+    const buttons = [
+      ...within(optionsTable).getAllByRole('button', { name: /^Restore / }),
+      ...within(level).getAllByRole('button', { name: /^Restore / }),
+    ];
+    expect(buttons).toHaveLength(3);
+
+    const reasons = screen.getAllByText(reason);
+    expect(reasons).toHaveLength(2);
+    for (const reasonNode of reasons) expect(reasonNode).toBeVisible();
+    for (const button of buttons) {
+      expect(button).toBeDisabled();
+      expect(reasons.map((node) => node.id)).toContain(button.getAttribute('aria-describedby'));
+      expect(button).toHaveAccessibleDescription(reason);
+    }
+  });
+
   it('allows restore when options.txt is missing and the guard says the game is closed', async () => {
     const client = makeFakeClient({
       gameDirs: [gameDir('/home/demo/.minecraft', true, true)],
@@ -176,7 +210,9 @@ describe('BackupsPanel', () => {
 
     for (const button of within(optionsTable).getAllByRole('button', { name: /^Restore / })) {
       expect(button).toBeEnabled();
+      expect(button).not.toHaveAttribute('aria-describedby');
     }
+    expect(screen.queryByText(/before restoring|could not check|Checking whether/)).not.toBeInTheDocument();
   });
 
   it('restores a backup and reports the refreshed stack', async () => {
