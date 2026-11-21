@@ -33,6 +33,8 @@ interface PacksPageProps {
   refreshGameRunning?: () => void | Promise<void>;
   /** From the app-level game guard poll. Undefined until the first check. */
   lockDetectionSupported?: boolean;
+  /** Guard stale locks for the no-stack banner. A loaded stack uses its own. */
+  staleLocks?: string[];
 }
 
 interface ToggleToast {
@@ -64,6 +66,7 @@ export default function PacksPage({
   guardBusy = false,
   refreshGameRunning = () => {},
   lockDetectionSupported,
+  staleLocks = [],
 }: PacksPageProps) {
   const {
     packs,
@@ -421,7 +424,7 @@ export default function PacksPage({
               running={running}
               guardPause={guardPause}
               guardBusy={guardBusy}
-              staleLocks={[]}
+              staleLocks={staleLocks}
               supported={lockDetectionSupported}
               onRecheck={() => {
                 void refreshStack();

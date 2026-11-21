@@ -24,6 +24,8 @@ interface DiscoverPageProps {
   guardPause?: GuardPause;
   guardBusy?: boolean;
   lockDetectionSupported?: boolean;
+  /** Stale locks from the app-level game guard. Discover has no resource stack. */
+  staleLocks?: string[];
   /** False when no game dir is active: installs have nowhere to go. */
   hasGameDir?: boolean;
   /** Force the app-level game guard to re-check now. */
@@ -40,6 +42,7 @@ export default function DiscoverPage({
   guardPause = null,
   guardBusy = false,
   lockDetectionSupported,
+  staleLocks = [],
   hasGameDir = false,
   refreshGameRunning = () => {},
   onInstalled,
@@ -132,7 +135,7 @@ export default function DiscoverPage({
         running={gameRunning}
         guardPause={guardPause}
         guardBusy={guardBusy}
-        staleLocks={[]}
+        staleLocks={staleLocks}
         supported={lockDetectionSupported}
         onRecheck={() => void refreshGameRunning()}
       />
