@@ -267,6 +267,56 @@ describe('App', () => {
     expect(screen.queryByText('Minecraft is running.')).not.toBeInTheDocument();
   });
 
+  it('shows the guard stale lock on Packs when options.txt cannot load', async () => {
+    const client = await shellClient();
+    const lock = '/home/demo/.minecraft/saves/world/session.lock';
+    client.getResourceStack = async () => {
+      throw new IpcError(
+        'options_txt',
+        'options.txt is malformed: no resourcePacks line; Mine Utils never rewrites a malformed file',
+      );
+    };
+    client.getGameGuard = async () => ({
+      running: null,
+      stale_locks: [lock],
+      detection_supported: true,
+      process_probe_available: true,
+    });
+
+    render(<App client={client} />);
+
+    const note = await screen.findByRole('status', { name: 'Stale session lock' });
+    expect(note).toHaveTextContent(
+      'A stale session lock at /home/demo/.minecraft/saves/world/session.lock holds no process.',
+    );
+    expect(note).toHaveTextContent('Writes are allowed.');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Resource Packs');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'options.txt is malformed: no resourcePacks line; Mine Utils never rewrites a malformed file',
+    );
+  });
+
+  it('shows the guard stale lock on Discover', async () => {
+    window.location.hash = 'discover';
+    const client = await shellClient();
+    const lock = '/home/demo/.minecraft/saves/world/session.lock';
+    client.getGameGuard = async () => ({
+      running: null,
+      stale_locks: [lock],
+      detection_supported: true,
+      process_probe_available: true,
+    });
+
+    render(<App client={client} />);
+
+    const note = await screen.findByRole('status', { name: 'Stale session lock' });
+    expect(note).toHaveTextContent(
+      'A stale session lock at /home/demo/.minecraft/saves/world/session.lock holds no process.',
+    );
+    expect(note).toHaveTextContent('Writes are allowed.');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Discover');
+  });
+
   it('shows onboarding on first run and skips to the shell', async () => {
     const user = (await import('@testing-library/user-event')).default.setup();
     const client = makeFakeClient([]);
