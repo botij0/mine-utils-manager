@@ -90,8 +90,9 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
 /// folder that a rival puts at `dest` on the server passes the check and is
 /// removed. When the claim was removed and the error is a plain rename's
 /// refusal, the folder is moved like a file, and that retry can replace
-/// only an empty folder. Any other error is returned, with `ENOTDIR` and
-/// `ENOTEMPTY` read as `AlreadyExists`.
+/// only an empty folder. SSHFS can report `ENOTEMPTY` as `EPERM`. A visible
+/// folder entry confirms a collision even when the inode matches the claim.
+/// `ENOTDIR` and `ENOTEMPTY` also map to `AlreadyExists`.
 ///
 /// The empty claim stays at `dest` after a crash before the rename, or when
 /// its `remove_dir` fails, as a network error on sshfs can make it. A crash
@@ -137,6 +138,14 @@ fn checked_rename(
             return Ok(());
         };
         if !remove_claim(dest, &claim) || !plain_rename_refusal(&err) {
+            #[cfg(unix)]
+            if err.raw_os_error() == Some(libc::EPERM)
+                && std::fs::symlink_metadata(dest).is_ok_and(|now| now.is_dir())
+                && std::fs::read_dir(dest)
+                    .is_ok_and(|mut entries| entries.next().is_some_and(|entry| entry.is_ok()))
+            {
+                return Err(std::io::Error::new(ErrorKind::AlreadyExists, err));
+            }
             return Err(taken_as_already_exists(err, DIR_RIVALS));
         }
         DIR_RIVALS
