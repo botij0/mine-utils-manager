@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@tauri-apps/api/core', () => ({
+vi.mock('@tauri-apps/api/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@tauri-apps/api/core')>(),
   invoke: vi.fn(async () => ({ hits: [], has_more: false })),
   convertFileSrc: (path: string) => `asset://${path}`,
 }));
 
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { ipc } from './ipc';
-import type { ModrinthInstallOutcome } from './generated/wire';
+import type { ModrinthInstallOutcome, ModrinthInstallPhase } from './generated/wire';
 import { pack } from '../test/fake-packs';
 
 type TauriWindow = Window & { __TAURI_INTERNALS__?: unknown };
@@ -35,8 +36,10 @@ describe('tauri transport', () => {
   });
 });
 
-it('converts the generated install result icon path to an asset URL', async () => {
-  Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+it('forwards install progress and converts the result icon path to an asset URL', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true, value: { transformCallback: () => 123 },
+  });
   const installed = {
     kind: 'resourcepack',
     outcome: {
@@ -45,13 +48,25 @@ it('converts the generated install result icon path to an asset URL', async () =
     },
     provenance_warning: 'Could not save provenance',
   } satisfies ModrinthInstallOutcome;
-  mockedInvoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce(installed);
+  mockedInvoke.mockResolvedValueOnce(undefined).mockImplementationOnce(async (_command, args) => {
+    if (!args || typeof args !== 'object' || !('progress' in args) || !(args.progress instanceof Channel)) {
+      throw new Error('install progress channel missing');
+    }
+    expect(args.progress.toJSON()).toBe('__CHANNEL__:123');
+    args.progress.onmessage('waiting_for_slot');
+    args.progress.onmessage('downloading');
+    args.progress.onmessage('waiting_for_folder_lock');
+    args.progress.onmessage('committing');
+    return installed;
+  });
 
+  const phases: ModrinthInstallPhase[] = [];
   const result = await ipc.installModrinthPack({
     installId: 'wire-icon', projectId: 'fresh', versionId: 'v1',
     filename: 'fresh.zip', kind: 'resourcepack',
-  });
+  }, (phase) => phases.push(phase));
 
+  expect(phases).toEqual(['waiting_for_slot', 'downloading', 'waiting_for_folder_lock', 'committing']);
   expect(result).toEqual({
     ...installed,
     outcome: { ...installed.outcome, pack: { ...installed.outcome.pack, icon: { sha256: 'digest', url: 'asset:///cache/fresh.png' } } },

@@ -9,13 +9,17 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::time::Duration;
 
 use serde::de::value::{Error as DeserializeError, StrDeserializer};
 use serde::Deserialize;
 use sha2::{Digest, Sha256, Sha512};
 
 use crate::data_stack::{self, DataPaths, DatapackImportOutcome};
-use crate::download::{self, DownloadError, InstallControl, VerifiedDownload, ZipRoot};
+use crate::download::{
+    self, DownloadError, InstallControl, ModrinthInstallPhase, VerifiedDownload, ZipRoot,
+};
 use crate::error::AppError;
 use crate::game_lock;
 use crate::level_dat;
@@ -67,6 +71,30 @@ pub struct PreparedInstall {
     pub world: Option<String>,
     pub source: PreparedSource,
     control: InstallControl,
+}
+
+impl PreparedInstall {
+    pub fn wait_for_folder_lock<'a>(
+        &self,
+        lock: &'a Mutex<()>,
+    ) -> Result<MutexGuard<'a, ()>, DownloadError> {
+        let mut waiting = false;
+        loop {
+            self.control.check()?;
+            match lock.try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(TryLockError::Poisoned(err)) => return Ok(err.into_inner()),
+                Err(TryLockError::WouldBlock) => {
+                    if !waiting {
+                        self.control
+                            .report(ModrinthInstallPhase::WaitingForFolderLock);
+                        waiting = true;
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        }
+    }
 }
 
 /// What an install did. A `provenance_warning` never fails the install: the
@@ -584,11 +612,9 @@ fn enable_resource(stack_paths: &StackPaths, outcome: &ImportOutcome) -> Result<
             true,
             &resource_stack::SystemGuard,
         );
-        write.map_err(|err| {
-            let path = pack.path.display();
-            err.with_context(format!(
-                "The pack was installed at {path} but not enabled. Enable it in Minecraft."
-            ))
+        write.map_err(|error| AppError::InstalledButNotEnabled {
+            error: Box::new(error),
+            path: pack.path.clone(),
         })?;
     }
     Ok(())

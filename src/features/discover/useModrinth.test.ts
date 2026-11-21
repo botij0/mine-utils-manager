@@ -8,7 +8,7 @@ import type {
   ModrinthSearchPage,
 } from '../../lib/types';
 import { makeFakeClient } from '../../test/fake-ipc';
-import { freshHit, gameDir, mismatchHit } from '../../test/fake-packs';
+import { freshHit, gameDir, mismatchHit, pack } from '../../test/fake-packs';
 import type { ModrinthState } from './useModrinth';
 import {
   SEARCH_DEBOUNCE_MS,
@@ -180,18 +180,18 @@ describe('useModrinth', () => {
     );
     await act(async () => { await result.current.select(freshHit()); });
     act(() => { void result.current.install(); });
-    expect(result.current.installCommitting).toBe(false);
+    expect(result.current.installPhase).toBe('preparing');
     await act(async () => { rerender({ dir: '/b' }); });
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(result.current.installBusy).toBe(true);
-    expect(result.current.installCommitting).toBe(true);
+    expect(result.current.installPhase).toBe('committing');
   });
 
-  it('drops an install outcome after selecting another project', async () => {
+  it('returns a stale install outcome for refresh and keeps it out of the new project', async () => {
     const client = makeFakeClient([]);
     let release!: (outcome: ModrinthInstallOutcome) => void;
     client.installModrinthPack = () => new Promise((resolve) => { release = resolve; });
-    const { result } = renderHook(() => useModrinth(client));
+    const onInstalled = vi.fn();
+    const { result } = renderHook(() => useModrinth(client, true, '', null, undefined, onInstalled));
     await act(async () => { await result.current.select(freshHit()); });
     let pending!: Promise<ModrinthInstallOutcome | null>;
     act(() => { pending = result.current.install(); });
@@ -201,11 +201,44 @@ describe('useModrinth', () => {
     });
     let outcome: ModrinthInstallOutcome | null = null;
     await act(async () => {
-      release({ kind: 'resourcepack', outcome: { status: 'duplicate', name: 'a.zip', sha256: 'abc', existing: 'b.zip' } });
+      release({ kind: 'resourcepack', outcome: { status: 'imported', pack: pack('fresh-1.9') } });
       outcome = await pending;
     });
-    expect(outcome).toBeNull();
+    expect(outcome).toMatchObject({
+      kind: 'resourcepack',
+      outcome: { status: 'imported', pack: { path: '/home/demo/.minecraft/resourcepacks/fresh-1.9.zip' } },
+    });
+    expect(result.current.selected?.title).toBe('other');
     expect(result.current.installResult).toBeNull();
+    expect(onInstalled.mock.calls).toEqual([['resourcepack']]);
+  });
+
+  it('refuses a second install until the first settles', async () => {
+    const client = makeFakeClient([]);
+    let release!: (outcome: ModrinthInstallOutcome) => void;
+    const projects: string[] = [];
+    client.installModrinthPack = ({ projectId }) => {
+      projects.push(projectId);
+      if (projects.length === 1) return new Promise((resolve) => { release = resolve; });
+      return Promise.resolve({ kind: 'resourcepack', outcome: { status: 'skipped' } });
+    };
+    const { result } = renderHook(() => useModrinth(client));
+    await act(async () => { await result.current.select(freshHit()); });
+    let first!: Promise<ModrinthInstallOutcome | null>;
+    await act(async () => {
+      first = result.current.install();
+      expect(await result.current.install()).toBeNull();
+    });
+    expect(projects).toEqual(['7q7JnQD0']);
+
+    await act(async () => {
+      release({ kind: 'resourcepack', outcome: { status: 'skipped' } });
+      await first;
+      expect(await result.current.install()).toEqual({
+        kind: 'resourcepack', outcome: { status: 'skipped' },
+      });
+    });
+    expect(projects).toEqual(['7q7JnQD0', '7q7JnQD0']);
   });
 
   it('reports a hash mismatch with the expected and actual hashes', async () => {

@@ -4,6 +4,7 @@ import { toAppError } from '../../lib/ipc';
 import type {
   IpcError,
   ModrinthInstallOutcome,
+  ModrinthInstallPhase,
   ModrinthKind,
   ModrinthProject,
   ModrinthSearchHit,
@@ -77,6 +78,7 @@ const EMPTY_PAGINATION: PaginationState = {
 };
 
 export type TargetsStatus = 'loading' | 'failed' | 'ready';
+export type InstallPhase = 'idle' | 'preparing' | ModrinthInstallPhase;
 
 type TargetsLoad =
   | { status: 'loading' }
@@ -119,8 +121,7 @@ export interface ModrinthState {
   selectedVersionId: string | null;
   setSelectedVersionId: (id: string) => void;
   cancelInstall: () => Promise<void>;
-  installBusy: boolean;
-  installCommitting: boolean;
+  installPhase: InstallPhase;
   installResult: ModrinthInstallOutcome | null;
   installError: IpcError | null;
   install: () => Promise<ModrinthInstallOutcome | null>;
@@ -138,6 +139,7 @@ export function useModrinth(
   reloadSignal = '',
   gameDir: string | null = null,
   onGameRunning?: () => void,
+  onInstalled?: (kind: ModrinthKind) => void,
 ): ModrinthState {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<ModrinthKind>('resourcepack');
@@ -160,16 +162,14 @@ export function useModrinth(
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<IpcError | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
-  const [installPhase, setInstallPhase] = useState<'idle' | 'downloading' | 'committing'>('idle');
+  const [installPhase, setInstallPhase] = useState<InstallPhase>('idle');
   const [installResult, setInstallResult] = useState<ModrinthInstallOutcome | null>(null);
   const [installError, setInstallError] = useState<IpcError | null>(null);
   const installId = useRef<string | null>(null);
-  // Discover passes a new arrow each render. install reads the latest one
-  // without taking that arrow as a dependency.
-  const onGameRunningRef = useRef(onGameRunning);
+  const installCallbacks = useRef({ onGameRunning, onInstalled });
   useLayoutEffect(() => {
-    onGameRunningRef.current = onGameRunning;
-  }, [onGameRunning]);
+    installCallbacks.current = { onGameRunning, onInstalled };
+  }, [onGameRunning, onInstalled]);
   const requestId = useRef(0);
   const selectToken = useRef(0);
   const mounted = useRef(true);
@@ -445,7 +445,7 @@ export function useModrinth(
     const token = selectToken.current;
     const id = crypto.randomUUID();
     installId.current = id;
-    setInstallPhase('downloading');
+    setInstallPhase('preparing');
     setInstallError(null);
     try {
       const outcome = await client.installModrinthPack({
@@ -455,15 +455,21 @@ export function useModrinth(
         filename: file.filename,
         kind,
         world: kind === 'datapack' ? (world ?? undefined) : undefined,
+      }, (phase) => {
+        if (mounted.current && installId.current === id) {
+          setInstallPhase((current) => current === 'committing' ? current : phase);
+        }
       });
-      if (!mounted.current || selectToken.current !== token) return null;
-      setInstallResult(outcome);
+      if (mounted.current && selectToken.current === token) setInstallResult(outcome);
+      if (outcome.outcome.status === 'imported' || outcome.outcome.status === 'locked') {
+        installCallbacks.current.onInstalled?.(outcome.kind);
+      }
       return outcome;
     } catch (err) {
       const appError = toAppError(err);
       if (mounted.current && selectToken.current === token) setInstallError(appError);
-      // The backend just saw the game; the app guard must re-check now.
-      if (appError.code === 'game_running') onGameRunningRef.current?.();
+      if (appError.code === 'game_running') installCallbacks.current.onGameRunning?.();
+      if (appError.installed_path) installCallbacks.current.onInstalled?.(kind);
       return null;
     } finally {
       installId.current = null;
@@ -474,13 +480,16 @@ export function useModrinth(
   const cancelInstall = useCallback(async () => {
     const id = installId.current;
     if (!id) return;
+    const token = selectToken.current;
     try {
       const cancelled = await client.cancelModrinthInstall(id);
       if (!cancelled && mounted.current && installId.current === id) {
         setInstallPhase('committing');
       }
     } catch (err) {
-      if (mounted.current) setInstallError(toAppError(err));
+      if (mounted.current && installId.current === id && selectToken.current === token) {
+        setInstallError(toAppError(err));
+      }
     }
   }, [client]);
 
@@ -538,8 +547,7 @@ export function useModrinth(
     selectedVersionId,
     setSelectedVersionId: chooseVersion,
     cancelInstall,
-    installBusy: installPhase !== 'idle',
-    installCommitting: installPhase === 'committing',
+    installPhase,
     installResult,
     installError,
     install,

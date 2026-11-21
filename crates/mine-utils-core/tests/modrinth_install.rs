@@ -500,6 +500,7 @@ fn resource_pack_install_reports_refused_options_rename() {
     let wire = serde_json::to_value(error).unwrap();
     println!("{wire}");
     assert_eq!(wire["code"], "io");
+    assert_eq!(wire["installed_path"], dest.to_str().unwrap());
     let errno = std::env::var("MINE_UTILS_TEST_OPTIONS_RENAME")
         .unwrap()
         .parse()
@@ -1695,9 +1696,10 @@ fn a_folder_or_dangling_symlink_at_the_name_reports_collision() {
 
 mod cancellation {
     use super::*;
-    use mine_utils_core::download::InstallControl;
+    use mine_utils_core::download::{InstallControl, ModrinthInstallPhase};
     use mine_utils_core::install::prepare_modrinth_install_controlled;
     use std::io::Read;
+    use std::sync::{mpsc, Mutex};
     use std::time::{Duration, Instant};
 
     struct LocalCdn {
@@ -1861,6 +1863,100 @@ mod cancellation {
     #[test]
     fn local_http_deadline_before_cdn_connect_does_not_hang() {
         local_http_replay(false, Duration::from_millis(650));
+    }
+
+    fn install_with_contended_folder_lock(cancel: bool) {
+        let fx = fixture();
+        let bytes = resource_zip();
+        let (client, _) = client(
+            MockApi::new()
+                .with(
+                    &versions_url(),
+                    versions_json(
+                        RESOURCE_URL,
+                        RESOURCE_FILE,
+                        &sha512_hex(&bytes),
+                        &["1.21.10"],
+                    ),
+                )
+                .with(RESOURCE_URL, bytes),
+        );
+        let (phases, progress) = mpsc::channel();
+        let (done, result) = mpsc::channel();
+        let timeout = if cancel {
+            Duration::from_secs(10)
+        } else {
+            Duration::from_secs(2)
+        };
+        let control = InstallControl::with_timeout(timeout).with_progress(move |phase| {
+            let _ = phases.send(phase);
+        });
+        let lock = Mutex::new(());
+        let held = lock.lock().unwrap();
+        let (download, waiting, cancelled, outcome) = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let outcome = prepare_modrinth_install_controlled(
+                    &client,
+                    &fx.game_dir,
+                    None,
+                    PROJECT,
+                    VERSION,
+                    RESOURCE_FILE,
+                    "resourcepack",
+                    &control,
+                )
+                .and_then(|prepared| {
+                    let _write = prepared.wait_for_folder_lock(&lock)?;
+                    finish_modrinth_install(
+                        prepared,
+                        &fx.stack_paths,
+                        None,
+                        &fx.data_dir,
+                        &fx.icons,
+                        &fx.hashes,
+                    )
+                });
+                done.send(outcome).unwrap();
+            });
+            let download = progress.recv_timeout(Duration::from_secs(3));
+            let waiting = progress.recv_timeout(Duration::from_secs(3));
+            let cancelled = cancel && control.cancel();
+            let outcome = result.recv_timeout(Duration::from_secs(3));
+            drop(held);
+            (download, waiting, cancelled, outcome)
+        });
+        assert_eq!(download.unwrap(), ModrinthInstallPhase::Downloading);
+        assert_eq!(waiting.unwrap(), ModrinthInstallPhase::WaitingForFolderLock);
+        assert_eq!(cancelled, cancel);
+        let error = outcome
+            .expect("installer must finish while the lock is still held")
+            .unwrap_err();
+        let expected = if cancel {
+            "download_cancelled"
+        } else {
+            "download_timeout"
+        };
+        assert_eq!(error.code(), expected);
+        let files = std::fs::read_dir(fx.game_dir.join("resourcepacks"))
+            .unwrap()
+            .count();
+        let options = std::fs::read_to_string(fx.game_dir.join("options.txt")).unwrap();
+        assert_eq!(files, 0);
+        assert_eq!(options, "version:4707\nresourcePacks:[]\n");
+        println!(
+            "contended folder lock: {} while lock still held, {files} files, options {options:?}",
+            error.code()
+        );
+    }
+
+    #[test]
+    fn cancel_during_folder_lock_wait_discards_verified_download() {
+        install_with_contended_folder_lock(true);
+    }
+
+    #[test]
+    fn deadline_during_folder_lock_wait_discards_verified_download() {
+        install_with_contended_folder_lock(false);
     }
 
     #[test]

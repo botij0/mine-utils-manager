@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { userEvent } from '@testing-library/user-event';
 import DiscoverPage from './DiscoverPage';
@@ -13,9 +13,14 @@ function sheetClient() {
   return makeFakeClient([]);
 }
 
-async function openResourceSheet(client: ReturnType<typeof sheetClient>) {
+async function openResourceSheet(client: ReturnType<typeof sheetClient>, hasGameDir = true) {
   render(
-    <DiscoverPage client={client} gameRunning={null} hasGameDir gameDir="/home/demo/.minecraft" />,
+    <DiscoverPage
+      client={client}
+      gameRunning={null}
+      hasGameDir={hasGameDir}
+      gameDir={hasGameDir ? '/home/demo/.minecraft' : null}
+    />,
   );
   fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
   fireEvent.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
@@ -24,6 +29,48 @@ async function openResourceSheet(client: ReturnType<typeof sheetClient>) {
 }
 
 describe('install sheet target states', () => {
+  it('announces the missing active game folder once', async () => {
+    const dialog = await openResourceSheet(sheetClient(), false);
+    expect(within(dialog).getAllByText(
+      'No game dir is active. Pick a game dir in Settings first, then install.',
+    )).toHaveLength(1);
+    expect(within(dialog).getByRole('button', { name: 'Install' })).toBeDisabled();
+  });
+
+  it('shows each wait and treats cancellation as a neutral status', async () => {
+    const client = sheetClient();
+    type Phase = 'waiting_for_slot' | 'downloading' | 'waiting_for_folder_lock';
+    let report: ((phase: Phase) => void) | undefined;
+    let cancel = () => {};
+    client.installModrinthPack = (_args, onProgress?: (phase: Phase) => void) => {
+      report = onProgress;
+      return new Promise((_, reject) => {
+        cancel = () => reject(new IpcError('download_cancelled', 'Install cancelled.'));
+      });
+    };
+    client.cancelModrinthInstall = async () => {
+      cancel();
+      return true;
+    };
+    const dialog = within(await openResourceSheet(client));
+    fireEvent.click(dialog.getByRole('button', { name: 'Install' }));
+
+    for (const [phase, text] of [
+      ['waiting_for_slot', 'Waiting for a download slot…'],
+      ['downloading', 'Downloading…'],
+      ['waiting_for_folder_lock', 'Waiting for the game folder lock…'],
+    ] satisfies [Phase, string][]) {
+      act(() => report?.(phase));
+      expect.soft(dialog.getByRole('status')).toHaveTextContent(text);
+      expect(dialog.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    }
+
+    fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }));
+    expect(await dialog.findByText('Install cancelled.')).toHaveAttribute('role', 'status');
+    expect(dialog.queryByRole('alert')).not.toBeInTheDocument();
+    expect(dialog.getByRole('button', { name: 'Install' })).toBeEnabled();
+  });
+
   it('says targets are loading and does not call that a failure', async () => {
     const client = sheetClient();
     client.modrinthTargets = () => new Promise<ModrinthTargets>(() => {});

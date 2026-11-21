@@ -71,7 +71,7 @@ const sheetProps = {
   worlds: [],
   world: null,
   onWorldChange: () => {},
-  busy: false,
+  phase: 'idle' as const,
   writesBlocked: false,
   blockedReason: null,
   hasGameDir: true,
@@ -210,7 +210,7 @@ describe('discover dialogs', () => {
   it('keeps the busy install sheet open on Escape and offers Cancel', async () => {
     const onClose = vi.fn();
     const onCancel = vi.fn();
-    render(<InstallSheet {...sheetProps} busy onClose={onClose} onCancel={onCancel} />);
+    render(<InstallSheet {...sheetProps} phase="downloading" onClose={onClose} onCancel={onCancel} />);
     await userEvent.setup().keyboard('{Escape}');
     expect(onClose).not.toHaveBeenCalled();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Cancel' }));
@@ -233,15 +233,17 @@ describe('discover dialogs', () => {
     expect(onInstalled).not.toHaveBeenCalled();
   });
 
-  it('shows the installed pack path when enabling fails', async () => {
+  it('shows the installed pack path and refreshes Packs when enabling fails', async () => {
     const client = makeFakeClient([]);
+    const onInstalled = vi.fn();
     client.installModrinthPack = async () => {
-      throw new IpcError(
-        'io',
-        'io error: Operation not permitted (os error 1). The pack was installed at /game/resourcepacks/fresh-1.9.zip but not enabled. Enable it in Minecraft.',
-      );
+      throw {
+        code: 'io',
+        message: 'io error: Operation not permitted (os error 1). The pack was installed at /game/resourcepacks/fresh-1.9.zip but not enabled. Enable it in Minecraft.',
+        installed_path: '/game/resourcepacks/fresh-1.9.zip',
+      };
     };
-    render(<DiscoverPage client={client} gameRunning={null} hasGameDir />);
+    render(<DiscoverPage client={client} gameRunning={null} hasGameDir onInstalled={onInstalled} />);
     fireEvent.change(screen.getByLabelText('Search Modrinth'), { target: { value: 'fresh' } });
     fireEvent.click(await screen.findByRole('button', { name: /^Fresh Animations,/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Install…' }));
@@ -251,6 +253,7 @@ describe('discover dialogs', () => {
     expect(await sheet.findByRole('alert')).toHaveTextContent(
       'The pack was installed at /game/resourcepacks/fresh-1.9.zip but not enabled. Enable it in Minecraft.',
     );
+    expect(onInstalled.mock.calls).toEqual([['resourcepack']]);
   });
 
   it('shows the running banner and locks Install as soon as an install returns game_running', async () => {

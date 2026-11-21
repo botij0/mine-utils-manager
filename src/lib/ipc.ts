@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { Channel, convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { mockClient } from './ipc.mock';
 import { IpcError } from './types';
 import { ERROR_CODES } from './generated/wire';
@@ -84,7 +84,10 @@ export interface DiscoverClient {
   listModrinthVersions(projectId: string): Promise<ModrinthVersion[]>;
   modrinthTargets(world?: string | null): Promise<ModrinthTargets>;
   cancelModrinthInstall(installId: string): Promise<boolean>;
-  installModrinthPack(args: ModrinthInstallArgs): Promise<ModrinthInstallOutcome>;
+  installModrinthPack(
+    args: ModrinthInstallArgs,
+    onProgress?: (phase: Wire.ModrinthInstallPhase) => void,
+  ): Promise<ModrinthInstallOutcome>;
 }
 
 export interface IpcClient extends PackClient, WorldsClient, DiscoverClient {
@@ -108,7 +111,11 @@ export function toAppError(err: unknown): IpcError {
   if (typeof err === 'object' && err !== null && 'code' in err && 'message' in err) {
     if (typeof err.code === 'string' && typeof err.message === 'string') {
       const code = ERROR_CODES.find((code) => code === err.code) ?? 'unknown';
-      return new IpcError(code, err.message, code === 'unknown' ? err.code : undefined);
+      const installedPath =
+        'installed_path' in err && typeof err.installed_path === 'string'
+          ? err.installed_path
+          : undefined;
+      return new IpcError(code, err.message, code === 'unknown' ? err.code : undefined, installedPath);
     }
   }
   if (err instanceof Error) return new IpcError('unknown', err.message);
@@ -251,7 +258,7 @@ const tauriClient: IpcClient = {
     await registration;
     return call<boolean>('cancel_modrinth_install', { installId });
   },
-  installModrinthPack: async (args) => {
+  installModrinthPack: async (args, onProgress) => {
     const installId = args.installId ?? crypto.randomUUID();
     const registration = call<void>('begin_modrinth_install', { installId });
     installRegistrations.set(installId, registration);
@@ -264,6 +271,7 @@ const tauriClient: IpcClient = {
         filename: args.filename,
         kind: args.kind,
         world: args.world ?? null,
+        progress: new Channel<Wire.ModrinthInstallPhase>(onProgress),
       });
       if (outcome.kind === 'resourcepack') {
         return {
@@ -323,7 +331,7 @@ export const ipc: IpcClient = {
   listModrinthVersions: (projectId) => pick().listModrinthVersions(projectId),
   modrinthTargets: (world) => pick().modrinthTargets(world),
   cancelModrinthInstall: (installId) => pick().cancelModrinthInstall(installId),
-  installModrinthPack: (args) => pick().installModrinthPack(args),
+  installModrinthPack: (args, onProgress) => pick().installModrinthPack(args, onProgress),
 };
 
 function pick(): IpcClient {

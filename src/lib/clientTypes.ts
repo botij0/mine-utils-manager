@@ -37,6 +37,7 @@ export class IpcError extends Error implements ClientError {
     readonly code: ClientErrorCode,
     message: string,
     readonly rawCode?: string,
+    readonly installed_path?: string,
   ) {
     super(message);
     this.name = 'IpcError';

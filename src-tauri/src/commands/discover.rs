@@ -19,6 +19,7 @@ use mine_utils_core::{
 };
 use serde::de::value::{Error as DeserializeError, StrDeserializer};
 use serde::Deserialize;
+use tauri::ipc::Channel;
 use tauri::State;
 
 use super::game_dirs::AppState;
@@ -253,6 +254,7 @@ pub async fn install_modrinth_pack(
     filename: String,
     kind: String,
     world: Option<String>,
+    progress: Channel<mine_utils_core::download::ModrinthInstallPhase>,
 ) -> Result<ModrinthInstallOutcome, AppError> {
     state.note_ipc();
     let control = {
@@ -289,6 +291,9 @@ pub async fn install_modrinth_pack(
     let icons = packs.icons();
     let hashes = packs.hashes();
     let client = Arc::clone(&mods.client);
+    let control = control.with_progress(move |phase| {
+        let _ = progress.send(phase);
+    });
     tauri::async_runtime::spawn_blocking(move || {
         let _registration = registration;
         let prepared = prepare_modrinth_install_controlled(
@@ -301,7 +306,7 @@ pub async fn install_modrinth_pack(
             &kind,
             &control,
         )?;
-        let _write = guard.lock().unwrap_or_else(|err| err.into_inner());
+        let _write = prepared.wait_for_folder_lock(&guard)?;
         finish_modrinth_install(
             prepared,
             &stack_paths,

@@ -16,7 +16,6 @@ import type {
   ImportChoice,
   ImportOutcome,
   LevelBackupInfo,
-  ModrinthInstallArgs,
   ModrinthInstallOutcome,
   ModrinthKind,
   ModrinthSearchHit,
@@ -687,7 +686,8 @@ export const mockClient: IpcClient = {
     cancel();
     return true;
   },
-  async installModrinthPack(args: ModrinthInstallArgs) {
+  async installModrinthPack(args, onProgress) {
+    onProgress?.('downloading');
     await waitForInstall(args.installId ?? crypto.randomUUID());
     assertActiveGameDir();
     if (args.kind === 'datapack') {

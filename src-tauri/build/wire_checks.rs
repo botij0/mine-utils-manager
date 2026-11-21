@@ -5,7 +5,7 @@ use std::{env, fs};
 
 use syn::punctuated::Punctuated;
 use syn::visit::Visit;
-use syn::{FnArg, Item, Token, Type};
+use syn::{FnArg, GenericArgument, Item, PathArguments, Token, Type};
 
 #[derive(Default)]
 struct Handlers(Vec<syn::Macro>);
@@ -115,15 +115,25 @@ fn write_checks(
                 panic!("unexpected self argument in {command}");
             };
             let name = format!("arg_{index}");
-            if type_segment(&argument.ty).is_some_and(|segment| segment.ident == "State") {
-                write!(state, "{name}, ")?;
-                state_types.push_str("tauri::State<'static, _>, ");
-            } else if type_segment(&argument.ty).is_some_and(|segment| segment.ident == "AppHandle")
-            {
-                write!(state, "{name}, ")?;
-                state_types.push_str("tauri::AppHandle, ");
-            } else {
-                write!(args, "{name}, ")?;
+            match type_segment(&argument.ty) {
+                Some(segment) if segment.ident == "State" => {
+                    write!(state, "{name}, ")?;
+                    state_types.push_str("tauri::State<'static, _>, ");
+                }
+                Some(segment) if segment.ident == "AppHandle" => {
+                    write!(state, "{name}, ")?;
+                    state_types.push_str("tauri::AppHandle, ");
+                }
+                Some(segment) if segment.ident == "Channel" => {
+                    write!(state, "{name}, ")?;
+                    state_types.push_str("tauri::ipc::Channel<_>, ");
+                    let payload = channel_payload_path(segment);
+                    writeln!(
+                        checks,
+                        "    exports.assert_exported::<{payload}>({command:?});"
+                    )?;
+                }
+                _ => write!(args, "{name}, ")?,
             }
             call_args.push(name);
         }
@@ -140,6 +150,28 @@ fn write_checks(
         )?;
     }
     Ok(())
+}
+
+fn channel_payload_path(channel: &syn::PathSegment) -> String {
+    let PathArguments::AngleBracketed(arguments) = &channel.arguments else {
+        panic!("expected a Channel payload type");
+    };
+    let Some(GenericArgument::Type(Type::Path(payload))) = arguments.args.first() else {
+        panic!("expected a named Channel payload type");
+    };
+    payload
+        .path
+        .segments
+        .iter()
+        .map(|segment| {
+            assert!(
+                segment.arguments.is_empty(),
+                "expected a non-generic Channel payload"
+            );
+            segment.ident.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
 fn type_segment(ty: &Type) -> Option<&syn::PathSegment> {

@@ -1,7 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
 const transport = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: transport.invoke, convertFileSrc: (path: string) => path }));
+vi.mock('@tauri-apps/api/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@tauri-apps/api/core')>(),
+  invoke: transport.invoke,
+}));
 
 import { ipc } from './ipc';
 
@@ -11,7 +14,9 @@ afterEach(() => {
 });
 
 it('registers cancellation before either install or cancel reaches the backend', async () => {
-  Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true, value: { transformCallback: () => 123 },
+  });
   let registered = () => {};
   transport.invoke.mockImplementation((command: string) => {
     if (command === 'begin_modrinth_install') return new Promise<void>((resolve) => { registered = resolve; });
