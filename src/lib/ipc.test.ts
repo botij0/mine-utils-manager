@@ -206,6 +206,13 @@ describe('mock backend alignment', () => {
     await expect(ipc.reorderResourceStack([], expected)).rejects.toMatchObject({ code: 'resource_stack' });
   });
 
+  it('refuses a last world outside the active game dir with the Rust guard message', async () => {
+    await expect(ipc.setLastWorld('/home/demo/.var/app/com.mojang.Minecraft/data/minecraft/saves/Survival 1_17')).rejects.toMatchObject({
+      code: 'world',
+      message: 'world error: world is not in the active game dir',
+    });
+  });
+
   it('rejects reads without an active game directory', async () => {
     window.localStorage.clear();
     await expect(ipc.listResourcePacks()).rejects.toMatchObject({ code: 'no_active_game_dir' });
