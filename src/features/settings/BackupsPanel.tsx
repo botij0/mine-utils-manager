@@ -33,6 +33,8 @@ function restoreName(busy: boolean, display: string, world?: string): string {
   return world ? `${verb} ${display} for ${world}` : `${verb} ${display}`;
 }
 
+const RESTORE_IN_PROGRESS = 'A restore is in progress';
+
 /** Every `options.txt` write leaves a timestamped backup; this lists them and
  *  restores one. The backend blocks restore while the game is running; this
  *  panel only mirrors that state so the button explains itself. */
@@ -59,13 +61,15 @@ export default function BackupsPanel({
   const [levelRestoring, setLevelRestoring] = useState<string | null>(null);
 
   const blocked = gameRunning !== null || guardPause !== null;
-  const restoreReason = gameRunning
+  const gateReason = gameRunning
     ? 'Close Minecraft before restoring'
     : guardPause === 'unknown'
       ? 'Mine Utils could not check whether Minecraft is running'
       : guardPause === 'checking'
         ? 'Checking whether Minecraft is running'
         : undefined;
+  const optionsReason = gateReason ?? (restoring !== null ? RESTORE_IN_PROGRESS : undefined);
+  const levelReason = gateReason ?? (levelRestoring !== null ? RESTORE_IN_PROGRESS : undefined);
   const reasonId = useId();
   const optionsReasonId = `${reasonId}-options`;
   const levelReasonId = `${reasonId}-level`;
@@ -225,9 +229,9 @@ export default function BackupsPanel({
         </p>
       ) : null}
 
-      {restoreReason && !loading && backups.length > 0 ? (
+      {optionsReason && !loading && backups.length > 0 ? (
         <p id={optionsReasonId} className="panel-note">
-          {restoreReason}
+          {optionsReason}
         </p>
       ) : null}
       {loading ? (
@@ -257,8 +261,8 @@ export default function BackupsPanel({
                     type="button"
                     className="button"
                     disabled={blocked || restoring !== null}
-                    title={restoreReason}
-                    aria-describedby={restoreReason ? optionsReasonId : undefined}
+                    title={optionsReason}
+                    aria-describedby={optionsReason ? optionsReasonId : undefined}
                     aria-label={restoreName(restoring === backup.file_name, backup.display)}
                     onClick={() => void handleRestore(backup.file_name)}
                   >
@@ -285,9 +289,9 @@ export default function BackupsPanel({
         </p>
       ) : null}
 
-      {restoreReason && !levelLoading && levelGroups.length > 0 ? (
+      {levelReason && !levelLoading && levelGroups.length > 0 ? (
         <p id={levelReasonId} className="panel-note">
-          {restoreReason}
+          {levelReason}
         </p>
       ) : null}
       {levelLoading ? (
@@ -325,8 +329,8 @@ export default function BackupsPanel({
                             type="button"
                             className="button"
                             disabled={blocked || levelRestoring !== null}
-                            title={restoreReason}
-                            aria-describedby={restoreReason ? levelReasonId : undefined}
+                            title={levelReason}
+                            aria-describedby={levelReason ? levelReasonId : undefined}
                             aria-label={restoreName(levelRestoring === key, backup.display, group.label)}
                             onClick={() => void handleLevelRestore(group.dirName, group.label, backup.file_name)}
                           >

@@ -8,7 +8,7 @@ import type {
 } from '../../lib/types';
 import { IpcError } from '../../lib/types';
 import { gameDir, makeFakeClient, type FakeClient } from '../../test/fake-ipc';
-import { resourceStack } from '../../test/fake-packs';
+import { resourceStack, stack } from '../../test/fake-packs';
 import BackupsPanel from './BackupsPanel';
 
 const RUNNING: GameRunning = {
@@ -192,6 +192,101 @@ describe('BackupsPanel', () => {
       expect(reasons.map((node) => node.id)).toContain(button.getAttribute('aria-describedby'));
       expect(button).toHaveAccessibleDescription(reason);
     }
+  });
+
+  it('describes the other options Restore buttons while a restore is in progress', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    client.restoreOptionsBackup = async () => {
+      await gate;
+      return STACK;
+    };
+    render(<BackupsPanel client={client} gameRunning={null} />);
+
+    const optionsTable = (await screen.findAllByRole('table'))[0];
+    const [running, other] = within(optionsTable).getAllByRole('button', { name: /^Restore / });
+    await user.click(running);
+
+    expect(await screen.findByText('A restore is in progress')).toBeVisible();
+    expect(other).toBeDisabled();
+    expect(other).toHaveAccessibleDescription('A restore is in progress');
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(other).toBeEnabled());
+    expect(other).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByText('A restore is in progress')).not.toBeInTheDocument();
+  });
+
+  it('describes the other level Restore buttons while a level restore is in progress', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    const twoBackups: LevelBackupInfo[] = [
+      ...LEVEL_BACKUPS,
+      {
+        file_name: '20261025T091500.000000000-Survival 1_17-level.dat',
+        world: 'Survival 1_17',
+        bytes: 10258,
+        display: '2026-10-25 09:15:00 UTC',
+      },
+    ];
+    client.listAllLevelBackups = async () => [...twoBackups];
+    client.listLevelBackups = async () => [...twoBackups];
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    client.restoreLevelBackup = async () => {
+      await gate;
+      return stack();
+    };
+    render(<BackupsPanel client={client} gameRunning={null} />);
+
+    const region = await screen.findByRole('region', { name: 'Survival 1_17 backups' });
+    const [running, other] = within(region).getAllByRole('button', { name: /^Restore / });
+    await user.click(running);
+
+    expect(await screen.findByText('A restore is in progress')).toBeVisible();
+    expect(other).toBeDisabled();
+    expect(other).toHaveAccessibleDescription('A restore is in progress');
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(other).toBeEnabled());
+  });
+
+  it('keeps the game-running reason when the game starts during a restore', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    client.restoreOptionsBackup = async () => {
+      await gate;
+      return STACK;
+    };
+    const { rerender } = render(<BackupsPanel client={client} gameRunning={null} />);
+
+    const optionsTable = (await screen.findAllByRole('table'))[0];
+    const [running, other] = within(optionsTable).getAllByRole('button', { name: /^Restore / });
+    await user.click(running);
+    await waitFor(() => expect(running).toHaveTextContent('Restoring…'));
+
+    rerender(<BackupsPanel client={client} gameRunning={RUNNING} />);
+
+    expect(other).toHaveAccessibleDescription('Close Minecraft before restoring');
+    expect(screen.queryByText('A restore is in progress')).not.toBeInTheDocument();
+
+    await act(async () => {
+      release();
+    });
   });
 
   it('allows restore when options.txt is missing and the guard says the game is closed', async () => {
