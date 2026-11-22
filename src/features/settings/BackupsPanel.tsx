@@ -68,8 +68,9 @@ export default function BackupsPanel({
       : guardPause === 'checking'
         ? 'Checking whether Minecraft is running'
         : undefined;
-  const optionsReason = gateReason ?? (restoring !== null ? RESTORE_IN_PROGRESS : undefined);
-  const levelReason = gateReason ?? (levelRestoring !== null ? RESTORE_IN_PROGRESS : undefined);
+  const restoreInProgress = restoring !== null || levelRestoring !== null;
+  const optionsReason = gateReason ?? (restoreInProgress ? RESTORE_IN_PROGRESS : undefined);
+  const levelReason = gateReason ?? (restoreInProgress ? RESTORE_IN_PROGRESS : undefined);
   const reasonId = useId();
   const optionsReasonId = `${reasonId}-options`;
   const levelReasonId = `${reasonId}-level`;
@@ -260,7 +261,7 @@ export default function BackupsPanel({
                   <button
                     type="button"
                     className="button"
-                    disabled={blocked || restoring !== null}
+                    disabled={blocked || restoreInProgress}
                     title={optionsReason}
                     aria-describedby={optionsReason ? optionsReasonId : undefined}
                     aria-label={restoreName(restoring === backup.file_name, backup.display)}
@@ -328,7 +329,7 @@ export default function BackupsPanel({
                           <button
                             type="button"
                             className="button"
-                            disabled={blocked || levelRestoring !== null}
+                            disabled={blocked || restoreInProgress}
                             title={levelReason}
                             aria-describedby={levelReason ? levelReasonId : undefined}
                             aria-label={restoreName(levelRestoring === key, backup.display, group.label)}

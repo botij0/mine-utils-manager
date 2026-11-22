@@ -223,7 +223,7 @@ describe('BackupsPanel', () => {
     const [running, other] = within(optionsTable).getAllByRole('button', { name: /^Restore / });
     await user.click(running);
 
-    expect(await screen.findByText('A restore is in progress')).toBeVisible();
+    expect(await screen.findAllByText('A restore is in progress')).toHaveLength(2);
     expect(other).toBeDisabled();
     expect(other).toHaveAccessibleDescription('A restore is in progress');
 
@@ -263,7 +263,7 @@ describe('BackupsPanel', () => {
     const [running, other] = within(region).getAllByRole('button', { name: /^Restore / });
     await user.click(running);
 
-    expect(await screen.findByText('A restore is in progress')).toBeVisible();
+    expect(await screen.findAllByText('A restore is in progress')).toHaveLength(2);
     expect(other).toBeDisabled();
     expect(other).toHaveAccessibleDescription('A restore is in progress');
 
