@@ -138,6 +138,11 @@ export default function DatapackDetail({
       ) : (
         <StatusNote>Select a datapack to see its details.</StatusNote>
       )}
+      {pack?.warnings.map((packWarning) => (
+        <p className="panel-note" key={packWarning.message}>
+          {packWarning.message}
+        </p>
+      ))}
       <CompatibilityChip warning={warning} />
       {warning ? <p className="panel-note">{warning}</p> : null}
       <div className="datapack-detail-actions">

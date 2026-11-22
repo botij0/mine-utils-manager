@@ -53,6 +53,8 @@ interface PackCardProps {
 
 export default function PackCard({ pack, selected, onSelect }: PackCardProps) {
   const broken = pack.error !== null;
+  const brokenText =
+    pack.location === 'zip' ? 'Cannot read this archive' : 'Cannot read this folder';
   const label = broken
     ? `${pack.name}, error card`
     : `${pack.name}, ${packKindLabel(pack.kind)}, ${packGameLabel(pack)}`;
@@ -75,11 +77,7 @@ export default function PackCard({ pack, selected, onSelect }: PackCardProps) {
         </span>
       }
       name={pack.name}
-      description={
-        broken
-          ? 'Cannot read this archive'
-          : shortDescription(pack.description || 'No description')
-      }
+      description={broken ? brokenText : shortDescription(pack.description || 'No description')}
       chips={
         broken ? (
           <span className="chip chip-danger">Error</span>
