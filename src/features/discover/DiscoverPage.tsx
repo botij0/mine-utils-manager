@@ -231,6 +231,7 @@ export default function DiscoverPage({
           world={discover.world}
           onWorldChange={discover.setWorld}
           phase={discover.installPhase}
+          installOverlap={discover.installOverlap}
           writesBlocked={writesBlocked}
           blockedReason={blockedReason}
           targetsStatus={discover.targetsStatus}

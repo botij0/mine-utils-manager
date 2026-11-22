@@ -21,6 +21,7 @@ interface InstallSheetProps {
   world: string | null;
   onWorldChange: (world: string | null) => void;
   phase: InstallPhase;
+  installOverlap?: string | null;
   writesBlocked: boolean;
   blockedReason: string | null;
   targetsStatus?: TargetsStatus;
@@ -72,6 +73,7 @@ export default function InstallSheet({
   world,
   onWorldChange,
   phase,
+  installOverlap = null,
   writesBlocked,
   blockedReason,
   targetsStatus = 'ready',
@@ -89,6 +91,7 @@ export default function InstallSheet({
     busy ||
     writesBlocked ||
     !hasGameDir ||
+    installOverlap !== null ||
     (kind === 'datapack' && (worlds.length === 0 || !world));
   return (
     <DialogShell label={`Install ${projectTitle}`} onClose={onClose} dismissOnEscape={!busy}>
@@ -161,6 +164,8 @@ export default function InstallSheet({
           {progressText[phase]}
           {phase !== 'committing' && ' Leaving this tab keeps the install running; return here for its result.'}
         </StatusNote>
+      ) : installOverlap !== null ? (
+        <StatusNote role="status">{installOverlap}</StatusNote>
       ) : null}
       {error ? (
         <p
