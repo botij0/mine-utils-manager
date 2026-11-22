@@ -160,4 +160,3 @@ fn restore_level_backup_reads_a_world_without_a_datapack_list() {
     assert_eq!(out["newest_known_version"], json!(null));
     assert_eq!(out.get("level_dat_error"), Some(&json!(null)));
 }
-
