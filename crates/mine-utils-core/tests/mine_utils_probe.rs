@@ -37,6 +37,18 @@ fn level_bytes(version: &str) -> Vec<u8> {
     level_dat::gzip(&fastnbt::to_bytes(&root).unwrap())
 }
 
+fn level_bytes_without_datapacks(version: &str) -> Vec<u8> {
+    let data = compound(vec![
+        (
+            "Version",
+            compound(vec![("Name", Value::String(version.to_string()))]),
+        ),
+        ("LevelName", Value::String("World".to_string())),
+    ]);
+    let root = compound(vec![("Data", data)]);
+    level_dat::gzip(&fastnbt::to_bytes(&root).unwrap())
+}
+
 /// A temp home for the probe's XDG dirs and a game dir with an empty `saves`.
 struct Install {
     _dir: tempfile::TempDir,
@@ -124,6 +136,7 @@ fn restore_level_backup_names_the_newest_known_version_for_a_world_newer_than_th
     let out = install.restore_level_backup("known", &backup);
     assert_eq!(out["world_format"], json!(null));
     assert_eq!(out["newest_known_version"], json!("26.3"));
+    assert_eq!(out.get("level_dat_error"), Some(&json!(null)));
 }
 
 #[test]
@@ -134,4 +147,21 @@ fn restore_level_backup_reports_a_null_newest_known_version_for_a_covered_world(
     let out = install.restore_level_backup("known", &backup);
     assert_eq!(out["world_format"], json!("88"));
     assert_eq!(out.get("newest_known_version"), Some(&json!(null)));
+    assert_eq!(out.get("level_dat_error"), Some(&json!(null)));
+}
+
+#[test]
+fn restore_level_backup_names_the_read_error_when_the_restored_level_dat_has_no_datapack_list() {
+    let install = install();
+    install.write_world("known", &level_bytes("1.21.10"));
+    let backup = install.backup("known", &level_bytes_without_datapacks("1.12.2"));
+    let out = install.restore_level_backup("known", &backup);
+    assert_eq!(out["world_format"], json!(null));
+    assert_eq!(out["newest_known_version"], json!(null));
+    assert_eq!(
+        out.get("level_dat_error"),
+        Some(&json!(
+            "level.dat has no usable Data.DataPacks: Data.DataPacks is absent; Minecraft versions before 1.13 do not support datapacks"
+        ))
+    );
 }
