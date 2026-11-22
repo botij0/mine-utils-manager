@@ -317,6 +317,37 @@ describe('App', () => {
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Discover');
   });
 
+  it('shows the guard stale lock on Worlds when the datapack stack cannot load', async () => {
+    window.location.hash = 'worlds';
+    const client = await shellClient();
+    const lock = '/home/demo/.minecraft/saves/world/session.lock';
+    client.listWorlds = async () => [world()];
+    client.listDatapacks = async () => {
+      throw new IpcError(
+        'level_dat',
+        'level.dat is not valid gzip: invalid gzip header',
+      );
+    };
+    client.getGameGuard = async () => ({
+      running: null,
+      stale_locks: [lock],
+      detection_supported: true,
+      process_probe_available: true,
+    });
+
+    render(<App client={client} />);
+
+    const note = await screen.findByRole('status', { name: 'Stale session lock' });
+    expect(note).toHaveTextContent(
+      'A stale session lock at /home/demo/.minecraft/saves/world/session.lock holds no process.',
+    );
+    expect(note).toHaveTextContent('Writes are allowed.');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Worlds');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'level.dat is not valid gzip: invalid gzip header',
+    );
+  });
+
   it('shows onboarding on first run and skips to the shell', async () => {
     const user = (await import('@testing-library/user-event')).default.setup();
     const client = makeFakeClient([]);
