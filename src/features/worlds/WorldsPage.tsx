@@ -22,6 +22,8 @@ interface WorldsPageProps {
   gameRunning: GameRunning | null;
   guardPause?: GuardPause;
   guardBusy?: boolean;
+  /** Guard stale locks when no datapack stack is loaded. A loaded stack uses its own. */
+  staleLocks?: string[];
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;
 }
@@ -35,6 +37,7 @@ export default function WorldsPage({
   gameRunning: running,
   guardPause = null,
   guardBusy = false,
+  staleLocks = [],
   refreshGameRunning = () => {},
 }: WorldsPageProps) {
   const {
@@ -321,7 +324,7 @@ export default function WorldsPage({
                   gameRunning={running}
                   guardPause={guardPause}
                   guardBusy={guardBusy}
-                  staleLocks={locked || running ? [] : (stack?.stale_locks ?? [])}
+                  staleLocks={locked || running ? [] : (stack?.stale_locks ?? staleLocks)}
                   refreshGameRunning={refreshGameRunning}
                   onRefresh={() => void refreshAfterGuard()}
                 />
