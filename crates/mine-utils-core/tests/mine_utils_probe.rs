@@ -151,17 +151,13 @@ fn restore_level_backup_reports_a_null_newest_known_version_for_a_covered_world(
 }
 
 #[test]
-fn restore_level_backup_names_the_read_error_when_the_restored_level_dat_has_no_datapack_list() {
+fn restore_level_backup_reads_a_world_without_a_datapack_list() {
     let install = install();
     install.write_world("known", &level_bytes("1.21.10"));
     let backup = install.backup("known", &level_bytes_without_datapacks("1.12.2"));
     let out = install.restore_level_backup("known", &backup);
     assert_eq!(out["world_format"], json!(null));
     assert_eq!(out["newest_known_version"], json!(null));
-    assert_eq!(
-        out.get("level_dat_error"),
-        Some(&json!(
-            "level.dat has no usable Data.DataPacks: Data.DataPacks is absent; Minecraft versions before 1.13 do not support datapacks"
-        ))
-    );
+    assert_eq!(out.get("level_dat_error"), Some(&json!(null)));
 }
+
