@@ -72,6 +72,18 @@ function makeClient({
   });
 }
 
+/** Every button is disabled and described by the in-progress reason its own section shows. */
+function expectRestoreInProgress(buttons: HTMLElement[]) {
+  for (const button of buttons) expect(button).toBeDisabled();
+  const reasons = screen.getAllByText('A restore is in progress');
+  expect(reasons).toHaveLength(2);
+  for (const reason of reasons) expect(reason).toBeVisible();
+  for (const button of buttons) {
+    expect(reasons.map((node) => node.id)).toContain(button.getAttribute('aria-describedby'));
+    expect(button).toHaveAccessibleDescription('A restore is in progress');
+  }
+}
+
 describe('BackupsPanel', () => {
   it('lists date, file, size, and a restore action', async () => {
     render(<BackupsPanel client={makeClient()} gameRunning={null} />);
@@ -259,6 +271,62 @@ describe('BackupsPanel', () => {
       release();
     });
     await waitFor(() => expect(other).toBeEnabled());
+  });
+
+  it('disables and describes every Restore button while an options restore is in progress', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    client.restoreOptionsBackup = async () => {
+      await gate;
+      return STACK;
+    };
+    render(<BackupsPanel client={client} gameRunning={null} />);
+
+    const optionsTable = (await screen.findAllByRole('table'))[0];
+    const optionsButtons = within(optionsTable).getAllByRole('button', { name: /^Restore / });
+    const region = await screen.findByRole('region', { name: 'Survival 1_17 backups' });
+    const levelButton = within(region).getByRole('button', { name: /^Restore / });
+    await user.click(optionsButtons[0]);
+
+    expectRestoreInProgress([...optionsButtons, levelButton]);
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(levelButton).toBeEnabled());
+    expect(levelButton).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('disables and describes every Restore button while a level restore is in progress', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    client.restoreLevelBackup = async () => {
+      await gate;
+      return stack();
+    };
+    render(<BackupsPanel client={client} gameRunning={null} />);
+
+    const optionsTable = (await screen.findAllByRole('table'))[0];
+    const optionsButtons = within(optionsTable).getAllByRole('button', { name: /^Restore / });
+    const region = await screen.findByRole('region', { name: 'Survival 1_17 backups' });
+    const levelButton = within(region).getByRole('button', { name: /^Restore / });
+    await user.click(levelButton);
+
+    expectRestoreInProgress([...optionsButtons, levelButton]);
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(optionsButtons[0]).toBeEnabled());
+    expect(optionsButtons[0]).not.toHaveAttribute('aria-describedby');
   });
 
   it('keeps the game-running reason when the game starts during a restore', async () => {
