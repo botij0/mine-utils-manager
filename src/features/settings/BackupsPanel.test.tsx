@@ -72,7 +72,6 @@ function makeClient({
   });
 }
 
-/** Every button is disabled and described by the in-progress reason its own section shows. */
 function expectRestoreInProgress(buttons: HTMLElement[]) {
   for (const button of buttons) expect(button).toBeDisabled();
   const reasons = screen.getAllByText('A restore is in progress');
