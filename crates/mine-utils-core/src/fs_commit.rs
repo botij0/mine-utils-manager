@@ -90,8 +90,9 @@ pub(crate) fn no_replace_fallback(temp: &Path, dest: &Path) -> std::io::Result<(
 /// folder that a rival puts at `dest` on the server passes the check and is
 /// removed. When the claim was removed and the error is a plain rename's
 /// refusal, the folder is moved like a file, and that retry can replace
-/// only an empty folder. Any other error is returned, with `ENOTDIR` and
-/// `ENOTEMPTY` read as `AlreadyExists`.
+/// only an empty folder. SSHFS can report `ENOTEMPTY` as `EPERM`. A visible
+/// folder entry confirms a collision even when the inode matches the claim.
+/// `ENOTDIR` and `ENOTEMPTY` also map to `AlreadyExists`.
 ///
 /// The empty claim stays at `dest` after a crash before the rename, or when
 /// its `remove_dir` fails, as a network error on sshfs can make it. A crash
@@ -137,6 +138,14 @@ fn checked_rename(
             return Ok(());
         };
         if !remove_claim(dest, &claim) || !plain_rename_refusal(&err) {
+            #[cfg(unix)]
+            if err.raw_os_error() == Some(libc::EPERM)
+                && std::fs::symlink_metadata(dest).is_ok_and(|now| now.is_dir())
+                && std::fs::read_dir(dest)
+                    .is_ok_and(|mut entries| entries.next().is_some_and(|entry| entry.is_ok()))
+            {
+                return Err(std::io::Error::new(ErrorKind::AlreadyExists, err));
+            }
             return Err(taken_as_already_exists(err, DIR_RIVALS));
         }
         DIR_RIVALS
@@ -413,6 +422,75 @@ mod tests {
             ),
             "Err(PermissionDenied); dest dir with 0 entries; temp kept true"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn eperm_after_a_nonempty_folder_replaces_the_claim_is_an_import_collision() {
+        use crate::icon_cache::IconCache;
+        use crate::pack::{ImportChoice, ImportOutcome};
+        use crate::pack_import::{import_pack_with_commit, HashCache, SystemTrash};
+
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("Pack");
+        std::fs::create_dir_all(source.join("assets")).unwrap();
+        std::fs::write(
+            source.join("pack.mcmeta"),
+            br#"{"pack":{"pack_format":55,"description":"Imported"}}"#,
+        )
+        .unwrap();
+        let resourcepacks = root.path().join("resourcepacks");
+        let rival = root.path().join("rival");
+        std::fs::create_dir(&rival).unwrap();
+        std::fs::write(rival.join("rival.txt"), b"rival bytes").unwrap();
+
+        let outcome = import_pack_with_commit(
+            &source,
+            &resourcepacks,
+            &IconCache::new(root.path()),
+            ImportChoice::Default,
+            &HashCache::new(),
+            &SystemTrash,
+            |temp, dest| {
+                checked_rename(
+                    temp,
+                    dest,
+                    |path| std::fs::symlink_metadata(path),
+                    |_, to| {
+                        std::fs::remove_dir(to).unwrap();
+                        std::fs::rename(&rival, to).unwrap();
+                        Err(std::io::Error::from_raw_os_error(libc::EPERM))
+                    },
+                )
+            },
+        );
+
+        assert!(
+            matches!(&outcome, Ok(ImportOutcome::Collision { name }) if name == "Pack"),
+            "expected a collision for Pack, got {outcome:?}"
+        );
+        assert_eq!(
+            std::fs::read(resourcepacks.join("Pack/rival.txt")).unwrap(),
+            b"rival bytes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn eperm_without_a_rival_keeps_the_permission_error() {
+        let root = tempfile::tempdir().unwrap();
+        let temp = root.path().join(".Pack.tmp");
+        std::fs::create_dir(&temp).unwrap();
+        let dest = root.path().join("Pack");
+
+        let result = checked_rename(
+            &temp,
+            &dest,
+            |path| std::fs::symlink_metadata(path),
+            |_, _| Err(std::io::Error::from_raw_os_error(libc::EPERM)),
+        );
+
+        assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EPERM));
     }
 
     #[cfg(unix)]
