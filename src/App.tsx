@@ -88,6 +88,7 @@ export default function App({ client = ipc }: AppProps) {
   const gameRunning = currentGuard?.answer?.running ?? null;
   const processProbeAvailable = currentGuard?.answer?.process_probe_available;
   const lockDetectionSupported = currentGuard?.answer?.detection_supported;
+  const staleLocks = currentGuard?.answer?.stale_locks ?? [];
   // True once the stored config lands, so onboarding only shows for a real
   // first run and never for the default placeholder.
   const [configReady, setConfigReady] = useState(false);
@@ -325,6 +326,7 @@ export default function App({ client = ipc }: AppProps) {
                 client={client}
                 gameRunning={gameRunning}
                 lockDetectionSupported={lockDetectionSupported}
+                staleLocks={staleLocks}
                 guardPause={guardPause}
                 guardBusy={guardBusy}
                 refreshGameRunning={refreshGameRunning}
@@ -355,6 +357,7 @@ export default function App({ client = ipc }: AppProps) {
                 client={client}
                 gameRunning={gameRunning}
                 lockDetectionSupported={lockDetectionSupported}
+                staleLocks={staleLocks}
                 guardPause={guardPause}
                 guardBusy={guardBusy}
                 hasGameDir={config.active_game_dir != null}
