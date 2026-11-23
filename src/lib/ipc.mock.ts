@@ -340,14 +340,17 @@ export const mockClient: IpcClient = {
   async setLastWorld(path: string) {
     assertActiveGameDir();
     const config = loadConfig();
-    const name = path.split('/').pop() ?? '';
-    if (path !== `${config.active_game_dir}/saves/${name}`) {
+    const components = (value: string) => value.split('/').filter((part, index) => part !== '' && (part !== '.' || index === 0));
+    const parts = components(path);
+    const name = parts.at(-1) ?? '';
+    const worldPath = `${config.active_game_dir}/saves/${name}`;
+    if (path.startsWith('/') !== worldPath.startsWith('/') || parts.join('/') !== components(worldPath).join('/')) {
       throw new IpcError('world', 'world error: world is not in the active game dir');
     }
     if (!mockWorldList().some((world) => world.dir_name === name)) {
-      throw new IpcError('world', 'world does not exist');
+      throw new IpcError('world', `world error: ${worldPath} is not a world in this game dir`);
     }
-    config.last_world = path;
+    config.last_world = worldPath;
     storeConfig(config);
   },
   async getConfig() {

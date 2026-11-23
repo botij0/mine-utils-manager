@@ -455,7 +455,7 @@ fn data_paths(game_dir: PathBuf, world_name: &str) -> Result<DataPaths, String> 
 fn world_version(paths: &DataPaths) -> Result<(Option<String>, Option<String>), String> {
     let bytes = std::fs::read(paths.level_dat_path())
         .map_err(|err| format!("could not read level.dat: {err}"))?;
-    let view = mine_utils_core::level_dat::parse(&bytes).map_err(|err| err.to_string())?;
+    let view = mine_utils_core::level_dat::parse_lenient(&bytes).map_err(|err| err.to_string())?;
     Ok((
         mine_utils_core::data_format_for_version(&view.version_name).map(|format| format.label()),
         mine_utils_core::newest_known_version_if_newer(&view.version_name),

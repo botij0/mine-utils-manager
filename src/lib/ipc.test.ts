@@ -213,6 +213,18 @@ describe('mock backend alignment', () => {
     });
   });
 
+  it('reports a missing world with its resolved path', async () => {
+    await expect(ipc.setLastWorld('/home/demo/.minecraft/saves/Missing')).rejects.toMatchObject({
+      code: 'world',
+      message: 'world error: /home/demo/.minecraft/saves/Missing is not a world in this game dir',
+    });
+  });
+
+  it('accepts a trailing slash on a world path', async () => {
+    await ipc.setLastWorld('/home/demo/.minecraft/saves/Survival 1_17/');
+    expect((await ipc.getConfig()).last_world).toBe('/home/demo/.minecraft/saves/Survival 1_17');
+  });
+
   it('rejects reads without an active game directory', async () => {
     window.localStorage.clear();
     await expect(ipc.listResourcePacks()).rejects.toMatchObject({ code: 'no_active_game_dir' });
