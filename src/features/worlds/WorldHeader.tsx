@@ -9,7 +9,7 @@ interface WorldHeaderProps {
   gameRunning: GameRunning | null;
   guardPause: GuardPause;
   guardBusy: boolean;
-  /** Stale `session.lock` files from the world's stack. Never blocking. */
+  /** Stale `session.lock` paths. Never blocking. */
   staleLocks?: string[];
   /** Force the app-level game guard to re-check now. */
   refreshGameRunning?: () => void | Promise<void>;

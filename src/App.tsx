@@ -344,6 +344,7 @@ export default function App({ client = ipc }: AppProps) {
                 gameRunning={gameRunning}
                 guardPause={guardPause}
                 guardBusy={guardBusy}
+                staleLocks={staleLocks}
                 refreshGameRunning={refreshGameRunning}
               />
             </div>
